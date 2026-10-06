@@ -51,13 +51,22 @@ var productPlatforms = []string{
 // than the way every other scope in this suite spells a directory. That spelling is why the
 // split of connect/message went two rounds with this scope missed: a grep for "../message"
 // does not find it. sdk is a separate module and is not reachable from here; spec A names it
-// too, and its own repository owes the same gate.
+// too, and its own module owes the same gate.
 //
 // A package tree left off this list is not a failure. It is nine platforms silently no longer
 // built for it -- the quietest of the scopes the split moved, and the only one with no
 // observable consequence at all until a platform breaks. The count in the t.Logf below is
 // the only thing that reports it.
-var crossPlatformPackages = []string{"./mls/...", "./message/...", "./messagegroup/..."}
+//
+// In connect this was {./mls/..., ./message/..., ./messagegroup/...}, and ./mls/... reached the
+// codec as mls/syntax. With the codec promoted to a peer, the same three patterns would build
+// it for no platform at all, and nothing would say so. So the scope is the whole module, one
+// pattern, and TestTheCrossPlatformPatternReachesEveryFoundationalPackage holds what it must
+// expand to; a package added to this module is built everywhere on the commit that adds it.
+var crossPlatformPackages = []string{"./..."}
+
+// The packages the patterns above must reach, at least, as module-relative directories.
+var crossPlatformRequired = []string{"message", "messagegroup", "mls", "syntax"}
 
 // Every product platform builds every covered package, with cgo off.
 func TestTheCryptoBuildsForEveryPlatformTheProductShipsOn(t *testing.T) {
@@ -81,6 +90,51 @@ func TestTheCryptoBuildsForEveryPlatformTheProductShipsOn(t *testing.T) {
 	}
 	t.Logf("%d platforms x %d package trees built with CGO_ENABLED=0, from %s",
 		len(productPlatforms), len(crossPlatformPackages), runtime.GOOS+"/"+runtime.GOARCH)
+}
+
+// The patterns above, as the go tool expands them from the module root, reach every package the
+// obligation names: the spelling is checked, not trusted. Everything else they reach is printed, so
+// the scope is visible rather than inferred.
+func TestTheCrossPlatformPatternReachesEveryFoundationalPackage(t *testing.T) {
+	module, err := exec.Command("go", "list", "-m").Output()
+	if err != nil {
+		t.Fatalf("go list -m: %v", err)
+	}
+	modulePath := strings.TrimSpace(string(module))
+	reached := []string{}
+	for _, packages := range crossPlatformPackages {
+		command := exec.Command("go", "list", "-f", "{{.ImportPath}}", packages)
+		command.Dir = ".."
+		out, err := command.Output()
+		if err != nil {
+			t.Fatalf("go list %s: %v", packages, err)
+		}
+		for _, path := range strings.Fields(string(out)) {
+			if path == modulePath {
+				reached = append(reached, ".")
+				continue
+			}
+			relative, found := strings.CutPrefix(path, modulePath+"/")
+			if !found {
+				t.Fatalf("%s expanded to %s, which is outside the module %s", packages, path, modulePath)
+			}
+			reached = append(reached, relative)
+		}
+	}
+	slices.Sort(reached)
+	reached = slices.Compact(reached)
+	for _, required := range crossPlatformRequired {
+		if !slices.Contains(reached, required) {
+			t.Errorf("%v expands to %v and does not reach %s, so no platform builds it", crossPlatformPackages, reached, required)
+		}
+	}
+	beyond := []string{}
+	for _, path := range reached {
+		if !slices.Contains(crossPlatformRequired, path) {
+			beyond = append(beyond, path)
+		}
+	}
+	t.Logf("%v reaches %d packages: the required %v, and beyond them %v", crossPlatformPackages, len(reached), crossPlatformRequired, beyond)
 }
 
 // The control. A gate that shells out to a compiler and reports what it thinks the compiler said
