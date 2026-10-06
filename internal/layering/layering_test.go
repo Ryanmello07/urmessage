@@ -90,7 +90,8 @@ var layeringRules = map[string]layeringRule{
 	// foundational package may import the SDK, and serverSafeForbidden keeps the whole subtree out
 	// of the server-safe closure. One row names the core SDK (github.com/urnetwork/sdk), the
 	// composition module's gen, whose parity test links both SDKs; the messaging SDK itself does
-	// not depend on it, and the composed library is laid out by compose.sh outside this tree.
+	// not depend on it. The core's own cgo files, which compose.sh lays under sdk/cgo for a build,
+	// are the core's and are not judged here (composedRecord).
 	"sdk": {
 		module:   []string{"message", "messagegroup", "mls", "protocol"},
 		external: []string{"github.com/urnetwork/connect", "github.com/gorilla/websocket", "github.com/gopacket/gopacket", "google.golang.org/protobuf"},
@@ -159,6 +160,32 @@ type repositoryScan struct {
 	files    map[string][]string       // package directory -> its Go files
 	modules  map[string]string         // directory holding a go.mod -> its module path
 	sources  map[string][]byte         // every .go file, testdata included -> its bytes
+	composed []string                  // the core SDK's files sdk/cgo/compose.sh laid in, not read
+}
+
+// The record sdk/cgo/compose.sh writes while the core SDK's cgo package main is laid under sdk/cgo:
+// one name per line, relative to sdk/cgo. Those files are the core's source, judged by the core's
+// own gates, and are in the tree only for a build; compose.sh --clean removes them and the record. It
+// is gitignored, so it exists only in a working tree that was composed.
+const composedRecord = "sdk/cgo/.composed"
+
+// The repository-relative paths composedRecord names, if it is there.
+func composedFiles(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	composed := map[string]bool{}
+	record, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(composedRecord)))
+	if os.IsNotExist(err) {
+		return composed
+	}
+	if err != nil {
+		t.Fatalf("read %s: %v", composedRecord, err)
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(record), "\r\n", "\n"), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			composed["sdk/cgo/"+line] = true
+		}
+	}
+	return composed
 }
 
 func isStandardLibrary(path string) bool {
@@ -198,10 +225,12 @@ func modulePathOf(goMod []byte) string {
 
 // Every Go file under root. Directories named testdata hold fixtures, not packages: their
 // files are read for the stale-literal rule and judged by no row. Hidden directories and
-// those starting with an underscore are skipped, as the go tool skips them.
+// those starting with an underscore are skipped, as the go tool skips them, and so are the core
+// SDK's files a compose laid under sdk/cgo (composedRecord), which scan.composed names.
 func scanRepository(t *testing.T, root string) repositoryScan {
 	t.Helper()
 	scan := repositoryScan{packages: map[string][]importRecord{}, files: map[string][]string{}, modules: map[string]string{}, sources: map[string][]byte{}}
+	composed := composedFiles(t, root)
 	fileSet := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -223,6 +252,10 @@ func scanRepository(t *testing.T, root string) repositoryScan {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if composed[relative] {
+			scan.composed = append(scan.composed, relative)
 			return nil
 		}
 		source, err := os.ReadFile(path)
@@ -410,8 +443,48 @@ func TestEveryPackageImportsOnlyWhatItsRowAllows(t *testing.T) {
 	files = len(scan.sources)
 	t.Logf("%d Go files read (testdata included), %d packages, %d import declarations, modules %v",
 		files, len(scan.files), imports, scan.modules)
+	if len(scan.composed) > 0 {
+		t.Logf("NOT READ: %d file(s) of the core SDK's cgo package main that %s says a compose laid under sdk/cgo: %v",
+			len(scan.composed), composedRecord, scan.composed)
+	}
 	for _, violation := range layeringViolations(scan, layeringRules, serverSafePackages, staleLiteralUses) {
 		t.Error(violation)
+	}
+}
+
+// A composed tree, on a fixture: the files the compose record names are the core's and are not
+// judged, and are named; a file the record does not name, beside them, is judged as ever.
+func TestTheComposedCoreFilesAreLeftToTheCoreAndNamed(t *testing.T) {
+	root := t.TempDir()
+	write := func(relative string, body string) {
+		path := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module "+modulePath+"\n")
+	write("sdk/cgo/go.mod", "module "+modulePath+"/sdk/cgo\n")
+	write("sdk/cgo/handles.go", "package main\n\nimport _ \"github.com/urnetwork/sdk\"\n")
+	write("sdk/cgo/own.go", "package main\n\nimport _ \"github.com/urnetwork/sdk\"\n")
+	write("sdk/cgo/.composed", "# composed by sdk/cgo/compose.sh from the fixture\nhandles.go\r\n")
+	rules := map[string]layeringRule{"sdk/cgo": {external: []string{"github.com/urnetwork/connect"}}}
+	scan := scanRepository(t, root)
+	if !slices.Equal(scan.composed, []string{"sdk/cgo/handles.go"}) {
+		t.Errorf("the composed files named: %v, want [sdk/cgo/handles.go]", scan.composed)
+	}
+	violations := layeringViolations(scan, rules, nil, map[string]string{})
+	if len(violations) != 1 || !strings.HasPrefix(violations[0], "sdk/cgo imports github.com/urnetwork/sdk (sdk/cgo/own.go)") {
+		t.Errorf("the file the record does not name must be judged, and only it: %q", violations)
+	}
+	// and without the record, both are judged
+	if err := os.Remove(filepath.Join(root, "sdk", "cgo", ".composed")); err != nil {
+		t.Fatal(err)
+	}
+	if violations := layeringViolations(scanRepository(t, root), rules, nil, map[string]string{}); len(violations) != 2 {
+		t.Errorf("with no compose record both files are this repository's and both are judged: %q", violations)
 	}
 }
 

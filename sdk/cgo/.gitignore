@@ -1,3 +1,23 @@
 # what sdk/cgo/compose.sh lays here and records, and what a library build writes
 /.composed
 /build/
+
+# THE COMPOSED FILES: the core SDK's cgo package main, as compose.sh copies it from the core SDK at
+# the commit scripts/siblings.txt pins. They are the core's source, laid here for a build and removed
+# by `compose.sh --clean`, so a `git add -A` in a composed tree must not commit them. compose.sh
+# holds this list to what it copied, both ways: a core that gains or loses a file fails the compose
+# until the list here says so.
+# composed-begin
+/callbacks.c
+/callbacks.h
+/convert.go
+/cstrings.go
+/exports_core.go
+/exports_gen.go
+/exports_gen_unix.go
+/exports_manual.go
+/exports_socket.go
+/handles.go
+/include/urnetwork_sdk.h
+/include/urnetwork_sdk.hpp
+# composed-end

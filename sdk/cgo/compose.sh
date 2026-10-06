@@ -23,7 +23,10 @@
 #     every messaging export in the library twice;
 #   - a file that already exists here: a tracked file of this repository is never overwritten, and
 #     a second compose over a first is refused rather than mixed (clean first);
-#   - a core directory that is not there.
+#   - a core directory that is not there;
+#   - a core whose files are not exactly the list in sdk/cgo/.gitignore, between "# composed-begin"
+#     and "# composed-end": that list is what keeps a composed tree's `git add -A` from committing
+#     the core's package main, so it is held to what is laid down, both ways, before anything is.
 # The list of what it copied is .composed (gitignored), with the core commit when the core is a git
 # checkout; --clean reads it back and removes exactly those paths.
 set -euo pipefail
@@ -92,6 +95,14 @@ for name in "${files[@]}"; do
     exit 1
   fi
 done
+listed=$(sed -n '/^# composed-begin$/,/^# composed-end$/p' "$here/.gitignore" | tr -d '\r' | grep -v '^#' | sed 's#^/##' | sort)
+laying=$(printf '%s\n' "${files[@]}" | sort)
+if [ -z "$listed" ] || [ "$listed" != "$laying" ]; then
+  echo "compose: sdk/cgo/.gitignore's composed list is not what this core lays down (< listed only, > laid down only):" >&2
+  diff <(printf '%s\n' "$listed") <(printf '%s\n' "$laying") >&2 || true
+  echo "compose: update the list between '# composed-begin' and '# composed-end' in sdk/cgo/.gitignore" >&2
+  exit 1
+fi
 
 commit=$(git -C "$core" rev-parse HEAD 2>/dev/null || echo "not a git checkout")
 {
