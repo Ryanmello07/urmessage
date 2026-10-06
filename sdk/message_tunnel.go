@@ -124,9 +124,10 @@ func newMessageTunnel(ctx context.Context, config *messageTunnelConfig) (*messag
 	return startMessageTunnel(cancelCtx, cancel, generator, clientId)
 }
 
-// messageTunnelClientSettings are the settings of every window client the tunnel mints: the
-// device's own window-client settings, which wire the operator's key api (/key/<id> and its signed
-// history), with the per-peer encryption mode OPPORTUNISTIC and a 1 s establish hold. A window
+// messageTunnelClientSettings are the settings of every window client the tunnel mints: connect's
+// operator-backed client settings (connect.NewOperatorClientSettings, the shared implementation the
+// core SDK's device settings were lifted into), which wire the operator's key api (/key/<id> and its
+// signed history), with the per-peer encryption mode OPPORTUNISTIC and a 1 s establish hold. A window
 // holds its application writes for up to 1 s while its exit's session first establishes, so an
 // exit that answers the per-peer handshake within that second is sealed from the first byte. An
 // exit that never answers is reached unsealed at this layer after the second, instead of not at
@@ -139,7 +140,7 @@ func messageTunnelClientSettings(apiUrl string, clientStrategy *connect.ClientSt
 	}
 	settings.EncryptionSettings.Mode = connect.EncryptionModeOpportunistic
 	settings.EncryptionSettings.OpportunisticEstablishHold = 1 * time.Second
-	return newDeviceClientSettings(settings, apiUrl, clientStrategy)
+	return connect.NewOperatorClientSettings(settings, apiUrl, clientStrategy)
 }
 
 // messageTunnelMultiClientSettings carry the window's performance profile. PostQuantumEncryption
