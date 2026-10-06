@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """verify_split.py: the staged byte-level proof for the message repository's imports.
 
+Revision 5 (2026-10-06), one change: a rename-to or rename+edit-to row whose target the tip does not
+hold fails. Before, it passed as a declaration, so a renamed path deleted later (the codec's
+workflow, .github/workflows/mls-syntax.yml imported as syntax.yml and then removed with GitHub
+Actions) needed no 'delete' row and its old row read as if the file were still here. Every other
+check, and every line of output for a tip with no such row, is revision 4's.
+
 Revision 4 (2026-10-06), two changes and nothing else:
   - the sdk side is pinned from three counted runs over P_sdk (two on Ubuntu 24.04, git 2.43.0,
     Python 3.12.3; one on Windows, git 2.53.0, Python 3.14.4; one tip), its history check
@@ -867,10 +873,15 @@ def adaptation_audit(dst, tip, base, sources, manifest, review_out=None, manifes
             fails.append("E: %s is in the tip, in no projection and not declared new" % p)
     for p in sorted(set(proj) - set(act)):
         decl = manifest.get(p)
-        if decl and (decl[0] == "delete" or decl[0].startswith(("rename-to:", "rename+edit-to:"))):
+        if decl and decl[0] == "delete":
             used.add(p)
-            if decl[0] == "delete":
-                tally["declared delete"] += 1
+            tally["declared delete"] += 1
+        elif decl and decl[0].startswith(("rename-to:", "rename+edit-to:")):
+            used.add(p)
+            target = decl[0].split(":", 1)[1]
+            if target not in act:
+                # revision 5: a rename whose target is gone is a deletion, and is declared as one
+                fails.append("E: %s is declared renamed to %s, which the tip does not hold: a path that is gone is a 'delete' row" % (p, target))
         else:
             fails.append("E: %s (from %s) is missing from the tip and the manifest does not declare it" % (p, proj[p][2]))
     for p in sorted(set(manifest) - used):

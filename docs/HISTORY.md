@@ -65,6 +65,8 @@ and message, and changes its id, so each import publishes a commit map: one
   (`internal/repository`); CI. [2a-scope.md](history/2a-scope.md) records every scope the
   move could have narrowed, measured in connect and here, and who keeps each gate's
   non-moved half.
+- Upstream changed some of these paths after `e449f7d8`; see "Upstream's changes after the
+  imports" below.
 
 ### Stage 2b: the messaging schema
 
@@ -87,8 +89,10 @@ and message, and changes its id, so each import publishes a commit map: one
 - The schema moves whole, at the same time connect drops its copy: there is no interim in
   which two copies are linked, and no freeze. The corpus that connect's copy emitted is
   [protocol/testdata/wire-golden.tsv](../protocol/testdata/wire-golden.tsv) (197 items, sha256
-  `9b5772b7...`); this package emits the same bytes, CI re-emits it from a pinned connect from
-  before the move, and `protocol/message_wiregolden_test.go` holds it append-only.
+  `9b5772b7...`); this package emits the same bytes today, test.sh re-emits the base from a
+  pinned connect from before the move and compares it byte for byte, and
+  `protocol/message_wiregolden_test.go` holds it append-only: every recorded row must still
+  decode and re-encode to its bytes, so the schema can grow and the base stays connect's.
 - Scope: `TestNothingHereComputesTheAttestationPreimage` walks the repository root. In
   connect it read 1,587 Go files and here 253, and it finds every label in the same files in
   both (`message/writeauth.go`, `message/attachment.go` and their tests,
@@ -127,6 +131,49 @@ and message, and changes its id, so each import publishes a commit map: one
   records every scope the move could have narrowed, measured here and at P_sdk, and who
   keeps each gate's non-moved half.
 
+## Upstream's changes after the imports, and the fork's own
+
+The imports are projections of fork commits, `e449f7d8` and `6141b98d`, and the removal pull
+requests delete the same paths from later upstream commits. Two kinds of difference sit between
+the two, and [ported.tsv](history/ported.tsv) declares every one of them.
+
+**Upstream changed connect paths after `e449f7d8`.** The maintainer's two commits are ported
+here, each as one commit with its original author, author date and message, followed by
+`(cherry picked from commit ...)` and a port note:
+
+| Upstream commit | Paths here | Port |
+|---|---|---|
+| `54b5b106` Bitprecipice, 2026-10-05, "Fix transfer custody and persistent TCP collapse admission" | `message/record_test.go` (the reviewed SDK contexts of the record gate, `TestJoinSDKPacketAndPoolContexts`), and the five fixtures under `message/testdata/reviewed-sdk/` | `3a22cd99` |
+| `e8611390` Bitprecipice, 2026-10-06, "Remove the GitHub workflows" | `mls/hpke_fuzz_test.go`, `syntax/fuzz_test.go`, `syntax/layering_test.go` (its two workflow tests), and the codec's workflow, deleted | `4be82ed6` |
+
+The merge of connect#216 (`94453d74`) changed no imported path beyond what `e8611390` then
+removed: the codec workflow's trigger and its needle.
+
+**The fork carries changes upstream never had.** These commits are reachable only from the
+forks, so re-running the verifier fetches from `Ryanmello07/connect` (tag
+`split/source-connect-2a`) and `Ryanmello07/urnetwork-sdk` (tag `split/source-sdk-3`). Those
+tags are what keep this proof reproducible; neither fork is protected by a ruleset.
+
+| Fork commit | Repository | What it changed |
+|---|---|---|
+| `1f97ebb2` | connect | the absorb of connect#216, which kept the fork's `beta/message` trigger and needle; `e8611390` removed both, so nothing of it remains |
+| `e449f7d8` | connect | the source tip itself; it changes no imported path |
+| `c71bb73b` | sdk | per-peer encryption OPPORTUNISTIC, not REQUIRED (the owner's ruling of 2026-10-04): `message_route.go`, `message_tunnel.go`, `message_tunnel_test.go` |
+| `d20d82c1` | sdk | the 1 s establish hold on every window client (the owner's second ruling of 2026-10-04): the same three files |
+| `f370a732` | sdk | the SX-0 sync merge of upstream `0c6462f2` |
+| `2dc9bf77` | sdk | the loopback modfile's indirect requirements for upstream connect's uTLS dial: `cgo/loopback.go.mod`, `cgo/loopback.go.sum` |
+
+The tunnel's hold and OPPORTUNISTIC were never reviewed upstream; the message pull request
+names them at its top.
+
+**The proof.** [carried.py](history/carried.py) reads each removal pull request's deletions,
+from its base, and holds this tip to them: every deleted path is here (or declared deleted in
+the manifest), the tip contains every upstream change to it since the merge base of the
+import's source and the removal's base (a three-way merge that changes nothing), and every
+upstream change and fork-only change is declared in ported.tsv, both ways. Its control is the
+tip the review measured, `f3f8f2bd`, before the ports, where it fails for exactly the ten
+ported paths.
+
 ## Re-running the verifier
 
 [verify_split.py](history/verify_split.py) proves, for every import the tip holds:
@@ -158,10 +205,24 @@ the source file one change earlier, and synthetic changes to the expected tree.
 import; the sdk side's control is `d20d82c1`, the fork's `beta/message` before its sync, which
 the fetch of `6141b98d` brings with its history.
 
+The removals' deletions, against each removal pull request's base and head (fetch those into
+the same two repositories first; the bases below are the ones measured, and the check is re-run
+against the final ones before the removals merge):
+
+    git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git <connect removal base>:refs/remotes/upstream/removal-base <connect removal head>:refs/remotes/upstream/removal-head
+    git -C ../sdk-src.git fetch https://github.com/urnetwork/sdk.git <sdk removal base>:refs/remotes/upstream/removal-base <sdk removal head>:refs/remotes/upstream/removal-head
+    python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv --controls --removal connect=../connect-src.git:upstream/removal-base..upstream/removal-head --removal sdk=../sdk-src.git:upstream/removal-base..upstream/removal-head
+
+It must end with `PASS`. Measured: connect `ca2562ba..022ec900` (848 deletions), sdk
+`b8e0da26..701fa391` (148 deletions).
+
 ## Files in docs/history
 
-- `verify_split.py`: the verifier, revision 4, sha256
-  `ed620472a7656e889f1f25b9fd50094b9282f312d433f16d87f391cf99106e7e`. Stages 1 and 2 were
+- `verify_split.py`: the verifier, revision 5, sha256
+  `53fc3bc32c1fd879b25d19d09293d78bd26c3fef00cd86670bab74d451605bbe`. Revision 5 adds one rule: a
+  rename row whose target the tip does not hold fails, where it passed as a declaration before; a
+  path renamed on import and later deleted is a `delete` row. Revision 4 (sha256
+  `ed620472a7656e889f1f25b9fd50094b9282f312d433f16d87f391cf99106e7e`) verified stage 3. Stages 1 and 2 were
   verified with revision 3 (`85fcadf4916099fcf33bda29070eb970e0dd22749f588809a2cbd238e351571e`),
   whose output revision 4 reproduces line for line on those sides, plus one new control line
   per side. Revision 4 pins the sdk side and adds one rule: an imported merge may keep fewer
@@ -180,8 +241,13 @@ the fetch of `6141b98d` brings with its history.
   part of the base, with its reason and, for a new or edited file, the sha256 of its
   bytes. It declares itself as `manifest`.
 - `verified-tips.txt`: every tip the verifier passed, oldest first.
+- `carried.py`: the removals' deletions held to this tip (above).
+- `ported.tsv`: every upstream change after an import's source carried here, every path upstream
+  deleted, and every fork-only change, each with its commits.
 
-## Source copies are frozen
+## Changes in connect and the core SDK until the removals merge
 
-Once a path is imported here, its copy in connect or the core SDK is frozen: it
-changes only in the pull request that removes it. Changes go to this repository.
+An earlier version of this file said the source copies were frozen once imported. Nothing held
+that, and upstream changed two connect paths after the import's source. The copies change until
+the removal pull requests merge, and changes made there have to arrive here: carried.py is the
+check, and ported.tsv the record. After the removals merge, the paths exist only here.

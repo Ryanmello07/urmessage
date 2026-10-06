@@ -1,0 +1,29 @@
+# ported.tsv: what docs/history/carried.py holds the removals' deletions to, beyond the imports.
+# Columns (tab-separated): side, kind, path (as the source repository names it), commits (comma-
+# separated full SHAs of the source repository, or -), the commit of THIS repository that carries
+# them (or -), reason.
+# Kinds:
+#   port          upstream changed the path after the import's source (between the merge base of
+#                 source and removal base, and the removal base); the commits are upstream's, and
+#                 carried.py proves the tip holds every one of their changes
+#   port-delete   upstream deleted a path the import holds; the tip holds it no more
+#   fork-only     the import's source changed the path where upstream never did; the commits are the
+#                 fork's, and the reason says why the change stands here
+#   not-carried   the removal deletes a path no import projects
+# carried.py fails on a row nothing needs.
+connect	port	message/record_test.go	54b5b106f70a93e92ffad2d963571f332abf6153	3a22cd992adb27691e700ecee32e11fed8ec907f	Bitprecipice, 2026-10-05: joinReviewedSDKContexts, the six reviewed TCP/IP and pool-accounting operations of the sibling SDK matched by their whole AST, and TestJoinSDKPacketAndPoolContexts
+connect	port	message/testdata/reviewed-sdk/device_synthetic_memory_test.go	54b5b106f70a93e92ffad2d963571f332abf6153	3a22cd992adb27691e700ecee32e11fed8ec907f	Bitprecipice, 2026-10-05: a reviewed-context fixture of the record gate, byte-identical to connect's
+connect	port	message/testdata/reviewed-sdk/mobile_packet_pressure_test.go	54b5b106f70a93e92ffad2d963571f332abf6153	3a22cd992adb27691e700ecee32e11fed8ec907f	Bitprecipice, 2026-10-05: a reviewed-context fixture of the record gate, byte-identical to connect's
+connect	port	message/testdata/reviewed-sdk/packet_batch.go	54b5b106f70a93e92ffad2d963571f332abf6153	3a22cd992adb27691e700ecee32e11fed8ec907f	Bitprecipice, 2026-10-05: a reviewed-context fixture of the record gate, byte-identical to connect's
+connect	port	message/testdata/reviewed-sdk/socket.go	54b5b106f70a93e92ffad2d963571f332abf6153	3a22cd992adb27691e700ecee32e11fed8ec907f	Bitprecipice, 2026-10-05: a reviewed-context fixture of the record gate, byte-identical to connect's
+connect	port	message/testdata/reviewed-sdk/socket_test.go	54b5b106f70a93e92ffad2d963571f332abf6153	3a22cd992adb27691e700ecee32e11fed8ec907f	Bitprecipice, 2026-10-05: a reviewed-context fixture of the record gate, byte-identical to connect's
+connect	port	mls/hpke_fuzz_test.go	e8611390466dcded7ccc4fd2d08bc14c297d9f41	4be82ed6cdc700f6d3c185897c8940ace0717bf0	Bitprecipice, 2026-10-06 (no GitHub Actions): the comments say what a plain go test run covers
+connect	port	mls/syntax/fuzz_test.go	e8611390466dcded7ccc4fd2d08bc14c297d9f41	4be82ed6cdc700f6d3c185897c8940ace0717bf0	Bitprecipice, 2026-10-06 (no GitHub Actions): the seed-corpus gate's comment, without the per-commit CI job
+connect	port	mls/syntax/layering_test.go	e8611390466dcded7ccc4fd2d08bc14c297d9f41	4be82ed6cdc700f6d3c185897c8940ace0717bf0	Bitprecipice, 2026-10-06 (no GitHub Actions): the two tests that read mls-syntax.yml go with the workflow; resolved to connect's file with selfImportPath naming this module (this repository's stage 2a structural reader of the workflow went with them)
+connect	port-delete	.github/workflows/mls-syntax.yml	e8611390466dcded7ccc4fd2d08bc14c297d9f41	4be82ed6cdc700f6d3c185897c8940ace0717bf0	Bitprecipice, 2026-10-06 (no GitHub Actions): the codec's workflow, imported here as .github/workflows/syntax.yml, deleted with the rest of GitHub Actions; test.sh runs its fuzz legs
+connect	fork-only	mls/syntax/layering_test.go	1f97ebb2850760f74cb6def34c680f6ccfe993f6	-	the fork's absorb of connect#216 (1f97ebb2) kept the fork's trigger needle, beta/message, where upstream's b4b7e070 says main; e8611390 removed the needle with the workflow, and the port carries that removal, so nothing of the fork's change is left
+sdk	fork-only	cgo/loopback.go.mod	2dc9bf7706a055864bf976a736b7b8bd68e293eb	-	the fork's sync (SX-0): the loopback modfile takes the indirect requirements upstream connect's uTLS dial brings; upstream sdk never had the change
+sdk	fork-only	cgo/loopback.go.sum	2dc9bf7706a055864bf976a736b7b8bd68e293eb	-	the go.sum half of the loopback modfile's requirements, as above
+sdk	fork-only	message_route.go	c71bb73bba3862328304a7b9c99547336ff2c932,d20d82c1da4be370050f9d00c2b658166e024fc0	-	the owner's rulings of 2026-10-04: per-peer encryption OPPORTUNISTIC, not REQUIRED (c71bb73b), and a 1 s establish hold on every window client (d20d82c1); never reviewed upstream, so the message pull request names them at its top
+sdk	fork-only	message_tunnel.go	c71bb73bba3862328304a7b9c99547336ff2c932,d20d82c1da4be370050f9d00c2b658166e024fc0	-	the owner's rulings of 2026-10-04, as message_route.go: OPPORTUNISTIC per-peer encryption and the 1 s establish hold
+sdk	fork-only	message_tunnel_test.go	c71bb73bba3862328304a7b9c99547336ff2c932,d20d82c1da4be370050f9d00c2b658166e024fc0	-	the tests of the owner's two rulings of 2026-10-04, as message_route.go

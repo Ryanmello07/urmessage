@@ -58,4 +58,6 @@ Measured on Windows (go1.26.5) unless marked; "P_sdk" is the source,
 | test-citation gate | core prose citing core tests (5 names, TestMain at 3 sites) | The core's port, `citation_gate_test.go` (the sdk removal PR). |
 | godoc-link gate | none: its subject was URmessage's files only | — |
 | pqdarkgate, both walks | core production prose and literals | Out of subject, measured at P_sdk (section 2). |
-| record gate's sibling complement | the core SDK's data path | Retired: there is no core code in this tree. |
+| record gate's sibling complement | the core SDK's data path | NOT retired (corrected 2026-10-06; this row said "Retired: there is no core code in this tree"). urnetwork/connect 54b5b106 had already put the whole sibling SDK under the gate, with reviewed AST contexts. Ported here (3a22cd99), and the core SDK beside the repository at its pin is a root of the gate (a25b7c8b), scanned whole, every reviewed context held live, required by test.sh (URMESSAGE_REQUIRE_CORE_SDK_ROOT). **O18, the maintainer's call:** keep it (the default) or drop it and record the loss here. |
+| test-citation gate, the root module's prose | 4 citations outside the subject that resolve to no single declaration | Printed, and held both ways to `citationOutsideSubjectUnresolved` (3 wrapped across comment lines, 1 message-server test). |
+| constant-time importer gate, nested modules | `sdk/urmessage` imports `message/message` outside the root module | Printed, and held both ways to `authNestedImporterDispositions` (F3, ruling O20). |
