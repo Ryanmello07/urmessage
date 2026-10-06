@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/protocol"
 	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk/urmessage"
 )
 

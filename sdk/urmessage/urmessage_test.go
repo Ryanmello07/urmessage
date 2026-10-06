@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/protocol"
+	connectprotocol "github.com/urnetwork/connect/protocol"
 	"github.com/urnetwork/message/messagegroup"
+	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 )
 
@@ -259,18 +260,18 @@ func TestAHeadThisBuildDidNotWriteIsRefused(t *testing.T) {
 // every fetch this package sends carries a MAC over the wrong operation and the server answers
 // REASON_REJECTED with nothing to say why.
 func TestTheOpOfARequestIsItsOwnArmsFieldNumber(t *testing.T) {
-	oneof := (&protocol.MessageServerRequest{}).ProtoReflect().Descriptor().Oneofs().ByName("body")
+	oneof := (&messageprotocol.MessageServerRequest{}).ProtoReflect().Descriptor().Oneofs().ByName("body")
 	if oneof == nil {
 		t.Fatal("MessageServerRequest declares no body oneof")
 	}
 	seen := 0
 	for index := 0; index < oneof.Fields().Len(); index += 1 {
 		field := oneof.Fields().Get(index)
-		if field.Message().FullName() != (&protocol.FetchRequest{}).ProtoReflect().Descriptor().FullName() {
+		if field.Message().FullName() != (&messageprotocol.FetchRequest{}).ProtoReflect().Descriptor().FullName() {
 			continue
 		}
 		seen += 1
-		op, err := opOf(&protocol.FetchRequest{})
+		op, err := opOf(&messageprotocol.FetchRequest{})
 		if err != nil {
 			t.Fatalf("opOf over a FetchRequest: %v", err)
 		}
@@ -284,7 +285,7 @@ func TestTheOpOfARequestIsItsOwnArmsFieldNumber(t *testing.T) {
 
 	// and a message that is no arm of that oneof at all is a refusal rather than a zero, because
 	// zero is a real field number's neighbour and a MAC under it verifies nowhere
-	if _, err := opOf(&protocol.HelloResponse{}); err == nil {
+	if _, err := opOf(&messageprotocol.HelloResponse{}); err == nil {
 		t.Error("a message that is no arm of MessageServerRequest.body answered an op")
 	}
 }
@@ -335,7 +336,7 @@ func TestEverythingIsRefusedBeforeHello(t *testing.T) {
 // sent, so a client that would never answer is exactly the right shape to prove it.
 type silentClient struct{}
 
-func (silentClient) SendWithTimeout(frame *protocol.Frame, destination connect.Id,
+func (silentClient) SendWithTimeout(frame *connectprotocol.Frame, destination connect.Id,
 	ackCallback connect.AckFunction, timeout time.Duration, opts ...any) bool {
 	return false
 }

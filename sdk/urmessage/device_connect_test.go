@@ -11,7 +11,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/protocol"
+	connectprotocol "github.com/urnetwork/connect/protocol"
+	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 )
 
@@ -37,7 +38,7 @@ type acceptingSilentClient struct {
 	frames int
 }
 
-func (self *acceptingSilentClient) SendWithTimeout(frame *protocol.Frame, destination connect.Id,
+func (self *acceptingSilentClient) SendWithTimeout(frame *connectprotocol.Frame, destination connect.Id,
 	ackCallback connect.AckFunction, timeout time.Duration, opts ...any) bool {
 
 	self.mutex.Lock()
@@ -432,7 +433,7 @@ func TestTheDefaultConnectBudgetCoversTheMeasuredWindow(t *testing.T) {
 type answeringClient struct {
 	mutex   sync.Mutex
 	receive connect.ReceiveFunction
-	reason  protocol.Reason
+	reason  messageprotocol.Reason
 	nonce   []byte
 	answers int
 }
@@ -444,13 +445,13 @@ func (self *answeringClient) AddReceiveCallback(receiveCallback connect.ReceiveF
 	return func() {}
 }
 
-func (self *answeringClient) SendWithTimeout(frame *protocol.Frame, destination connect.Id,
+func (self *answeringClient) SendWithTimeout(frame *connectprotocol.Frame, destination connect.Id,
 	ackCallback connect.AckFunction, timeout time.Duration, opts ...any) bool {
 
-	if frame.GetMessageType() != protocol.MessageType_MessageMessageServerRequest {
+	if frame.GetMessageType() != connectprotocol.MessageType_MessageMessageServerRequest {
 		return true
 	}
-	request := &protocol.MessageServerRequest{}
+	request := &messageprotocol.MessageServerRequest{}
 	if proto.Unmarshal(frame.GetMessageBytes(), request) != nil {
 		return false
 	}
@@ -461,10 +462,10 @@ func (self *answeringClient) SendWithTimeout(frame *protocol.Frame, destination 
 	if receive == nil {
 		return false
 	}
-	response := &protocol.MessageServerResponse{RequestId: request.GetRequestId(), Reason: reason}
-	if reason == protocol.Reason_REASON_OK {
-		response.Body = &protocol.MessageServerResponse_Hello{
-			Hello: &protocol.HelloResponse{ServerNonce: nonce},
+	response := &messageprotocol.MessageServerResponse{RequestId: request.GetRequestId(), Reason: reason}
+	if reason == messageprotocol.Reason_REASON_OK {
+		response.Body = &messageprotocol.MessageServerResponse_Hello{
+			Hello: &messageprotocol.HelloResponse{ServerNonce: nonce},
 		}
 	}
 	encoded, err := proto.Marshal(response)
@@ -473,8 +474,8 @@ func (self *answeringClient) SendWithTimeout(frame *protocol.Frame, destination 
 	}
 	// delivered on ANOTHER goroutine, because this transport is still inside its own `send`
 	// here: its waiter is registered but it has not reached the select that reads it.
-	go receive(connect.TransferPath{}, []*protocol.Frame{{
-		MessageType:  protocol.MessageType_MessageMessageServerResponse,
+	go receive(connect.TransferPath{}, []*connectprotocol.Frame{{
+		MessageType:  connectprotocol.MessageType_MessageMessageServerResponse,
 		MessageBytes: encoded,
 	}}, connect.Peer{})
 	return true
@@ -486,7 +487,7 @@ func (self *answeringClient) answered() int {
 	return self.answers
 }
 
-func newAnsweringDevice(t *testing.T, reason protocol.Reason, nonce []byte) (*Device, *answeringClient) {
+func newAnsweringDevice(t *testing.T, reason messageprotocol.Reason, nonce []byte) (*Device, *answeringClient) {
 	t.Helper()
 	client := &answeringClient{reason: reason, nonce: nonce}
 	transport, err := sdk.NewMessageTransport(&sdk.MessageTransportConfig{
@@ -540,12 +541,12 @@ func newAnsweringDevice(t *testing.T, reason protocol.Reason, nonce []byte) (*De
 func TestAnAnsweredHelloIsNotRetried(t *testing.T) {
 	for _, one := range []struct {
 		name   string
-		reason protocol.Reason
+		reason messageprotocol.Reason
 		nonce  []byte
 		want   error
 	}{
-		{"a refusal by reason", protocol.Reason_REASON_UNSUPPORTED_VERSION, nil, ErrHelloRefused},
-		{"REASON_OK and no server_nonce", protocol.Reason_REASON_OK, nil, ErrNotConnected},
+		{"a refusal by reason", messageprotocol.Reason_REASON_UNSUPPORTED_VERSION, nil, ErrHelloRefused},
+		{"REASON_OK and no server_nonce", messageprotocol.Reason_REASON_OK, nil, ErrNotConnected},
 	} {
 		t.Run(one.name, func(t *testing.T) {
 			device, client := newAnsweringDevice(t, one.reason, one.nonce)
@@ -573,7 +574,7 @@ func TestAnAnsweredHelloIsNotRetried(t *testing.T) {
 // AND A HELLO THAT IS ANSWERED PROPERLY CONNECTS ON THE FIRST ATTEMPT, which is the control that
 // stops every case above from passing over a Connect that never succeeds at all.
 func TestAnAnsweredHelloConnectsOnTheFirstAttempt(t *testing.T) {
-	device, client := newAnsweringDevice(t, protocol.Reason_REASON_OK, bytes.Repeat([]byte{0x7C}, 32))
+	device, client := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, bytes.Repeat([]byte{0x7C}, 32))
 	started := time.Now()
 	if err := device.Connect(context.Background()); err != nil {
 		t.Fatalf("a Hello answered with a nonce did not connect: %v", err)

@@ -55,9 +55,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/connect/protocol"
 	"github.com/urnetwork/message/message"
 	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/protocol"
 )
 
 // walkRaw is [rotWorld.deliver] with the page handed over as RAW ROWS rather than as records this

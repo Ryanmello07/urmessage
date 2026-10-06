@@ -82,7 +82,8 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/protocol"
+	connectprotocol "github.com/urnetwork/connect/protocol"
+	messageprotocol "github.com/urnetwork/message/protocol"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -101,7 +102,7 @@ type messageTransportFake struct {
 	mutex      sync.Mutex
 	receive    connect.ReceiveFunction
 	subscribed int
-	requests   []*protocol.MessageServerRequest
+	requests   []*messageprotocol.MessageServerRequest
 	refuse     bool
 
 	// Every frame's ADDRESS and CODE POINT, recorded rather than taken and
@@ -110,7 +111,7 @@ type messageTransportFake struct {
 	// replaced by the zero id with the whole suite green — a gap that was
 	// inside the fake's reach rather than behind the missing server.
 	destinations []connect.TransferPath
-	sent         []protocol.MessageType
+	sent         []connectprotocol.MessageType
 
 	// §4.6's fragments of a request too large for one frame, decoded in the
 	// order they were handed over, and this side's own reassembly of them.
@@ -119,13 +120,13 @@ type messageTransportFake struct {
 	// binding: a fake that reassembled with the binding's reassembler would
 	// make a fragmented request answerable by the same code that cut it, and a
 	// mistake in the cutting would be undone by the same mistake in the joining.
-	fragments []*protocol.MessageServerFragment
+	fragments []*messageprotocol.MessageServerFragment
 	joining   []byte
 
 	// Called inline from inside SendWithTimeout, with the transport's own
 	// goroutine still inside `send` and not yet in its select. Property 4's
 	// whole construction.
-	onSend func(request *protocol.MessageServerRequest)
+	onSend func(request *messageprotocol.MessageServerRequest)
 }
 
 func (self *messageTransportFake) AddReceiveCallback(receiveCallback connect.ReceiveFunction) func() {
@@ -141,7 +142,7 @@ func (self *messageTransportFake) AddReceiveCallback(receiveCallback connect.Rec
 }
 
 func (self *messageTransportFake) SendWithTimeout(
-	frame *protocol.Frame,
+	frame *connectprotocol.Frame,
 	destinationId connect.Id,
 	ackCallback connect.AckFunction,
 	timeout time.Duration,
@@ -154,8 +155,8 @@ func (self *messageTransportFake) SendWithTimeout(
 	self.mutex.Unlock()
 
 	switch frame.GetMessageType() {
-	case protocol.MessageType_MessageMessageServerRequest:
-		request := &protocol.MessageServerRequest{}
+	case connectprotocol.MessageType_MessageMessageServerRequest:
+		request := &messageprotocol.MessageServerRequest{}
 		if proto.Unmarshal(frame.GetMessageBytes(), request) != nil {
 			return false
 		}
@@ -170,8 +171,8 @@ func (self *messageTransportFake) SendWithTimeout(
 			onSend(request)
 		}
 		return true
-	case protocol.MessageType_MessageMessageServerFragment:
-		fragment := &protocol.MessageServerFragment{}
+	case connectprotocol.MessageType_MessageMessageServerFragment:
+		fragment := &messageprotocol.MessageServerFragment{}
 		if proto.Unmarshal(frame.GetMessageBytes(), fragment) != nil {
 			return false
 		}
@@ -190,7 +191,7 @@ func (self *messageTransportFake) SendWithTimeout(
 		if !complete {
 			return true
 		}
-		request := &protocol.MessageServerRequest{}
+		request := &messageprotocol.MessageServerRequest{}
 		if proto.Unmarshal(assembled, request) != nil {
 			return false
 		}
@@ -215,17 +216,17 @@ func (self *messageTransportFake) addressed() []connect.TransferPath {
 }
 
 // Every code point this fake was handed, in order.
-func (self *messageTransportFake) codePoints() []protocol.MessageType {
+func (self *messageTransportFake) codePoints() []connectprotocol.MessageType {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
-	return append([]protocol.MessageType(nil), self.sent...)
+	return append([]connectprotocol.MessageType(nil), self.sent...)
 }
 
 // The §4.6 fragments this fake was handed, in order.
-func (self *messageTransportFake) cutFragments() []*protocol.MessageServerFragment {
+func (self *messageTransportFake) cutFragments() []*messageprotocol.MessageServerFragment {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
-	return append([]*protocol.MessageServerFragment(nil), self.fragments...)
+	return append([]*messageprotocol.MessageServerFragment(nil), self.fragments...)
 }
 
 func (self *messageTransportFake) requestCount() int {
@@ -234,7 +235,7 @@ func (self *messageTransportFake) requestCount() int {
 	return len(self.requests)
 }
 
-func (self *messageTransportFake) requestAt(index int) *protocol.MessageServerRequest {
+func (self *messageTransportFake) requestAt(index int) *messageprotocol.MessageServerRequest {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
 	return self.requests[index]
@@ -242,7 +243,7 @@ func (self *messageTransportFake) requestAt(index int) *protocol.MessageServerRe
 
 // Drive the binding's receive callback the way connect does: inline, with
 // borrowed frames, whatever the frames are.
-func (self *messageTransportFake) deliver(t *testing.T, frames ...*protocol.Frame) {
+func (self *messageTransportFake) deliver(t *testing.T, frames ...*connectprotocol.Frame) {
 	t.Helper()
 	self.mutex.Lock()
 	receive := self.receive
@@ -254,15 +255,15 @@ func (self *messageTransportFake) deliver(t *testing.T, frames ...*protocol.Fram
 }
 
 // One response, at §10.1's response code point.
-func (self *messageTransportFake) answer(t *testing.T, response *protocol.MessageServerResponse) {
+func (self *messageTransportFake) answer(t *testing.T, response *messageprotocol.MessageServerResponse) {
 	t.Helper()
-	self.deliver(t, &protocol.Frame{
-		MessageType:  protocol.MessageType_MessageMessageServerResponse,
+	self.deliver(t, &connectprotocol.Frame{
+		MessageType:  connectprotocol.MessageType_MessageMessageServerResponse,
 		MessageBytes: encodeMessageResponse(t, response),
 	})
 }
 
-func encodeMessageResponse(t *testing.T, response *protocol.MessageServerResponse) []byte {
+func encodeMessageResponse(t *testing.T, response *messageprotocol.MessageServerResponse) []byte {
 	t.Helper()
 	encoded, err := proto.Marshal(response)
 	if err != nil {
@@ -271,18 +272,18 @@ func encodeMessageResponse(t *testing.T, response *protocol.MessageServerRespons
 	return encoded
 }
 
-func helloResponse(requestId uint64, nonce string) *protocol.MessageServerResponse {
-	return &protocol.MessageServerResponse{
+func helloResponse(requestId uint64, nonce string) *messageprotocol.MessageServerResponse {
+	return &messageprotocol.MessageServerResponse{
 		RequestId: requestId,
-		Reason:    protocol.Reason_REASON_OK,
-		Body: &protocol.MessageServerResponse_Hello{
-			Hello: &protocol.HelloResponse{ServerNonce: []byte(nonce)},
+		Reason:    messageprotocol.Reason_REASON_OK,
+		Body: &messageprotocol.MessageServerResponse_Hello{
+			Hello: &messageprotocol.HelloResponse{ServerNonce: []byte(nonce)},
 		},
 	}
 }
 
 type messageTransportResult struct {
-	response *protocol.MessageServerResponse
+	response *messageprotocol.MessageServerResponse
 	err      error
 }
 
@@ -338,9 +339,9 @@ func TestMessageTransportAnswersEachWaiterWithItsOwnResponse(t *testing.T) {
 	transport := newTestMessageTransport(t, fake, 5*time.Second)
 	ctx := context.Background()
 
-	first := callInBackground(transport, ctx, &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	first := callInBackground(transport, ctx, &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
-	second := callInBackground(transport, ctx, &protocol.HelloRequest{SupportedVersions: []uint32{2}})
+	second := callInBackground(transport, ctx, &messageprotocol.HelloRequest{SupportedVersions: []uint32{2}})
 	awaitRequests(t, fake, 2)
 
 	firstId := fake.requestAt(0).GetRequestId()
@@ -397,7 +398,7 @@ func TestMessageTransportCountsAndDropsAResponseNobodyAskedFor(t *testing.T) {
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 5*time.Second)
 
-	results := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	results := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
 	requestId := fake.requestAt(0).GetRequestId()
 
@@ -447,7 +448,7 @@ func TestMessageTransportTimeoutIsTypedAndLeavesNoMapEntry(t *testing.T) {
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 150*time.Millisecond)
 
-	response, err := transport.Call(context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	response, err := transport.Call(context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	if err == nil {
 		t.Fatal("a Call that was never answered returned a nil error: " +
 			"(nil, nil) is the one answer a caller cannot tell from success")
@@ -511,11 +512,11 @@ func TestMessageTransportTimeoutIsTypedAndLeavesNoMapEntry(t *testing.T) {
 func TestMessageTransportReceiveCallbackDoesNotWaitForTheWaiter(t *testing.T) {
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 5*time.Second)
-	fake.onSend = func(request *protocol.MessageServerRequest) {
+	fake.onSend = func(request *messageprotocol.MessageServerRequest) {
 		fake.answer(t, helloResponse(request.GetRequestId(), "inline"))
 	}
 
-	results := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	results := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	select {
 	case result := <-results:
 		if result.err != nil {
@@ -547,7 +548,7 @@ func TestMessageTransportRefusesWhatItCannotDo(t *testing.T) {
 	transport := newTestMessageTransport(t, fake, 5*time.Second)
 
 	// a body that is not an arm of the request oneof
-	if _, err := transport.Call(context.Background(), &protocol.HelloResponse{}); !errors.Is(err, errMessageTransportNoArm) {
+	if _, err := transport.Call(context.Background(), &messageprotocol.HelloResponse{}); !errors.Is(err, errMessageTransportNoArm) {
 		t.Fatalf("a HelloResponse was accepted as a request body, or refused with %v", err)
 	}
 	if waiting := transport.Counts().Waiting; waiting != 0 {
@@ -555,7 +556,7 @@ func TestMessageTransportRefusesWhatItCannotDo(t *testing.T) {
 	}
 
 	fake.refuse = true
-	if _, err := transport.Call(context.Background(), &protocol.HelloRequest{}); !errors.Is(err, errMessageTransportRefused) {
+	if _, err := transport.Call(context.Background(), &messageprotocol.HelloRequest{}); !errors.Is(err, errMessageTransportRefused) {
 		t.Fatalf("a refused send was reported as %v, want errMessageTransportRefused", err)
 	}
 	if waiting := transport.Counts().Waiting; waiting != 0 {
@@ -586,7 +587,7 @@ func TestMessageTransportAddressesEveryFrameToTheConfiguredServer(t *testing.T) 
 	t.Cleanup(transport.Close)
 
 	// it will time out, and the timeout is not what this test is about
-	transport.Call(context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{7}})
+	transport.Call(context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{7}})
 
 	addressed := fake.addressed()
 	if len(addressed) == 0 {
@@ -605,11 +606,11 @@ func TestMessageTransportAddressesEveryFrameToTheConfiguredServer(t *testing.T) 
 	// the SEND-side code point, asserted rather than inferred from a fake that
 	// happens to refuse everything else
 	for index, codePoint := range fake.codePoints() {
-		if codePoint != protocol.MessageType_MessageMessageServerRequest {
+		if codePoint != connectprotocol.MessageType_MessageMessageServerRequest {
 			t.Fatalf("frame %d went out at code point %d (%s), want %d (%s)",
 				index, codePoint, codePoint,
-				protocol.MessageType_MessageMessageServerRequest,
-				protocol.MessageType_MessageMessageServerRequest)
+				connectprotocol.MessageType_MessageMessageServerRequest,
+				connectprotocol.MessageType_MessageMessageServerRequest)
 		}
 	}
 
@@ -634,15 +635,15 @@ func TestMessageTransportReadsOnlyTheCodePointsThatAreItsOwn(t *testing.T) {
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 5*time.Second)
 
-	results := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	results := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
 	requestId := fake.requestAt(0).GetRequestId()
 	encoded := encodeMessageResponse(t, helloResponse(requestId, "mine"))
 
 	mine := messageTransportReadCodePoints(t)
-	others := []protocol.MessageType{}
-	for number := range protocol.MessageType_name {
-		codePoint := protocol.MessageType(number)
+	others := []connectprotocol.MessageType{}
+	for number := range connectprotocol.MessageType_name {
+		codePoint := connectprotocol.MessageType(number)
 		if !mine[codePoint] {
 			others = append(others, codePoint)
 		}
@@ -670,18 +671,18 @@ func TestMessageTransportReadsOnlyTheCodePointsThatAreItsOwn(t *testing.T) {
 	// `request_id` at all. Read off the compiled descriptor rather than from the
 	// name, so a field renamed upstream fails here rather than quietly stopping
 	// being the rule.
-	parent := (&protocol.MessageServerResponse{}).ProtoReflect().Descriptor().FullName().Parent()
+	parent := (&messageprotocol.MessageServerResponse{}).ProtoReflect().Descriptor().FullName().Parent()
 	for _, codePoint := range sortedCodePoints(mine) {
 		// §4.3.5's PUSH IS THE ONE EXCEPTION, AND IT IS NAMED RATHER THAN LET THROUGH. It is the one
 		// message-server code point that is not an answer: it declares no request_id, and this binding
 		// reads it only to hand it to OnPush, never to a waiter. That is asserted below by delivering
 		// one, so the exception is a measured route and not a hole in the rule. Ledger 269.
-		if codePoint == protocol.MessageType_MessageMessageServerPush {
+		if codePoint == connectprotocol.MessageType_MessageMessageServerPush {
 			t.Logf("  %s is read, declares no request_id, and is routed to OnPush (asserted below)",
-				protocol.MessageType_name[int32(codePoint)])
+				connectprotocol.MessageType_name[int32(codePoint)])
 			continue
 		}
-		spelled, named := protocol.MessageType_name[int32(codePoint)], protoreflect.FullName("")
+		spelled, named := connectprotocol.MessageType_name[int32(codePoint)], protoreflect.FullName("")
 		if spelled == "" {
 			t.Fatalf("the receive path reads code point %d, which protocol's enum does not name", codePoint)
 		}
@@ -705,15 +706,15 @@ func TestMessageTransportReadsOnlyTheCodePointsThatAreItsOwn(t *testing.T) {
 		t.Fatal("the complement is EMPTY: this binding would be reading every code point protocol has, " +
 			"which is not a filter at all")
 	}
-	if len(mine)+len(others) != len(protocol.MessageType_name) {
+	if len(mine)+len(others) != len(connectprotocol.MessageType_name) {
 		t.Fatalf("%d read + %d not read is not the %d code points protocol declares: the partition does not close",
-			len(mine), len(others), len(protocol.MessageType_name))
+			len(mine), len(others), len(connectprotocol.MessageType_name))
 	}
 
 	// the very same well-formed response bytes, at every code point that is not
 	// one this binding reads
 	for _, codePoint := range others {
-		fake.deliver(t, &protocol.Frame{MessageType: codePoint, MessageBytes: encoded})
+		fake.deliver(t, &connectprotocol.Frame{MessageType: codePoint, MessageBytes: encoded})
 	}
 	counts := transport.Counts()
 	if counts.ResponseFrames != 0 {
@@ -730,18 +731,18 @@ func TestMessageTransportReadsOnlyTheCodePointsThatAreItsOwn(t *testing.T) {
 	}
 
 	// the push, at its own code point: handed to OnPush, and nothing else moves
-	if !mine[protocol.MessageType_MessageMessageServerPush] {
+	if !mine[connectprotocol.MessageType_MessageMessageServerPush] {
 		t.Fatal("the receive path does not read §4.3.5's push, so nothing ever reaches OnPush")
 	}
-	pushed := make(chan *protocol.MessageServerPush, 1)
-	unsubscribe := transport.OnPush(func(push *protocol.MessageServerPush) { pushed <- push })
+	pushed := make(chan *messageprotocol.MessageServerPush, 1)
+	unsubscribe := transport.OnPush(func(push *messageprotocol.MessageServerPush) { pushed <- push })
 	defer unsubscribe()
-	pushBytes, err := proto.Marshal(&protocol.MessageServerPush{Body: &protocol.MessageServerPush_Records{
-		Records: &protocol.RecordPush{GroupId: []byte("group"), HighWaterRecordId: 7}}})
+	pushBytes, err := proto.Marshal(&messageprotocol.MessageServerPush{Body: &messageprotocol.MessageServerPush_Records{
+		Records: &messageprotocol.RecordPush{GroupId: []byte("group"), HighWaterRecordId: 7}}})
 	if err != nil {
 		t.Fatalf("marshalling a push: %v", err)
 	}
-	fake.deliver(t, &protocol.Frame{MessageType: protocol.MessageType_MessageMessageServerPush, MessageBytes: pushBytes})
+	fake.deliver(t, &connectprotocol.Frame{MessageType: connectprotocol.MessageType_MessageMessageServerPush, MessageBytes: pushBytes})
 	select {
 	case push := <-pushed:
 		if push.GetRecords().GetHighWaterRecordId() != 7 {
@@ -758,8 +759,8 @@ func TestMessageTransportReadsOnlyTheCodePointsThatAreItsOwn(t *testing.T) {
 	}
 
 	// and the code point that IS this binding's arrives
-	fake.deliver(t, &protocol.Frame{
-		MessageType:  protocol.MessageType_MessageMessageServerResponse,
+	fake.deliver(t, &connectprotocol.Frame{
+		MessageType:  connectprotocol.MessageType_MessageMessageServerResponse,
 		MessageBytes: encoded,
 	})
 	counts = transport.Counts()
@@ -788,14 +789,14 @@ func TestMessageTransportReadsOnlyTheCodePointsThatAreItsOwn(t *testing.T) {
 // The spelling is turned into a NUMBER through protocol's own compiled enum
 // value map, so a constant this gate cannot resolve is a failure rather than a
 // silent zero.
-func messageTransportReadCodePoints(t *testing.T) map[protocol.MessageType]bool {
+func messageTransportReadCodePoints(t *testing.T) map[connectprotocol.MessageType]bool {
 	t.Helper()
 	gate := newBorrowGate(t)
 	decl := gate.decls["messageTransport.receive"]
 	if decl == nil {
 		t.Fatal("package sdk declares no messageTransport.receive, so there is no receive path to read the class off")
 	}
-	read := map[protocol.MessageType]bool{}
+	read := map[connectprotocol.MessageType]bool{}
 	ast.Inspect(decl, func(node ast.Node) bool {
 		clause, ok := node.(*ast.CaseClause)
 		if !ok {
@@ -811,12 +812,12 @@ func messageTransportReadCodePoints(t *testing.T) map[protocol.MessageType]bool 
 				continue
 			}
 			spelled := strings.TrimPrefix(selector.Sel.Name, "MessageType_")
-			number, found := protocol.MessageType_value[spelled]
+			number, found := connectprotocol.MessageType_value[spelled]
 			if !found {
 				t.Fatalf("messageTransport.receive names protocol.%s, which is not a value of protocol's MessageType enum",
 					selector.Sel.Name)
 			}
-			read[protocol.MessageType(number)] = true
+			read[connectprotocol.MessageType(number)] = true
 		}
 		return true
 	})
@@ -827,8 +828,8 @@ func messageTransportReadCodePoints(t *testing.T) map[protocol.MessageType]bool 
 	return read
 }
 
-func sortedCodePoints(set map[protocol.MessageType]bool) []protocol.MessageType {
-	points := []protocol.MessageType{}
+func sortedCodePoints(set map[connectprotocol.MessageType]bool) []connectprotocol.MessageType {
+	points := []connectprotocol.MessageType{}
 	for codePoint := range set {
 		points = append(points, codePoint)
 	}
@@ -845,7 +846,7 @@ func TestMessageTransportCancelledCallIsTypedAndLeavesNoMapEntry(t *testing.T) {
 	transport := newTestMessageTransport(t, fake, 30*time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	results := callInBackground(transport, ctx, &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	results := callInBackground(transport, ctx, &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
 	if waiting := transport.Counts().Waiting; waiting != 1 {
 		t.Fatalf("Counts().Waiting is %d before the cancel, want 1", waiting)

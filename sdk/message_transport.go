@@ -52,7 +52,8 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/protocol"
+	connectprotocol "github.com/urnetwork/connect/protocol"
+	messageprotocol "github.com/urnetwork/message/protocol"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -99,7 +100,7 @@ const messageTransportDefaultTimeout = 30 * time.Second
 // error here and not a silent widening.
 type messageTransportClient interface {
 	SendWithTimeout(
-		frame *protocol.Frame,
+		frame *connectprotocol.Frame,
 		destinationId connect.Id,
 		ackCallback connect.AckFunction,
 		timeout time.Duration,
@@ -195,7 +196,7 @@ type messageTransportCounts struct {
 // abandoned reassembly is indistinguishable from a server that never answered,
 // and the caller waits out the whole timeout to be told the wrong thing.
 type messageTransportAnswer struct {
-	response *protocol.MessageServerResponse
+	response *messageprotocol.MessageServerResponse
 	err      error
 }
 
@@ -210,7 +211,7 @@ type messageTransport struct {
 	closed      sync.Once
 
 	pushMutex        sync.Mutex
-	pushCallbacks    map[uint64]func(*protocol.MessageServerPush)
+	pushCallbacks    map[uint64]func(*messageprotocol.MessageServerPush)
 	nextPushCallback uint64
 
 	nextRequestId atomic.Uint64
@@ -225,7 +226,7 @@ type messageTransport struct {
 	// GroupSession that copied the nonce at construction.
 	nonce        []byte
 	nonceEpoch   uint64
-	capabilities *protocol.Capabilities
+	capabilities *messageprotocol.Capabilities
 }
 
 func newMessageTransport(config *messageTransportConfig) (*messageTransport, error) {
@@ -242,7 +243,7 @@ func newMessageTransport(config *messageTransportConfig) (*messageTransport, err
 		timeout:         config.Timeout,
 		waiting:         map[uint64]chan messageTransportAnswer{},
 		partial:         map[uint64]*messageFragmentPartial{},
-		pushCallbacks:   map[uint64]func(*protocol.MessageServerPush){},
+		pushCallbacks:   map[uint64]func(*messageprotocol.MessageServerPush){},
 	}
 	if self.timeout <= 0 {
 		self.timeout = messageTransportDefaultTimeout
@@ -280,25 +281,25 @@ func (self *messageTransport) Counts() messageTransportCounts {
 // Nothing is handed to a goroutine or a channel from here. `deliver` sends on a
 // waiter's channel, and the value it sends is the unmarshaled response, which is
 // borrowed from nothing.
-func (self *messageTransport) receive(source connect.TransferPath, frames []*protocol.Frame, from connect.Peer) {
+func (self *messageTransport) receive(source connect.TransferPath, frames []*connectprotocol.Frame, from connect.Peer) {
 	for _, frame := range frames {
 		switch frame.GetMessageType() {
-		case protocol.MessageType_MessageMessageServerResponse:
+		case connectprotocol.MessageType_MessageMessageServerResponse:
 			self.countResponseFrame()
-			response := &protocol.MessageServerResponse{}
+			response := &messageprotocol.MessageServerResponse{}
 			if proto.Unmarshal(frame.GetMessageBytes(), response) != nil {
 				// a response that did not decode carries no `request_id` to
 				// correlate, so there is no waiter to tell and nothing to answer
 				continue
 			}
 			self.deliver(response)
-		case protocol.MessageType_MessageMessageServerPush:
+		case connectprotocol.MessageType_MessageMessageServerPush:
 			// §4.3.5's push: the one code point that answers no request. It is not correlated;
 			// it is handed to the OnPush callbacks (message_transport_push.go)
 			self.deliverPush(frame)
-		case protocol.MessageType_MessageMessageServerFragment:
+		case connectprotocol.MessageType_MessageMessageServerFragment:
 			self.countFragmentFrame()
-			fragment := &protocol.MessageServerFragment{}
+			fragment := &messageprotocol.MessageServerFragment{}
 			if proto.Unmarshal(frame.GetMessageBytes(), fragment) != nil {
 				// a fragment that did not decode carries no `request_id`, so
 				// there is no reassembly to abandon and no waiter to tell
@@ -312,7 +313,7 @@ func (self *messageTransport) receive(source connect.TransferPath, frames []*pro
 			if !complete {
 				continue
 			}
-			response := &protocol.MessageServerResponse{}
+			response := &messageprotocol.MessageServerResponse{}
 			if err := proto.Unmarshal(assembled, response); err != nil {
 				// REVIEW FINDING H. Unlike the response-frame arm above, the
 				// `request_id` IS in hand here — every fragment carried it, and
@@ -356,7 +357,7 @@ func (self *messageTransport) countResponseFrame() {
 //
 // A response nobody is waiting for is counted and dropped. It is never given to
 // another waiter: the map is keyed on `request_id` and there is no fallback arm.
-func (self *messageTransport) deliver(response *protocol.MessageServerResponse) {
+func (self *messageTransport) deliver(response *messageprotocol.MessageServerResponse) {
 	self.mutex.Lock()
 	waiter, found := self.waiting[response.GetRequestId()]
 	if found {
@@ -379,8 +380,8 @@ func (self *messageTransport) deliver(response *protocol.MessageServerResponse) 
 // before its waiter does is a response this binding would file as uncorrelated —
 // a correlation failure invented on this side of the wire, and exactly the
 // number Property 2 is written to make visible.
-func (self *messageTransport) Call(ctx context.Context, body proto.Message) (*protocol.MessageServerResponse, error) {
-	request := &protocol.MessageServerRequest{
+func (self *messageTransport) Call(ctx context.Context, body proto.Message) (*messageprotocol.MessageServerResponse, error) {
+	request := &messageprotocol.MessageServerRequest{
 		RequestId:       self.nextRequestId.Add(1),
 		ProtocolVersion: self.protocolVersion,
 	}
@@ -461,7 +462,7 @@ func (self *messageTransport) countTimeout() {
 // The cut is [messageTransport.fragments] and the part size is its constant.
 // Nothing here chooses a budget, which is the point: a second place that could
 // choose one is a second place for the bound to live.
-func (self *messageTransport) send(request *protocol.MessageServerRequest) error {
+func (self *messageTransport) send(request *messageprotocol.MessageServerRequest) error {
 	frames, err := self.fragments(request)
 	if err != nil {
 		return err
@@ -492,7 +493,7 @@ func (self *messageTransport) send(request *protocol.MessageServerRequest) error
 // `grep -oE 'type MessageServerRequest_[A-Za-z]+ struct' protocol/message.pb.go | wc -l`
 // — and the number is here as a measurement rather than as a bound: nothing in
 // this function knows it, which is the point.
-func setMessageServerRequestBody(request *protocol.MessageServerRequest, body proto.Message) error {
+func setMessageServerRequestBody(request *messageprotocol.MessageServerRequest, body proto.Message) error {
 	if body == nil {
 		return errMessageTransportNoArm
 	}

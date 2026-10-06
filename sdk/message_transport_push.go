@@ -3,7 +3,8 @@
 package sdk
 
 import (
-	"github.com/urnetwork/connect/protocol"
+	connectprotocol "github.com/urnetwork/connect/protocol"
+	messageprotocol "github.com/urnetwork/message/protocol"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -28,8 +29,8 @@ type messageSessionReplacer interface {
 	OnSessionReplaced(callback func()) func()
 }
 
-func (self *messageTransport) deliverPush(frame *protocol.Frame) {
-	push := &protocol.MessageServerPush{}
+func (self *messageTransport) deliverPush(frame *connectprotocol.Frame) {
+	push := &messageprotocol.MessageServerPush{}
 	if proto.Unmarshal(frame.GetMessageBytes(), push) != nil {
 		return
 	}
@@ -37,7 +38,7 @@ func (self *messageTransport) deliverPush(frame *protocol.Frame) {
 	self.counts.PushFrames += 1
 	self.mutex.Unlock()
 	self.pushMutex.Lock()
-	callbacks := make([]func(*protocol.MessageServerPush), 0, len(self.pushCallbacks))
+	callbacks := make([]func(*messageprotocol.MessageServerPush), 0, len(self.pushCallbacks))
 	for _, callback := range self.pushCallbacks {
 		callbacks = append(callbacks, callback)
 	}
@@ -49,7 +50,7 @@ func (self *messageTransport) deliverPush(frame *protocol.Frame) {
 
 // OnPush registers a callback for every §4.3.5 push this binding receives. It runs on the client's
 // receive goroutine and must not block.
-func (self *messageTransport) OnPush(callback func(*protocol.MessageServerPush)) func() {
+func (self *messageTransport) OnPush(callback func(*messageprotocol.MessageServerPush)) func() {
 	self.pushMutex.Lock()
 	defer self.pushMutex.Unlock()
 	id := self.nextPushCallback

@@ -17,10 +17,11 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/protocol"
+	connectprotocol "github.com/urnetwork/connect/protocol"
 	"github.com/urnetwork/message-server/api"
 	"github.com/urnetwork/message-server/peer"
 	"github.com/urnetwork/message-server/store"
+	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
 )
@@ -184,7 +185,7 @@ func newPlatformWorld(t *testing.T, mode connect.EncryptionMode) *platformWorld 
 		Handler:     self.handed,
 		Connections: connections,
 		Checks:      checks,
-		Capabilities: &protocol.Capabilities{
+		Capabilities: &messageprotocol.Capabilities{
 			MaxRequestBytes: peer.DefaultMaxRequestBytes,
 		},
 		ProtocolVersion: worldProtocolVersion,
@@ -401,7 +402,7 @@ func (self *platformRelay) copies() []relayedFrame {
 type platformReading struct {
 	frames    int
 	sealed    int
-	requests  map[string]*protocol.MessageServerRequest
+	requests  map[string]*messageprotocol.MessageServerRequest
 	legs      map[string]string
 	responses int
 	// everything the platform holds in the clear: every frame as it arrived, and every request or
@@ -412,7 +413,7 @@ type platformReading struct {
 // readAsThePlatform decodes the copies the way the platform could: public schemas, no key.
 func readAsThePlatform(relayed []relayedFrame) *platformReading {
 	reading := &platformReading{
-		requests: map[string]*protocol.MessageServerRequest{},
+		requests: map[string]*messageprotocol.MessageServerRequest{},
 		legs:     map[string]string{},
 	}
 	type partsKey struct {
@@ -423,12 +424,12 @@ func readAsThePlatform(relayed []relayedFrame) *platformReading {
 	whole := func(leg string, body []byte) {
 		reading.clear = append(reading.clear, body)
 		if strings.HasPrefix(leg, "server ->") {
-			if proto.Unmarshal(body, &protocol.MessageServerResponse{}) == nil {
+			if proto.Unmarshal(body, &messageprotocol.MessageServerResponse{}) == nil {
 				reading.responses += 1
 			}
 			return
 		}
-		request := &protocol.MessageServerRequest{}
+		request := &messageprotocol.MessageServerRequest{}
 		if proto.Unmarshal(body, request) == nil && request.GetBody() != nil {
 			key := fmt.Sprintf("%s/%d", leg, request.GetRequestId())
 			reading.requests[key] = request
@@ -438,7 +439,7 @@ func readAsThePlatform(relayed []relayedFrame) *platformReading {
 	for _, relayed := range relayed {
 		reading.frames += 1
 		reading.clear = append(reading.clear, relayed.frame)
-		transferFrame := &protocol.TransferFrame{}
+		transferFrame := &connectprotocol.TransferFrame{}
 		if proto.Unmarshal(relayed.frame, transferFrame) != nil {
 			continue
 		}
@@ -447,8 +448,8 @@ func readAsThePlatform(relayed []relayedFrame) *platformReading {
 			continue
 		}
 		pack := transferFrame.GetPack()
-		if pack == nil && transferFrame.GetFrame().GetMessageType() == protocol.MessageType_TransferPack {
-			pack = &protocol.Pack{}
+		if pack == nil && transferFrame.GetFrame().GetMessageType() == connectprotocol.MessageType_TransferPack {
+			pack = &connectprotocol.Pack{}
 			if proto.Unmarshal(transferFrame.GetFrame().GetMessageBytes(), pack) != nil {
 				pack = nil
 			}
@@ -458,10 +459,10 @@ func readAsThePlatform(relayed []relayedFrame) *platformReading {
 		}
 		for _, frame := range pack.GetFrames() {
 			switch frame.GetMessageType() {
-			case protocol.MessageType_MessageMessageServerRequest, protocol.MessageType_MessageMessageServerResponse:
+			case connectprotocol.MessageType_MessageMessageServerRequest, connectprotocol.MessageType_MessageMessageServerResponse:
 				whole(relayed.leg, frame.GetMessageBytes())
-			case protocol.MessageType_MessageMessageServerFragment:
-				fragment := &protocol.MessageServerFragment{}
+			case connectprotocol.MessageType_MessageMessageServerFragment:
+				fragment := &messageprotocol.MessageServerFragment{}
 				if proto.Unmarshal(frame.GetMessageBytes(), fragment) != nil {
 					continue
 				}
@@ -510,9 +511,9 @@ func (self *platformReading) linkage() []string {
 		}
 		one := byLeg[leg]
 		switch body := request.GetBody().(type) {
-		case *protocol.MessageServerRequest_Hello:
+		case *messageprotocol.MessageServerRequest_Hello:
 			one.kinds["hello"] += 1
-		case *protocol.MessageServerRequest_CreateGroup:
+		case *messageprotocol.MessageServerRequest_CreateGroup:
 			one.kinds["create_group"] += 1
 			one.groups[fmt.Sprintf("%x", body.CreateGroup.GetGroupId()[:6])] = true
 			one.handles[fmt.Sprintf("%x", body.CreateGroup.GetInitialCommit().GetSenderHandle())] = true
@@ -522,7 +523,7 @@ func (self *platformReading) linkage() []string {
 			if body.CreateGroup.GetEpochKeys() != nil {
 				one.keys += 2
 			}
-		case *protocol.MessageServerRequest_Submit:
+		case *messageprotocol.MessageServerRequest_Submit:
 			one.kinds["submit"] += 1
 			one.groups[fmt.Sprintf("%x", body.Submit.GetGroupId()[:6])] = true
 			for _, record := range body.Submit.GetRecords() {
@@ -533,7 +534,7 @@ func (self *platformReading) linkage() []string {
 					one.keys += 2
 				}
 			}
-		case *protocol.MessageServerRequest_Fetch:
+		case *messageprotocol.MessageServerRequest_Fetch:
 			one.kinds["fetch"] += 1
 			one.groups[fmt.Sprintf("%x", body.Fetch.GetGroupId()[:6])] = true
 		default:
@@ -570,19 +571,19 @@ func (self *serverHanded) all() []proto.Message {
 }
 
 func (self *serverHanded) CreateGroup(ctx context.Context, conn *api.Connection,
-	request *protocol.CreateGroupRequest) (protocol.Reason, *protocol.CreateGroupResponse, error) {
+	request *messageprotocol.CreateGroupRequest) (messageprotocol.Reason, *messageprotocol.CreateGroupResponse, error) {
 	self.keep(request)
 	return self.Handler.CreateGroup(ctx, conn, request)
 }
 
 func (self *serverHanded) Submit(ctx context.Context, conn *api.Connection,
-	request *protocol.SubmitRequest) (protocol.Reason, *protocol.SubmitResponse, error) {
+	request *messageprotocol.SubmitRequest) (messageprotocol.Reason, *messageprotocol.SubmitResponse, error) {
 	self.keep(request)
 	return self.Handler.Submit(ctx, conn, request)
 }
 
 func (self *serverHanded) Fetch(ctx context.Context, conn *api.Connection,
-	request *protocol.FetchRequest) (protocol.Reason, *protocol.FetchResponse, error) {
+	request *messageprotocol.FetchRequest) (messageprotocol.Reason, *messageprotocol.FetchResponse, error) {
 	self.keep(request)
 	return self.Handler.Fetch(ctx, conn, request)
 }
@@ -609,20 +610,20 @@ func needlesOf(requests []proto.Message) []platformNeedle {
 		seen[string(value)] = true
 		needles = append(needles, platformNeedle{name: name, value: bytes.Clone(value)})
 	}
-	record := func(prefix string, record *protocol.Record) {
+	record := func(prefix string, record *messageprotocol.Record) {
 		add(prefix+".sender_handle", record.GetSenderHandle())
 		add(prefix+".body_hash", record.GetBodyHash())
 		add(prefix+".record_bytes", record.GetRecordBytes())
 	}
 	for _, request := range requests {
 		switch r := request.(type) {
-		case *protocol.CreateGroupRequest:
+		case *messageprotocol.CreateGroupRequest:
 			add("create_group.group_id", r.GetGroupId())
 			add("create_group.bootstrap_write_key", r.GetBootstrapWriteKey())
 			add("create_group.epoch_keys.write_key", r.GetEpochKeys().GetWriteKey())
 			add("create_group.epoch_keys.read_key", r.GetEpochKeys().GetReadKey())
 			record("create_group.initial_commit", r.GetInitialCommit())
-		case *protocol.SubmitRequest:
+		case *messageprotocol.SubmitRequest:
 			add("submit.group_id", r.GetGroupId())
 			for _, one := range r.GetRecords() {
 				record("submit.record", one)
@@ -631,7 +632,7 @@ func needlesOf(requests []proto.Message) []platformNeedle {
 				add("submit.epoch_keys.write_key", keys.GetWriteKey())
 				add("submit.epoch_keys.read_key", keys.GetReadKey())
 			}
-		case *protocol.FetchRequest:
+		case *messageprotocol.FetchRequest:
 			add("fetch.group_id", r.GetGroupId())
 			add("fetch.req_auth", r.GetReqAuth())
 		}
@@ -657,17 +658,17 @@ func absentNeedles(clear [][]byte, needles []platformNeedle) []platformNeedle {
 }
 
 // matchedRequests counts the server's requests that the platform decoded field for field.
-func matchedRequests(handed []proto.Message, decoded map[string]*protocol.MessageServerRequest) int {
+func matchedRequests(handed []proto.Message, decoded map[string]*messageprotocol.MessageServerRequest) int {
 	matched := 0
 	for _, request := range handed {
 		for _, candidate := range decoded {
 			var body proto.Message
 			switch one := candidate.GetBody().(type) {
-			case *protocol.MessageServerRequest_CreateGroup:
+			case *messageprotocol.MessageServerRequest_CreateGroup:
 				body = one.CreateGroup
-			case *protocol.MessageServerRequest_Submit:
+			case *messageprotocol.MessageServerRequest_Submit:
 				body = one.Submit
-			case *protocol.MessageServerRequest_Fetch:
+			case *messageprotocol.MessageServerRequest_Fetch:
 				body = one.Fetch
 			}
 			if body != nil && proto.Equal(body, request) {

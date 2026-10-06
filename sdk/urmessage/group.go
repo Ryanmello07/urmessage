@@ -9,10 +9,10 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/urnetwork/connect/protocol"
 	"github.com/urnetwork/message/message"
 	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/syntax"
 )
 

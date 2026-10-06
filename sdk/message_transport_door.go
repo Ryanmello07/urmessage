@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/protocol"
 	"google.golang.org/protobuf/proto"
 )
 

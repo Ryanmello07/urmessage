@@ -41,12 +41,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/protocol"
+	connectprotocol "github.com/urnetwork/connect/protocol"
+	messageprotocol "github.com/urnetwork/message/protocol"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -74,11 +76,11 @@ func messageFragmentSizes() []int {
 // neighbourhood has no payload that produces it. The test asserts against the
 // length it actually got rather than the one it asked for, which is why this
 // returns the request and the caller measures it.
-func messageFragmentRequestOfSize(t *testing.T, requestId uint64, size int) *protocol.MessageServerRequest {
+func messageFragmentRequestOfSize(t *testing.T, requestId uint64, size int) *messageprotocol.MessageServerRequest {
 	t.Helper()
-	build := func(hint int) *protocol.MessageServerRequest {
-		request := &protocol.MessageServerRequest{RequestId: requestId, ProtocolVersion: 1}
-		if err := setMessageServerRequestBody(request, &protocol.HelloRequest{
+	build := func(hint int) *messageprotocol.MessageServerRequest {
+		request := &messageprotocol.MessageServerRequest{RequestId: requestId, ProtocolVersion: 1}
+		if err := setMessageServerRequestBody(request, &messageprotocol.HelloRequest{
 			SupportedVersions: []uint32{1},
 			ClientEpochHint:   bytes.Repeat([]byte{0xA5}, hint),
 		}); err != nil {
@@ -123,9 +125,9 @@ func TestAFragmentedRequestReassemblesToTheSameBytes(t *testing.T) {
 						"a request that fits in a part is not fragmented at all",
 						actual, messageFragmentPartBytes, len(frames))
 				}
-				if frames[0].GetMessageType() != protocol.MessageType_MessageMessageServerRequest {
+				if frames[0].GetMessageType() != connectprotocol.MessageType_MessageMessageServerRequest {
 					t.Fatalf("an unfragmented request went out at code point %s, want %s",
-						frames[0].GetMessageType(), protocol.MessageType_MessageMessageServerRequest)
+						frames[0].GetMessageType(), connectprotocol.MessageType_MessageMessageServerRequest)
 				}
 				if !bytes.Equal(frames[0].GetMessageBytes(), want) {
 					t.Fatalf("the unfragmented frame carries %d bytes, want the request's %d",
@@ -144,11 +146,11 @@ func TestAFragmentedRequestReassemblesToTheSameBytes(t *testing.T) {
 
 			assembled := []byte{}
 			for index, frame := range frames {
-				if frame.GetMessageType() != protocol.MessageType_MessageMessageServerFragment {
+				if frame.GetMessageType() != connectprotocol.MessageType_MessageMessageServerFragment {
 					t.Fatalf("frame %d went out at code point %s, want %s",
-						index, frame.GetMessageType(), protocol.MessageType_MessageMessageServerFragment)
+						index, frame.GetMessageType(), connectprotocol.MessageType_MessageMessageServerFragment)
 				}
-				fragment := &protocol.MessageServerFragment{}
+				fragment := &messageprotocol.MessageServerFragment{}
 				if err := proto.Unmarshal(frame.GetMessageBytes(), fragment); err != nil {
 					t.Fatalf("frame %d does not decode as a MessageServerFragment: %v", index, err)
 				}
@@ -209,10 +211,10 @@ func messageFragmentExpect(transport *messageTransport, requestId uint64) {
 }
 
 // Drive the shipped reassembler over frames the shipped cut produced.
-func messageFragmentJoin(t *testing.T, transport *messageTransport, frames []*protocol.Frame) []byte {
+func messageFragmentJoin(t *testing.T, transport *messageTransport, frames []*connectprotocol.Frame) []byte {
 	t.Helper()
 	for index, frame := range frames {
-		fragment := &protocol.MessageServerFragment{}
+		fragment := &messageprotocol.MessageServerFragment{}
 		if err := proto.Unmarshal(frame.GetMessageBytes(), fragment); err != nil {
 			t.Fatalf("frame %d does not decode: %v", index, err)
 		}
@@ -244,7 +246,7 @@ func TestAFragmentedResponseReachesTheWaiterThatAskedForIt(t *testing.T) {
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 10*time.Second)
 
-	results := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	results := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
 	requestId := fake.requestAt(0).GetRequestId()
 
@@ -296,16 +298,16 @@ func TestAFragmentedResponseReachesTheWaiterThatAskedForIt(t *testing.T) {
 }
 
 // This file's own cut, deliberately independent of the shipped one.
-func messageFragmentCut(t *testing.T, requestId uint64, body []byte, part int) []*protocol.Frame {
+func messageFragmentCut(t *testing.T, requestId uint64, body []byte, part int) []*connectprotocol.Frame {
 	t.Helper()
-	frames := []*protocol.Frame{}
+	frames := []*connectprotocol.Frame{}
 	count := (len(body) + part - 1) / part
 	for index := 0; index < count; index += 1 {
 		end := (index + 1) * part
 		if len(body) < end {
 			end = len(body)
 		}
-		frames = append(frames, messageFragmentFrame(t, &protocol.MessageServerFragment{
+		frames = append(frames, messageFragmentFrame(t, &messageprotocol.MessageServerFragment{
 			RequestId: requestId,
 			Index:     uint32(index),
 			Count:     uint32(count),
@@ -315,14 +317,14 @@ func messageFragmentCut(t *testing.T, requestId uint64, body []byte, part int) [
 	return frames
 }
 
-func messageFragmentFrame(t *testing.T, fragment *protocol.MessageServerFragment) *protocol.Frame {
+func messageFragmentFrame(t *testing.T, fragment *messageprotocol.MessageServerFragment) *connectprotocol.Frame {
 	t.Helper()
 	encoded, err := proto.Marshal(fragment)
 	if err != nil {
 		t.Fatalf("could not encode a fragment: %v", err)
 	}
-	return &protocol.Frame{
-		MessageType:  protocol.MessageType_MessageMessageServerFragment,
+	return &connectprotocol.Frame{
+		MessageType:  connectprotocol.MessageType_MessageMessageServerFragment,
 		MessageBytes: encoded,
 	}
 }
@@ -341,9 +343,9 @@ func TestTwoReassembliesInFlightDoNotReachIntoEachOther(t *testing.T) {
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 10*time.Second)
 
-	first := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	first := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
-	second := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{2}})
+	second := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{2}})
 	awaitRequests(t, fake, 2)
 
 	firstId := fake.requestAt(0).GetRequestId()
@@ -438,14 +440,14 @@ func TestFragmentsForARequestThisBindingNeverMadeOpenNoBuffer(t *testing.T) {
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 10*time.Second)
 
-	mine := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	mine := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
 	requestId := fake.requestAt(0).GetRequestId()
 
 	// a hundred first-fragments under a hundred request_ids nobody asked for
 	strangers := 100
 	for stranger := 0; stranger < strangers; stranger += 1 {
-		fake.deliver(t, messageFragmentFrame(t, &protocol.MessageServerFragment{
+		fake.deliver(t, messageFragmentFrame(t, &messageprotocol.MessageServerFragment{
 			RequestId: requestId + uint64(1000+stranger),
 			Index:     0,
 			Count:     4,
@@ -509,7 +511,7 @@ type messageFragmentCase struct {
 
 	// The fragments as they arrive, built by hand so that the malformation is
 	// this test's and not a bug in a cutter.
-	arriving []*protocol.MessageServerFragment
+	arriving []*messageprotocol.MessageServerFragment
 
 	// The rule of [messageFragmentAborts] that must be the one to decide, or ""
 	// when this sequence is not an abort at all.
@@ -521,7 +523,7 @@ func messageFragmentCases() []messageFragmentCase {
 	return []messageFragmentCase{
 		{
 			name: "in order and complete",
-			arriving: []*protocol.MessageServerFragment{
+			arriving: []*messageprotocol.MessageServerFragment{
 				{RequestId: 1, Index: 0, Count: 2, Part: part(8)},
 				{RequestId: 1, Index: 1, Count: 2, Part: part(8)},
 			},
@@ -529,14 +531,14 @@ func messageFragmentCases() []messageFragmentCase {
 		},
 		{
 			name: "a first fragment that is not index 0",
-			arriving: []*protocol.MessageServerFragment{
+			arriving: []*messageprotocol.MessageServerFragment{
 				{RequestId: 1, Index: 1, Count: 3, Part: part(8)},
 			},
 			rule: "an index that is not the one this reassembly is waiting for",
 		},
 		{
 			name: "an index skipped mid-reassembly",
-			arriving: []*protocol.MessageServerFragment{
+			arriving: []*messageprotocol.MessageServerFragment{
 				{RequestId: 1, Index: 0, Count: 3, Part: part(8)},
 				{RequestId: 1, Index: 2, Count: 3, Part: part(8)},
 			},
@@ -544,7 +546,7 @@ func messageFragmentCases() []messageFragmentCase {
 		},
 		{
 			name: "an index delivered twice",
-			arriving: []*protocol.MessageServerFragment{
+			arriving: []*messageprotocol.MessageServerFragment{
 				{RequestId: 1, Index: 0, Count: 3, Part: part(8)},
 				{RequestId: 1, Index: 0, Count: 3, Part: part(8)},
 			},
@@ -552,7 +554,7 @@ func messageFragmentCases() []messageFragmentCase {
 		},
 		{
 			name: "a count that changed mid-reassembly",
-			arriving: []*protocol.MessageServerFragment{
+			arriving: []*messageprotocol.MessageServerFragment{
 				{RequestId: 1, Index: 0, Count: 3, Part: part(8)},
 				{RequestId: 1, Index: 1, Count: 2, Part: part(8)},
 			},
@@ -560,21 +562,21 @@ func messageFragmentCases() []messageFragmentCase {
 		},
 		{
 			name: "an index that is not below the count",
-			arriving: []*protocol.MessageServerFragment{
+			arriving: []*messageprotocol.MessageServerFragment{
 				{RequestId: 1, Index: 3, Count: 3, Part: part(8)},
 			},
 			rule: "an index that is not below the fragment count",
 		},
 		{
 			name: "a count of zero, which names no fragments at all",
-			arriving: []*protocol.MessageServerFragment{
+			arriving: []*messageprotocol.MessageServerFragment{
 				{RequestId: 1, Index: 0, Count: 0, Part: part(8)},
 			},
 			rule: "an index that is not below the fragment count",
 		},
 		{
 			name: "a part one byte past §4.6's ceiling",
-			arriving: []*protocol.MessageServerFragment{
+			arriving: []*messageprotocol.MessageServerFragment{
 				{RequestId: 1, Index: 0, Count: 2, Part: part(messageFragmentPartBytes + 1)},
 			},
 			rule: "a part larger than §4.6's own ceiling",
@@ -591,12 +593,12 @@ func TestAMalformedFragmentAbortsTheReassemblyAndTellsTheWaiter(t *testing.T) {
 			fake := &messageTransportFake{}
 			transport := newTestMessageTransport(t, fake, 30*time.Second)
 
-			results := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+			results := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 			awaitRequests(t, fake, 1)
 			requestId := fake.requestAt(0).GetRequestId()
 
 			for _, fragment := range each.arriving {
-				arriving := proto.Clone(fragment).(*protocol.MessageServerFragment)
+				arriving := proto.Clone(fragment).(*messageprotocol.MessageServerFragment)
 				arriving.RequestId = requestId
 				fake.deliver(t, messageFragmentFrame(t, arriving))
 			}
@@ -651,7 +653,7 @@ func TestAReassemblyMissingAFragmentProducesNoPartialMessage(t *testing.T) {
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 400*time.Millisecond)
 
-	results := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	results := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
 	requestId := fake.requestAt(0).GetRequestId()
 
@@ -711,14 +713,14 @@ func TestAReassemblyThatCompletesIntoUndecodableBytesTellsItsWaiter(t *testing.T
 	fake := &messageTransportFake{}
 	transport := newTestMessageTransport(t, fake, 30*time.Second)
 
-	results := callInBackground(transport, context.Background(), &protocol.HelloRequest{SupportedVersions: []uint32{1}})
+	results := callInBackground(transport, context.Background(), &messageprotocol.HelloRequest{SupportedVersions: []uint32{1}})
 	awaitRequests(t, fake, 1)
 	requestId := fake.requestAt(0).GetRequestId()
 
 	// 0xFF is wire type 7, which no protobuf field can have, so these bytes
 	// reassemble perfectly and decode as nothing
 	undecodable := bytes.Repeat([]byte{0xFF}, 3*messageFragmentPartBytes)
-	if proto.Unmarshal(undecodable, &protocol.MessageServerResponse{}) == nil {
+	if proto.Unmarshal(undecodable, &messageprotocol.MessageServerResponse{}) == nil {
 		t.Fatal("the bytes this test calls undecodable decode as a MessageServerResponse, so it is " +
 			"measuring nothing")
 	}
@@ -1591,8 +1593,10 @@ func TestThereIsOnePlaceThatCutsAndOneBudgetThatReachesIt(t *testing.T) {
 		t.Fatal("package sdk declares no messageFragmentPartBytes")
 	}
 
-	fragmentType := "github.com/urnetwork/connect/protocol.MessageServerFragment"
-	protocolPrefix := "github.com/urnetwork/connect/protocol."
+	// the messaging schema moved to message/protocol and Frame stayed in connect/protocol, so the
+	// class -- every protocol message a function here builds -- is read under both prefixes
+	fragmentType := "github.com/urnetwork/message/protocol.MessageServerFragment"
+	protocolPrefixes := []string{"github.com/urnetwork/message/protocol.", "github.com/urnetwork/connect/protocol."}
 	cuts := []string{}
 	decodeTargets := []string{}
 	otherBuilders := []string{}
@@ -1618,7 +1622,7 @@ func TestThereIsOnePlaceThatCutsAndOneBudgetThatReachesIt(t *testing.T) {
 					return true
 				}
 				spelled := strings.TrimPrefix(tv.Type.String(), "*")
-				if !strings.HasPrefix(spelled, protocolPrefix) {
+				if !slices.ContainsFunc(protocolPrefixes, func(prefix string) bool { return strings.HasPrefix(spelled, prefix) }) {
 					return true
 				}
 				builds = true
@@ -1653,10 +1657,10 @@ func TestThereIsOnePlaceThatCutsAndOneBudgetThatReachesIt(t *testing.T) {
 		len(cuts), fragmentType, cuts)
 	t.Logf("COMPLEMENT — functions that allocate an EMPTY fragment as a decode target: %d %v",
 		len(decodeTargets), decodeTargets)
-	t.Logf("COMPLEMENT — functions that build some other connect/protocol message and no fragment: %d %v",
+	t.Logf("COMPLEMENT — functions that build some other protocol message (either schema package) and no fragment: %d %v",
 		len(otherBuilders), otherBuilders)
 	if len(otherBuilders)+len(decodeTargets) == 0 {
-		t.Fatalf("both complements are EMPTY: no function of package sdk builds a connect/protocol "+
+		t.Fatalf("both complements are EMPTY: no function of package sdk builds a protocol "+
 			"message without cutting a fragment, so this gate is not distinguishing anything. "+
 			"%d function(s) were walked", len(byName))
 	}

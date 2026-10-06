@@ -43,7 +43,8 @@ import (
 	"fmt"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/protocol"
+	connectprotocol "github.com/urnetwork/connect/protocol"
+	messageprotocol "github.com/urnetwork/message/protocol"
 )
 
 // §4.6's `part` size, and the ONE declaration of it in `sdk`.
@@ -93,7 +94,7 @@ type messageFragmentPartial struct {
 // what it is deciding about, and so that a test can build the state a rule fires
 // on without building the history that would produce it.
 type messageFragmentState struct {
-	fragment *protocol.MessageServerFragment
+	fragment *messageprotocol.MessageServerFragment
 
 	// nil when nothing is open for this request_id yet: this fragment would
 	// open it.
@@ -195,23 +196,23 @@ var messageFragmentAborts = []messageFragmentAbort{
 // of an exact multiple is the multiple. An off-by-one here is invisible to a
 // round trip — an empty trailing part reassembles to the same bytes — which is
 // why the count is asserted and not only the bytes.
-func (self *messageTransport) fragments(request *protocol.MessageServerRequest) ([]*protocol.Frame, error) {
+func (self *messageTransport) fragments(request *messageprotocol.MessageServerRequest) ([]*connectprotocol.Frame, error) {
 	body, err := connect.ProtoMarshal(request)
 	if err != nil {
 		return nil, err
 	}
 	if len(body) <= messageFragmentPartBytes {
-		return []*protocol.Frame{{
-			MessageType:  protocol.MessageType_MessageMessageServerRequest,
+		return []*connectprotocol.Frame{{
+			MessageType:  connectprotocol.MessageType_MessageMessageServerRequest,
 			MessageBytes: body,
 		}}, nil
 	}
 
 	count := (len(body) + messageFragmentPartBytes - 1) / messageFragmentPartBytes
-	frames := make([]*protocol.Frame, 0, count)
+	frames := make([]*connectprotocol.Frame, 0, count)
 	for index := 0; index < count; index += 1 {
 		end := min((index+1)*messageFragmentPartBytes, len(body))
-		encoded, err := connect.ProtoMarshal(&protocol.MessageServerFragment{
+		encoded, err := connect.ProtoMarshal(&messageprotocol.MessageServerFragment{
 			RequestId: request.GetRequestId(),
 			Index:     uint32(index),
 			Count:     uint32(count),
@@ -225,8 +226,8 @@ func (self *messageTransport) fragments(request *protocol.MessageServerRequest) 
 			connect.MessagePoolReturn(body)
 			return nil, err
 		}
-		frames = append(frames, &protocol.Frame{
-			MessageType:  protocol.MessageType_MessageMessageServerFragment,
+		frames = append(frames, &connectprotocol.Frame{
+			MessageType:  connectprotocol.MessageType_MessageMessageServerFragment,
 			MessageBytes: encoded,
 		})
 	}
@@ -238,7 +239,7 @@ func (self *messageTransport) fragments(request *protocol.MessageServerRequest) 
 
 // Give a frame's bytes back to the pool. MessagePoolReturn drops anything that
 // did not come from one, so this is safe on a frame built any other way.
-func messageFragmentReturn(frames []*protocol.Frame) {
+func messageFragmentReturn(frames []*connectprotocol.Frame) {
 	for _, frame := range frames {
 		connect.MessagePoolReturn(frame.MessageBytes)
 	}
@@ -274,7 +275,7 @@ func messageFragmentReturn(frames []*protocol.Frame) {
 // REQUESTS, which is what §5.1 check 1 is about — so a server that declared a
 // count of four billion is bounded only by the bytes it actually sends, which is
 // the bytes this binding is already receiving. Filed rather than absorbed.
-func (self *messageTransport) acceptFragment(fragment *protocol.MessageServerFragment) ([]byte, bool, error) {
+func (self *messageTransport) acceptFragment(fragment *messageprotocol.MessageServerFragment) ([]byte, bool, error) {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
 
