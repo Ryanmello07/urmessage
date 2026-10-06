@@ -248,7 +248,7 @@ else
   for target in $fuzz_targets; do
     run "syntax: $target for $fuzztime" fuzz_leg "$target" || fuzz_ok=0
   done
-  if [ "$fuzz_ok" = 1 ]; then receipt go.mod fuzz "$(printf '%s' "$fuzz_targets" | tr '\n' ' ')for $fuzztime each"; fi
+  if [ "$fuzz_ok" = 1 ]; then receipt go.mod fuzz "$(printf '%s ' $fuzz_targets)for $fuzztime each"; fi
   if [ "$fuzztime" != 60s ]; then narrowings+=("fuzz targets ran $fuzztime each, not 60s"); fi
 fi
 
