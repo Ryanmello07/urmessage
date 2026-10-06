@@ -74,6 +74,10 @@ var layeringRules = map[string]layeringRule{
 		external: []string{"golang.org/x/crypto"},
 		reason:   "the client half: it holds the group, so it may import the record layer and mls, never the reverse",
 	},
+	"protocol": {
+		external: []string{"google.golang.org/protobuf"},
+		reason:   "the messaging schema: server-safe, generated code plus its checks; it imports no package of this repository and no transport",
+	},
 	"internal/layering": {
 		reason: "this gate: standard library only",
 	},
@@ -85,7 +89,7 @@ var layeringRules = map[string]layeringRule{
 // The server-safe packages, named one by one (MESSAGEREVIEW.md, "Preserve the server and
 // client boundary"), and what their closure must never reach.
 var (
-	serverSafePackages     = []string{"message", "syntax"}
+	serverSafePackages     = []string{"message", "protocol", "syntax"}
 	serverSafeForbidden    = []string{"mls", "messagegroup", "sdk"}
 	coreRepositoryPrefixes = []string{"github.com/urnetwork/connect", "github.com/urnetwork/sdk"}
 )
