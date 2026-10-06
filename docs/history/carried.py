@@ -1,40 +1,44 @@
 #!/usr/bin/env python3
-"""carried.py: every path a removal pull request deletes from connect or the core SDK is carried here.
+"""carried.py: what the removal pull requests take out of connect and the core SDK is carried here.
 
 The imports took their paths from a pinned source commit, and verify_split.py proves each import
 against it. The removal pull requests delete those paths from a LATER commit, their base, and the
-maintainers may change a path in between: urnetwork/connect 54b5b106 and e8611390 did, after the
-import's source e449f7d8, and nothing compared the two until review. This is that comparison,
-re-runnable against whatever base each removal pull request finally has.
+maintainers may change a path in between: urnetwork/connect 54b5b106, e8611390 and f5e1aa1f did,
+after the import's source e449f7d8, and nothing compared the two until review. This is that
+comparison, re-runnable against whatever base each removal pull request finally has, and against
+the newest upstream main besides.
 
-For each removal side, with S its import source, B the removal's base, H its head, MB the merge base
-of S and B, T this repository's tip, and m() the mechanical import-path rewrite of that side's stage:
+For each side, with S its import source, B and H the removal's base and head, U the upstream commit
+the content is measured against (B, or a later upstream main given as @U), MB the merge base of S
+and U, T this repository's tip, and m() the mechanical import-path rewrite of the path's import:
 
   1. every path D the removal deletes (B..H, status D) projects onto a path M of the tip, and T holds
-     M, unless ported.tsv declares D not-carried, with the reason;
-  2. the tip CONTAINS every change upstream made to D since the merge base: a three-way merge of
-     T:M (ours), m(MB:D) (base) and m(B:D) (theirs) is clean and is T:M byte for byte. A change the
-     tip lacks is a conflict, or a result that differs from the tip;
-  3. upstream's changes are declared: when m(B:D) differs from m(MB:D), ported.tsv has a port row
-     for D naming exactly the upstream commits that changed it (MB..B), and the tip commit that
+     M (or the tip's manifest declares M deleted), unless ported.tsv declares D not-carried;
+  2. every imported path at U (deleted by the removal, or kept in the core repository like
+     CODESTYLE.md) has every change upstream made to it since MB IN THE TIP: a three-way merge of
+     T:M (ours), m(MB:D) (base) and m(U:D) (theirs) is clean and is T:M byte for byte;
+  3. upstream's changes are declared: when m(U:D) differs from m(MB:D), ported.tsv has a port row
+     for D naming exactly the upstream commits that changed it (MB..U) and the tip commit that
      ported them, an ancestor of the tip;
   4. the fork's changes are declared: when m(S:D) differs from m(MB:D), the import carried changes
      upstream never had, and ported.tsv has a fork-only row naming exactly those commits (MB..S);
-  5. a path the import holds that upstream deleted after the merge base (in MB or S, not in B) is
-     gone from the tip, under its name and under any name the tip's manifest renamed it to, with a
-     port-delete row naming exactly the deleting commits;
-  6. every ported.tsv row is needed.
+  5. a path the import holds that upstream deleted after MB (in MB or S, not in U) is gone from the
+     tip, under its name and any name the tip's manifest renamed it to, with a port-delete row
+     naming exactly the deleting commits;
+  6. every ported.tsv row is needed, unless its commits are not in U at all: such a row is AHEAD of
+     the upstream measured, it is printed, and it is checked the day U contains it.
 
 The complement is printed: what the removal's head still holds under the imported paths, and what it
 changes rather than deletes. Read-only on every repository, like verify_split.py, whose projections,
 mechanical rewrite and git helpers this imports.
 
   python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv \\
-      --removal connect=<repo holding S, B and H>:<B>..<H> --removal sdk=<repo>:<B>..<H> [--controls]
+      --removal connect=<repo>:<B>..<H>[@<U>] --removal sdk=<repo>:<B>..<H>[@<U>] [--controls]
 
 --controls runs the same checks against the tip this branch had before the ports (f3f8f2bd, the tip
 the review measured), where they must fail for exactly the paths the port and port-delete rows
-name; then with a row dropped, which must be reported, and with a row planted, which must be unused.
+in U name; then with a row dropped, which must be reported, and with a row planted, which must be
+needed by nothing.
 """
 import argparse
 import os
@@ -48,10 +52,9 @@ sys.dont_write_bytecode = True  # no __pycache__ beside the files this repositor
 import verify_split as vs  # noqa: E402
 
 SIDES = {
-    # the connect imports a removal reads (CODESTYLE.md stays in connect; the removal does not delete it)
     "connect": dict(
         source="e449f7d8126c0b5748f5083392a8855bac877b32",
-        projectors=[(vs.project_connect_core, "2a"), (vs.project_connect_protocol, "2b")],
+        projectors=[(vs.project_connect_codestyle, None), (vs.project_connect_core, "2a"), (vs.project_connect_protocol, "2b")],
     ),
     "sdk": dict(
         source="6141b98d05bcac98d5ccae11c54c7748919017e6",
@@ -173,25 +176,29 @@ def contains(ours, base, theirs):
 
 def check_side(side, removal, dst, tip, rows, used, verbose=True):
     """Every failure as (source path, message)."""
-    repo, base, head = removal
+    repo, base, head, upstream = removal
     fails = []
     source = vs.rev(repo, SIDES[side]["source"])
     base, head = vs.rev(repo, base), vs.rev(repo, head)
-    mb = vs.git(repo, "merge-base", source, base).decode().strip()
+    upstream = vs.rev(repo, upstream or base)
+    mb = vs.git(repo, "merge-base", source, upstream).decode().strip()
     tip_tree = tree_of(dst, tip)
     renames, declared_deletes = manifest_rows(dst, tip)
     out = vs.git(repo, "diff", "--no-renames", "--name-status", "-z", base, head).split(b"\0")
     changes = [(out[i].decode(), out[i + 1].decode("utf-8", "surrogateescape")) for i in range(0, len(out) - 1, 2)]
     deleted = sorted(p for s, p in changes if s == "D")
     others = sorted("%s %s" % (s, p) for s, p in changes if s != "D")
-    for at in (base, source, mb):
-        prefetch(repo, at, deleted)
-    prefetch(dst, tip, [project(side, d)[0] for d in deleted if project(side, d)[0]])
+    upstream_tree = tree_of(repo, upstream)
+    kept = sorted(p for p in upstream_tree if project(side, p)[0] is not None and p not in set(deleted))
     tally = Counter()
+    for at in (upstream, source, mb):
+        prefetch(repo, at, deleted + kept)
+    prefetch(dst, tip, [project(side, p)[0] for p in deleted + kept if project(side, p)[0]])
     if verbose:
-        print("side %s: import source %s, removal base %s, head %s, merge base of source and base %s"
-              % (side, source[:12], base[:12], head[:12], mb[:12]))
-        print("  the removal deletes %d paths, and changes %d it keeps" % (len(deleted), len(others)))
+        print("side %s: import source %s, removal %s..%s, upstream measured %s, merge base of source and upstream %s"
+              % (side, source[:12], base[:12], head[:12], upstream[:12], mb[:12]))
+        print("  the removal deletes %d imported paths and changes %d it keeps; upstream holds %d imported paths the removal keeps"
+              % (len(deleted), len(others), len(kept)))
 
     def row(kind, path):
         key = (side, kind, path)
@@ -201,12 +208,16 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True):
         return None
 
     def mech(stage, path, data):
-        return None if data is None else vs.mechanical_imports(stage, path, data)
+        return None if data is None or stage is None else vs.mechanical_imports(stage, path, data)
 
     def mech_all(stage, path, data):
-        return None if data is None else vs.mechanical_all(stage, path, data)
+        return None if data is None or stage is None else vs.mechanical_all(stage, path, data)
 
-    for d in deleted:
+    def plain(stage, path, data):
+        return data if stage is None else mech(stage, path, data)
+
+    for d in deleted + kept:
+        where = "deleted by the removal" if d in deleted else "kept in %s" % side
         m, stage = project(side, d)
         if m is None:
             if row("not-carried", d):
@@ -214,40 +225,43 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True):
             else:
                 fails.append((d, "the removal deletes %s, which no import of this repository projects: carry it, or declare it not-carried" % d))
             continue
-        b, s, a = blob_at(repo, base, d), blob_at(repo, source, d), blob_at(repo, mb, d)
-        mb_, ms_, ma_ = mech(stage, d, b), mech(stage, d, s), mech(stage, d, a)
+        b = blob_at(repo, upstream, d)
+        if b is None:
+            continue  # deleted upstream after the removal's base: step 5 reads it
+        s, a = blob_at(repo, source, d), blob_at(repo, mb, d)
+        mb_, ms_, ma_ = plain(stage, d, b), plain(stage, d, s), plain(stage, d, a)
         if m not in tip_tree:
             if m in declared_deletes:
                 tally["deleted here, declared in the manifest"] += 1
             else:
-                fails.append((d, "the removal deletes %s and the tip holds no %s, and the tip's manifest declares no deletion of it" % (d, m)))
+                fails.append((d, "%s (%s): the tip holds no %s, and the tip's manifest declares no deletion of it" % (d, where, m)))
                 continue
         else:
             t = blob_at(dst, tip, m)
             if t in (b, mb_, mech_all(stage, d, b)):
-                tally["identical to the removal's base" if t == b else "the mechanical rewrite of the removal's base"] += 1
+                tally["identical to upstream" if t == b else "the mechanical rewrite of upstream"] += 1
             else:
-                # the tip holds upstream's every change since the merge base: shown with the import-spec
-                # rewrite of both sides, or with the rewrite of every literal too, when the tip's own
-                # literal rewrite sits beside an upstream change and only the second can merge it
+                # the tip holds every upstream change since the merge base: shown with the import-spec
+                # rewrite of both of upstream's sides, or with every literal rewritten too, when the tip's
+                # own literal rewrite sits beside an upstream change and only the second can merge it
                 ok, how = contains(t, ma_, mb_)
-                if not ok:
+                if not ok and stage is not None:
                     ok, how_all = contains(t, mech_all(stage, d, a), mech_all(stage, d, b))
                     if ok:
                         how = how_all + " (with the literal rewrite applied to upstream's two sides)"
                 if not ok:
-                    fails.append((d, "%s -> %s: %s since %s" % (d, m, how, mb[:12])))
+                    fails.append((d, "%s -> %s (%s): %s since %s" % (d, m, where, how, mb[:12])))
                     continue
                 tally["adapted here, holding every upstream change"] += 1
         if mb_ != ma_:
-            upstream = commits_changing(repo, mb, base, d)
+            changed = commits_changing(repo, mb, upstream, d)
             r = row("port", d)
             if not r:
                 fails.append((d, "upstream changed %s after %s (%s) and ported.tsv has no port row for it"
-                                 % (d, mb[:12], ", ".join(c[:10] for c in upstream))))
-            elif r["commits"] != upstream:
+                                 % (d, mb[:12], ", ".join(c[:10] for c in changed))))
+            elif r["commits"] != changed:
                 fails.append((d, "the port row for %s names %s; upstream's commits are %s"
-                                 % (d, [c[:10] for c in r["commits"]], [c[:10] for c in upstream])))
+                                 % (d, [c[:10] for c in r["commits"]], [c[:10] for c in changed])))
             elif not r["port"] or not vs.is_ancestor(dst, r["port"], tip):
                 fails.append((d, "the port row for %s names a tip commit that is not an ancestor of the tip" % d))
             else:
@@ -264,28 +278,27 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True):
             else:
                 tally["of them fork-only, declared"] += 1
     # the import's paths that upstream deleted after the merge base
-    base_tree = tree_of(repo, base)
     gone = set()
     for at in (mb, source):
         for p in tree_of(repo, at):
-            if project(side, p)[0] is not None and p not in base_tree:
+            if project(side, p)[0] is not None and p not in upstream_tree:
                 gone.add(p)
     for p in sorted(gone):
         m, _ = project(side, p)
-        upstream = commits_changing(repo, mb, base, p)
-        if not upstream:
+        changed = commits_changing(repo, mb, upstream, p)
+        if not changed:
             if verbose:
                 print("  %s is in the import's source and was never in upstream since %s; reported, not a port" % (p, mb[:12]))
             continue
         r = row("port-delete", p)
         if not r:
             fails.append((p, "upstream deleted %s after %s (%s) and ported.tsv has no port-delete row"
-                             % (p, mb[:12], ", ".join(c[:10] for c in upstream))))
+                             % (p, mb[:12], ", ".join(c[:10] for c in changed))))
             continue
         held = [x for x in (m, renames.get(p)) if x and x in tip_tree]
-        if r["commits"] != upstream:
+        if r["commits"] != changed:
             fails.append((p, "the port-delete row for %s names %s; upstream's commits are %s"
-                             % (p, [c[:10] for c in r["commits"]], [c[:10] for c in upstream])))
+                             % (p, [c[:10] for c in r["commits"]], [c[:10] for c in changed])))
         elif held:
             fails.append((p, "upstream deleted %s and the tip still holds %s" % (p, ", ".join(held))))
         elif not r["port"] or not vs.is_ancestor(dst, r["port"], tip):
@@ -294,17 +307,34 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True):
             tally["deleted upstream, and here"] += 1
     if verbose:
         print("  carried: %s" % dict(sorted(tally.items())))
-        kept = sorted(p for p in tree_of(repo, head) if project(side, p)[0] is not None)
-        print("  COMPLEMENT: under the imported paths the removal's head still holds %d: %s" % (len(kept), kept))
+        print("  COMPLEMENT: under the imported paths the removal's head still holds %d: %s"
+              % (len([p for p in tree_of(repo, head) if project(side, p)[0] is not None]),
+                 sorted(p for p in tree_of(repo, head) if project(side, p)[0] is not None)))
         print("  COMPLEMENT: the removal changes, and does not delete, %d: %s" % (len(others), others))
     return fails
+
+
+def unneeded(rows, used, removals):
+    """Rows nothing needed: a failure when their commits are in the upstream measured, and printed as
+    ahead of it otherwise (fork-only and not-carried rows are always failures)."""
+    fails, ahead = [], []
+    for key in sorted(set(rows) - used):
+        side, kind, path = key
+        repo, base, _, upstream = removals[side]
+        measured = vs.rev(repo, upstream or base)
+        commits = rows[key]["commits"]
+        if kind in ("port", "port-delete") and commits and not all(vs.is_ancestor(repo, c, measured) for c in commits):
+            ahead.append("%s %s %s (%s not in %s)" % (side, kind, path, ", ".join(c[:10] for c in commits), measured[:12]))
+            continue
+        fails.append("ported.tsv: the %s row for %s %s is needed by nothing: delete it" % (kind, side, path))
+    return fails, ahead
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dst", required=True)
     ap.add_argument("--dst-rev", required=True)
-    ap.add_argument("--removal", action="append", default=[], help="side=<repo>:<base>..<head>")
+    ap.add_argument("--removal", action="append", default=[], help="side=<repo>:<base>..<head>[@<upstream>]")
     ap.add_argument("--ported", required=True)
     ap.add_argument("--controls", action="store_true")
     a = ap.parse_args()
@@ -313,11 +343,12 @@ def main():
     removals = {}
     for spec in a.removal:
         side, _, rest = spec.partition("=")
+        rest, _, upstream = rest.partition("@")
         repo, _, span = rest.rpartition(":")
         base, _, head = span.partition("..")
         if side not in SIDES or not repo or not base or not head:
-            sys.exit("FATAL: --removal %r must be side=<repo>:<base>..<head>" % spec)
-        removals[side] = (repo, base, head)
+            sys.exit("FATAL: --removal %r must be side=<repo>:<base>..<head>[@<upstream>]" % spec)
+        removals[side] = (repo, base, head, upstream or None)
     if set(removals) != set(SIDES):
         sys.exit("FATAL: --removal must name every side: %s" % sorted(SIDES))
     print("tip %s" % tip)
@@ -325,22 +356,26 @@ def main():
     failures = []
     for side in sorted(removals):
         failures += ["%s: %s" % (side, msg) for _, msg in check_side(side, removals[side], a.dst, tip, rows, used)]
-    for key in sorted(set(rows) - used):
-        failures.append("ported.tsv: the %s row for %s %s is needed by nothing: delete it" % (key[1], key[0], key[2]))
+    stale, ahead = unneeded(rows, used, removals)
+    failures += stale
+    for line in ahead:
+        print("  AHEAD of the upstream measured, not checked by this run: %s" % line)
     if a.controls:
         print()
         print("controls:")
         pre = vs.rev(a.dst, PRE_PORT_TIP)
         for side in sorted(removals):
             got = {p for p, _ in check_side(side, removals[side], a.dst, pre, rows, set(), verbose=False)}
-            want = {k[2] for k in rows if k[0] == side and k[1] in ("port", "port-delete")}
+            measured_used = set()
+            check_side(side, removals[side], a.dst, tip, rows, measured_used, verbose=False)
+            want = {k[2] for k in measured_used if k[1] in ("port", "port-delete")}
             ok = got == want
-            print("  control: %s against %s, the tip before the ports -> fails for %d path(s), the rows' %d%s"
+            print("  control: %s against %s, the tip before the ports -> fails for %d path(s), the measured port rows' %d%s"
                   % (side, pre[:12], len(got), len(want), "" if ok else "  <-- BROKEN: %s" % sorted(got ^ want)))
             if not ok:
                 failures.append("control: %s against the pre-port tip failed for %s, want exactly the ported paths %s" % (side, sorted(got), sorted(want)))
         for kind in ("port", "port-delete", "fork-only"):
-            keys = sorted(k for k in rows if k[1] == kind)
+            keys = sorted(k for k in used if k[1] == kind)
             if not keys:
                 continue
             key = keys[0]
@@ -356,11 +391,12 @@ def main():
         plant_used = set()
         for side in sorted(removals):
             check_side(side, removals[side], a.dst, tip, planted, plant_used, verbose=False)
-        ok = plant not in plant_used
+        plant_stale, _ = unneeded({plant: planted[plant]}, plant_used & {plant}, removals)
+        ok = bool(plant_stale)
         print("  control: a port row planted for message/record.go, which upstream did not change -> %s"
               % ("needed by nothing, reported" if ok else "MISSED"))
         if not ok:
-            failures.append("control: the planted port row was used")
+            failures.append("control: the planted port row was not reported")
     print()
     if failures:
         print("FAIL (%d)" % len(failures))

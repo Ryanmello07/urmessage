@@ -145,6 +145,7 @@ here, each as one commit with its original author, author date and message, foll
 |---|---|---|
 | `54b5b106` Bitprecipice, 2026-10-05, "Fix transfer custody and persistent TCP collapse admission" | `message/record_test.go` (the reviewed SDK contexts of the record gate, `TestJoinSDKPacketAndPoolContexts`), and the five fixtures under `message/testdata/reviewed-sdk/` | `3a22cd99` |
 | `e8611390` Bitprecipice, 2026-10-06, "Remove the GitHub workflows" | `mls/hpke_fuzz_test.go`, `syntax/fuzz_test.go`, `syntax/layering_test.go` (its two workflow tests), and the codec's workflow, deleted | `4be82ed6` |
+| `f5e1aa1f` Bitprecipice, 2026-10-06, "Require deterministic root cause tests for every bug fix" | `CODESTYLE.md`, which connect keeps too: the two copies are kept in step | `d749b68d` |
 
 The merge of connect#216 (`94453d74`) changed no imported path beyond what `e8611390` then
 removed: the codec workflow's trigger and its needle.
@@ -213,8 +214,12 @@ against the final ones before the removals merge):
     git -C ../sdk-src.git fetch https://github.com/urnetwork/sdk.git <sdk removal base>:refs/remotes/upstream/removal-base <sdk removal head>:refs/remotes/upstream/removal-head
     python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv --controls --removal connect=../connect-src.git:upstream/removal-base..upstream/removal-head --removal sdk=../sdk-src.git:upstream/removal-base..upstream/removal-head
 
-It must end with `PASS`. Measured: connect `ca2562ba..022ec900` (848 deletions), sdk
-`b8e0da26..701fa391` (148 deletions).
+It must end with `PASS`. A suffix `@<commit>` on a removal measures the content against that
+upstream commit instead of the removal's base, the newest `main` say, so a change upstream made
+after the removal's base is caught before the removal merges it; a ported.tsv row whose commits
+that upstream does not yet hold is printed as ahead of it. Measured on 2026-10-06: connect
+`ca2562ba..41076bc4` (848 deletions), sdk `364fcb2d..1945759a` (148 deletions), each at its base
+and again at the newest `main` (connect `3b509479`, sdk `db52c42e`).
 
 ## Files in docs/history
 
