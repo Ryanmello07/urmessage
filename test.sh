@@ -21,22 +21,27 @@
 #        composed    the native library: the core SDK's cgo package main composed under sdk/cgo, the
 #                    .def regenerated and unchanged, a c-shared build with the core's release flags,
 #                    its exports against the .def both ways, the composed module's tests;
-#        loopback    the loopback library and its C consumer (sdk/cgo/ctest/run.sh);
+#        loopback    the loopback library, built with its harness, on every host; on Windows also its
+#                    C consumer (sdk/cgo/ctest/run.sh), which is a Windows program;
 #      and the platform builds of the root module (darwin, windows, js/wasm) and the SDK;
 #   5. protocol/message.pb.go regenerated with the pinned protoc 35.1 and protoc-gen-go v1.36.11;
 #   6. the codec's fuzz targets, 60 s each (a done-when of spec A section 13);
-#   7. the census over what ran: every row's receipts.
+#   7. the census over what ran: every row's receipts that this host owes.
 #
 # Every step runs and is reported; the exit status is 0 only if none failed. A step this host cannot
-# run is SKIPPED with its reason, and a module that therefore lacks a receipt fails the census: the
-# full run is a linux host with gcc, where the race detector, nm and the pinned protoc all run. Run it
-# on a Windows checkout with core.autocrlf=true too: the line-ending gates are written for that
-# checkout, and step 1 asserts what they rely on there.
+# run is SKIPPED or named as narrower, with its reason, and a module that therefore lacks a receipt
+# this host owes fails the census. The full run is two runs: linux with gcc (the race detector, nm,
+# the pinned protoc fetched by digest), and Windows from a clone made with core.autocrlf=true (the
+# line-ending gates against the checkout they are written for, which step 1 asserts, the Windows
+# library, and the loopback library's C consumer).
 #
 # Environment:
 #   MESSAGE_TEST_UNPINNED  comma list of siblings accepted at whatever commit they are checked out at
 #                          (scripts/siblings.sh); the verdict names them
 #   MESSAGE_TEST_FUZZTIME  per fuzz target (default 60s); any other value is named in the verdict
+#   MESSAGE_TEST_FUZZ_WORKERS  the fuzzing engine's worker count (-parallel; default one per CPU).
+#                          Each worker is a process of its own: a 24-core Windows host whose page
+#                          file could not grow ran out of commit memory in a fuzz leg
 #   MESSAGE_TEST_TIMEOUT   per go test invocation (default 3h)
 #   PROTOC                 a protoc 35.1 binary, when none is on PATH (linux x86-64 fetches the
 #                          pinned release by digest itself)
@@ -98,6 +103,8 @@ else
   skip "the race detector" "no C compiler on this $goos host"
 fi
 echo "$(go version); $goos/$goarch; C compiler: $([ "$cc_ok" = 1 ] && go env CC || echo none); race: ${race[*]:-off}"
+# the census owes some steps on one kind of host only, and reads which host this was from here
+receipt host goos "$goos"
 
 # ---------------------------------------------------------------- 1. siblings and line endings
 siblings=(connect connect-golden sdk message-server glog gvisor goidenticons)
@@ -114,13 +121,19 @@ while read -r state name rest; do
   if [ "$state" = UNPINNED ]; then narrowings+=("sibling $name is UNPINNED: $rest"); fi
 done <<< "$sibling_report"
 
-if grep -q $'\r$' mls/GATES.md; then
+# Line endings are read from git's own record of the working tree (`git ls-files --eol`), not by
+# grepping for a carriage return: Git Bash's grep was measured answering both ways on one CRLF file.
+# mls/GATES.md has no eol attribute, so a CRLF checkout writes it CRLF; the files the line-ending
+# gates and the go command read byte for byte (.gitattributes: *.go, go.mod, go.sum, *.sh) must
+# stay LF there.
+if git ls-files --eol -- mls/GATES.md | grep -q 'w/crlf'; then
   echo "this checkout is CRLF (core.autocrlf=$(git config core.autocrlf))"
-  crlf_go=$(git ls-files -z -- '*.go' | xargs -0 grep -l $'\r' 2> /dev/null | head -5)
-  if [ -z "$crlf_go" ]; then
-    pass "a CRLF checkout keeps every .go file LF (.gitattributes *.go eol=lf, which the line-ending gates rely on)"
+  crlf_kept=$(git ls-files --eol -- '*.go' 'go.mod' '*/go.mod' 'go.sum' '*/go.sum' '*.go.mod' '*.go.sum' '*.sh' |
+    awk '$2 != "w/lf" {print $NF}' | head -5)
+  if [ -z "$crlf_kept" ]; then
+    pass "a CRLF checkout keeps every .go, go.mod, go.sum and .sh file LF (.gitattributes, which the gates rely on)"
   else
-    fail "a CRLF checkout keeps every .go file LF" "CR in $crlf_go"
+    fail "a CRLF checkout keeps every .go, go.mod, go.sum and .sh file LF" "not LF: $crlf_kept"
   fi
   crlf=1
 else
@@ -145,11 +158,8 @@ gofmt_check() {
   unformatted=$(git ls-files -z -- '*.go' | tr '\0' '\n' | grep -v '/testdata/' | tr '\n' '\0' | xargs -0 "$gofmt" -l)
   if [ -n "$unformatted" ]; then echo "gofmt would rewrite:"; echo "$unformatted"; return 1; fi
 }
-if [ "$crlf" = 1 ]; then
-  skip "gofmt" "a CRLF checkout, where gofmt -l lists every file; an LF checkout runs it"
-else
-  run "gofmt over every tracked Go file outside testdata" gofmt_check
-fi
+# every checkout, a CRLF one too: .gitattributes keeps *.go LF, and step 1 asserted it there
+run "gofmt over every tracked Go file outside testdata" gofmt_check
 
 # ---------------------------------------------------------------- 4. the modules
 # go_module <module file> <directory> [environment for go test...]
@@ -207,14 +217,36 @@ run "root module: js/wasm build and vet" bash -c 'GOOS=js GOARCH=wasm go build .
 if [ "$platforms_ok" = 1 ]; then receipt go.mod platforms "darwin/arm64 windows/amd64 js/wasm"; fi
 
 # the codec's fuzz targets, each for MESSAGE_TEST_FUZZTIME, derived from the source so a new target
-# is fuzzed without anyone listing it here
+# is fuzzed without anyone listing it here.
+#
+# One failure shape is the fuzzing engine's and not a finding: the leg reaches its time, reports
+# "context deadline exceeded", and records no failing input (measured once, FuzzVarint after 6.7
+# million executions, on a shared 6-core linux host while other suites ran). That leg runs once
+# more, and the verdict names it. Any other failure, a failing input above all ("Failing input
+# written to testdata/fuzz/..."), fails.
+fuzz_leg() {
+  local target=$1 out status workers=()
+  if [ -n "${MESSAGE_TEST_FUZZ_WORKERS:-}" ]; then workers=(-parallel="$MESSAGE_TEST_FUZZ_WORKERS"); fi
+  out=$(go test ./syntax -run=NONE -fuzz="^$target\$" -fuzztime="$fuzztime" "${workers[@]}" 2>&1)
+  status=$?
+  printf '%s\n' "$out" | tail -4
+  if [ "$status" != 0 ] && printf '%s\n' "$out" | grep -q 'context deadline exceeded' &&
+    ! printf '%s\n' "$out" | grep -q 'Failing input written to'; then
+    echo "the leg ended with 'context deadline exceeded' and recorded no failing input; running it once more"
+    out=$(go test ./syntax -run=NONE -fuzz="^$target\$" -fuzztime="$fuzztime" "${workers[@]}" 2>&1)
+    status=$?
+    printf '%s\n' "$out" | tail -4
+    if [ "$status" = 0 ]; then narrowings+=("syntax: $target ended once with 'context deadline exceeded' and no failing input, and passed its one re-run"); fi
+  fi
+  return "$status"
+}
 fuzz_targets=$(grep -ho '^func Fuzz[A-Za-z0-9_]*' syntax/*_test.go | sed 's/^func //' | sort -u)
 if [ -z "$fuzz_targets" ]; then
   fail "syntax: fuzz targets" "found none in syntax/*_test.go; the scan is broken, not the package"
 else
   fuzz_ok=1
   for target in $fuzz_targets; do
-    run "syntax: $target for $fuzztime" go test ./syntax -run=NONE -fuzz="^$target\$" -fuzztime="$fuzztime" || fuzz_ok=0
+    run "syntax: $target for $fuzztime" fuzz_leg "$target" || fuzz_ok=0
   done
   if [ "$fuzz_ok" = 1 ]; then receipt go.mod fuzz "$(printf '%s' "$fuzz_targets" | tr '\n' ' ')for $fuzztime each"; fi
   if [ "$fuzztime" != 60s ]; then narrowings+=("fuzz targets ran $fuzztime each, not 60s"); fi
@@ -258,7 +290,7 @@ regenerate() {
   local protoc="" gen="" cache zip
   cache="${XDG_CACHE_HOME:-$HOME/.cache}/urnetwork-message"
   for candidate in "${PROTOC:-}" "$(command -v protoc 2> /dev/null)"; do
-    if [ -n "$candidate" ] && "$candidate" --version 2> /dev/null | grep -qx 'libprotoc 35.1'; then protoc=$candidate; break; fi
+    if [ -n "$candidate" ] && "$candidate" --version 2> /dev/null | tr -d '\r' | grep -qx 'libprotoc 35.1'; then protoc=$candidate; break; fi
   done
   if [ -z "$protoc" ] && [ "$goos/$goarch" = linux/amd64 ]; then
     zip=protoc-35.1-linux-x86_64.zip
@@ -269,14 +301,14 @@ regenerate() {
         python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$cache/$zip" "$cache/protoc-35.1" &&
         chmod +x "$cache/protoc-35.1/bin/protoc"
     fi
-    if "$cache/protoc-35.1/bin/protoc" --version 2> /dev/null | grep -qx 'libprotoc 35.1'; then protoc="$cache/protoc-35.1/bin/protoc"; fi
+    if "$cache/protoc-35.1/bin/protoc" --version 2> /dev/null | tr -d '\r' | grep -qx 'libprotoc 35.1'; then protoc="$cache/protoc-35.1/bin/protoc"; fi
   fi
   if [ -z "$protoc" ]; then
     skip "protocol: regenerate message.pb.go" "no protoc 35.1 on this host (set PROTOC; linux x86-64 fetches it)"
     return
   fi
   for candidate in "$(dirname "$protoc")/protoc-gen-go" "$(dirname "$protoc")/protoc-gen-go.exe" "$(command -v protoc-gen-go 2> /dev/null)" "$cache/gobin/protoc-gen-go" "$cache/gobin/protoc-gen-go.exe"; do
-    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version 2> /dev/null | grep -qx 'protoc-gen-go v1.36.11'; then gen=$candidate; break; fi
+    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version 2> /dev/null | tr -d '\r' | grep -qxE 'protoc-gen-go(\.exe)? v1\.36\.11'; then gen=$candidate; break; fi
   done
   if [ -z "$gen" ]; then
     GOBIN="$cache/gobin" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 || { fail "protocol: install protoc-gen-go v1.36.11"; return; }
@@ -284,7 +316,11 @@ regenerate() {
     [ -x "$gen" ] || gen="$gen.exe"
   fi
   mkdir -p "$work/protoc"
-  if ! (cd protocol && PATH="$(dirname "$gen"):$PATH" "$protoc" -I=. --go_out="$work/protoc" --go_opt=paths=source_relative message.proto); then
+  # the plugin by path rather than through PATH: under Git Bash a Windows path's drive colon would
+  # split a PATH entry in two
+  local plugin=$gen out_dir="$work/protoc"
+  if command -v cygpath > /dev/null 2>&1; then plugin=$(cygpath -m "$gen"); out_dir=$(cygpath -m "$work/protoc"); fi
+  if ! (cd protocol && "$protoc" -I=. --plugin=protoc-gen-go="$plugin" --go_out="$out_dir" --go_opt=paths=source_relative message.proto); then
     fail "protocol: regenerate message.pb.go"
     return
   fi
@@ -357,7 +393,28 @@ native() {
   run "sdk/cgo: go test ${race[*]:-} ./..." go -C "$dir" test -count=1 "${race[@]}" -timeout "$timeout" ./... && receipt "$mod" test "${race[*]:-norace}"
   receipt "$mod" protobuf "$(go -C "$dir" list -m -f '{{.Version}}' google.golang.org/protobuf)"
   if [ "$cc_ok" = 1 ]; then
-    run "sdk/cgo: the loopback library and its C consumer (ctest/run.sh)" bash sdk/cgo/ctest/run.sh && receipt sdk/cgo/loopback.go.mod ctest
+    # on every host: the loopback library builds with its modfile and tag and exports the harness,
+    # and the shipping library's header, built above, declares none of it
+    loopback_library() {
+      local out="build/loopback/${library##*/}" exported shipped
+      rm -rf "$dir/build/loopback"
+      mkdir -p "$dir/build/loopback"
+      CGO_ENABLED=1 go -C "$dir" build -modfile=loopback.go.mod -tags urnet_message_loopback -buildmode=c-shared -o "$out" . || return 1
+      if [ ! -f "$dir/$header" ]; then echo "the shipping library's header $dir/$header is not there"; return 1; fi
+      exported=$(grep -cE '^extern .*\burnet_message_loopback_' "$dir/${out%.*}.h" || true)
+      shipped=$(grep -cE 'urnet_message_loopback' "$dir/$header" || true)
+      echo "the loopback library exports $exported harness function(s); the shipping library's header names $shipped"
+      [ "$exported" -gt 0 ] && [ "$shipped" = 0 ]
+    }
+    run "sdk/cgo: the loopback library builds and exports the harness, and the shipping library has none of it" loopback_library &&
+      receipt sdk/cgo/loopback.go.mod loopback-library
+    # the C consumer, sdk/cgo/ctest/message_abi_test.c, is a Windows program (windows.h, CreateThread),
+    # as it was in the core SDK; ctest/run.sh builds it against the loopback library and runs it
+    if [ "$goos" = windows ]; then
+      run "sdk/cgo: the loopback library's C consumer (ctest/run.sh)" bash sdk/cgo/ctest/run.sh && receipt sdk/cgo/loopback.go.mod ctest
+    else
+      narrowings+=("the loopback library's C consumer (sdk/cgo/ctest/message_abi_test.c) is a Windows program, windows.h and CreateThread: a Windows run builds and runs it")
+    fi
   else
     skip "sdk/cgo: the loopback library and its C consumer" "no C compiler on this host"
   fi

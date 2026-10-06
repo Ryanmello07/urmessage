@@ -34,15 +34,29 @@ declare -A wiring=(
 )
 # The steps each wiring owes, in the order test.sh runs them. "platforms" is every cross build of the
 # module passing (the root module's darwin, windows and js/wasm, the SDK's darwin and windows);
-# "fuzz" is every fuzz target the codec declares, run for its time.
+# "fuzz" is every fuzz target the codec declares, run for its time; "loopback-library" is the
+# loopback library built, exporting its harness while the shipping library's header has none of it.
 declare -A steps=(
   [go]="verify tidy build vet mains test protobuf"
   [root]="verify tidy build vet mains test protobuf platforms fuzz"
   [sdk]="verify tidy build vet mains test protobuf platforms"
   [wiregolden]="verify test:orig test:new base-pinned cmp-connect-golden cross-decode:new cross-decode:orig"
   [composed]="compose verify tidy def-current library exports vet test protobuf"
-  [loopback]="tidy ctest"
+  [loopback]="tidy loopback-library"
 )
+# What a wiring owes on one kind of host only. The loopback library's C consumer,
+# sdk/cgo/ctest/message_abi_test.c, is a Windows program (windows.h, CreateThread), as it was in the
+# core SDK, so a Windows run owes "ctest" (sdk/cgo/ctest/run.sh) and any other run says it did not
+# run it. The host is test.sh's first receipt: host <tab> goos <tab> <GOOS>.
+declare -A host_steps=(
+  [loopback:windows]="ctest"
+)
+
+# The steps a row owes on the host the receipts name.
+owed() {
+  local file=$1 goos=$2
+  echo "${steps[${wiring[$file]}]} ${host_steps[${wiring[$file]}:$goos]:-}"
+}
 
 census_files() {
   (git ls-files -- 'go.mod' '*/go.mod' '*.go.mod'; if [ -n "${CENSUS_PLANT:-}" ]; then echo "$CENSUS_PLANT"; fi) |
@@ -60,7 +74,9 @@ check_rows() {
       echo "  FAIL: $file has no row: give it a wiring that test.sh runs"
       fail=1
     else
-      echo "  $file: ${wiring[$file]} (${steps[${wiring[$file]}]})"
+      local only
+      only=$(for key in "${!host_steps[@]}"; do case "$key" in "${wiring[$file]}:"*) printf '; on %s also %s' "${key#*:}" "${host_steps[$key]}" ;; esac; done)
+      echo "  $file: ${wiring[$file]} (${steps[${wiring[$file]}]}$only)"
     fi
   done
   for file in "${!wiring[@]}"; do
@@ -75,9 +91,16 @@ check_rows() {
 # The receipts against the rows: every step of every row, the library's file and size, and one
 # protobuf version across the modules that report one.
 check_receipts() {
-  local receipts=$1 fail=0 file step detail versions
+  local receipts=$1 fail=0 file step detail versions goos
+  goos=$(awk -F'\t' '$1 == "host" && $2 == "goos" {print $3; exit}' "$receipts")
+  if [ -z "$goos" ]; then
+    echo "  FAIL: the receipts name no host (host, goos, <GOOS>), which test.sh writes before any step"
+    fail=1
+  else
+    echo "  host: $goos"
+  fi
   for file in $(printf '%s\n' "${!wiring[@]}" | sort); do
-    for step in ${steps[${wiring[$file]}]}; do
+    for step in $(owed "$file" "$goos"); do
       if ! awk -F'\t' -v f="$file" -v s="$step" '$1 == f && $2 == s {found = 1} END {exit !found}' "$receipts"; then
         echo "  FAIL: $file has no '$step' receipt: test.sh did not run that step, or it did not pass"
         fail=1
@@ -115,10 +138,10 @@ check_receipts() {
 # Every step of every row, as a run that passed everything would write them, with a library file of
 # its own; the self-test plants each fault in a copy of this.
 complete_receipts() {
-  local out=$1 library=$2 file step
-  : > "$out"
+  local out=$1 library=$2 goos=$3 file step
+  printf 'host\tgoos\t%s\n' "$goos" > "$out"
   for file in $(printf '%s\n' "${!wiring[@]}" | sort); do
-    for step in ${steps[${wiring[$file]}]}; do
+    for step in $(owed "$file" "$goos"); do
       case "$step" in
         library) printf '%s\t%s\t%s %s\n' "$file" "$step" "$library" "$(wc -c < "$library" | tr -d ' ')" ;;
         protobuf) printf '%s\t%s\t%s\n' "$file" "$step" "v1.36.11" ;;
@@ -133,7 +156,8 @@ self_test() {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
   printf 'not a library\n' > "$tmp/library.so"
-  complete_receipts "$tmp/complete" "$tmp/library.so"
+  # a Windows run's receipts, which owe every step there is; a linux run's are checked at the end
+  complete_receipts "$tmp/complete" "$tmp/library.so" windows
   # expect <pass|fail> <title> <the line a failure must print, or -> <command...>: a control must
   # fail for its own reason, so a failing one's output must hold that reason's line
   expect() {
@@ -165,7 +189,14 @@ self_test() {
   awk -F'\t' '!($1 == "sdk/cp3b/go.mod" && $2 == "test")' "$tmp/complete" > "$tmp/no-cp3b"
   expect fail "the acceptance suite's tests not run" "FAIL: sdk/cp3b/go.mod has no 'test' receipt" check_receipts "$tmp/no-cp3b"
   awk -F'\t' '!($1 == "sdk/cgo/loopback.go.mod" && $2 == "ctest")' "$tmp/complete" > "$tmp/no-ctest"
-  expect fail "the loopback library's C consumer not run" "FAIL: sdk/cgo/loopback.go.mod has no 'ctest' receipt" check_receipts "$tmp/no-ctest"
+  expect fail "the loopback library's C consumer not run on Windows" "FAIL: sdk/cgo/loopback.go.mod has no 'ctest' receipt" check_receipts "$tmp/no-ctest"
+  awk -F'\t' '!($1 == "sdk/cgo/loopback.go.mod" && $2 == "loopback-library")' "$tmp/complete" > "$tmp/no-loopback"
+  expect fail "the loopback library not built" "FAIL: sdk/cgo/loopback.go.mod has no 'loopback-library' receipt" check_receipts "$tmp/no-loopback"
+  awk -F'\t' '!($1 == "host")' "$tmp/complete" > "$tmp/no-host"
+  expect fail "receipts that name no host" "the receipts name no host" check_receipts "$tmp/no-host"
+  complete_receipts "$tmp/linux" "$tmp/library.so" linux
+  expect pass "a linux run, which does not owe the Windows C consumer" - check_receipts "$tmp/linux"
+  if grep -q 'ctest' "$tmp/linux"; then echo "  CONTROL BROKEN: a linux run's complete receipts hold a ctest step"; fail=1; fi
   awk -F'\t' '!($1 == "go.mod" && $2 == "fuzz")' "$tmp/complete" > "$tmp/no-fuzz"
   expect fail "the codec's fuzz targets not run" "FAIL: go.mod has no 'fuzz' receipt" check_receipts "$tmp/no-fuzz"
   awk -F'\t' '!($1 == "sdk/go.mod" && $2 == "platforms")' "$tmp/complete" > "$tmp/no-platforms"

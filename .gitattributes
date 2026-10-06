@@ -94,6 +94,15 @@ syntax/testdata/fuzz/** -text
 # emitter beside it is Go, and stays under *.go text eol=lf, which mls's line-ending gate holds.
 protocol/testdata/wire-golden.tsv -text
 
+# go.mod and go.sum, and the alternate modfiles beside them: the go command writes them LF, and
+# test.sh's `go mod tidy -diff` compares the tidy bytes with the checkout's, so a CRLF checkout of
+# them is untidy by construction. Measured on a core.autocrlf=true clone: every line of go.sum
+# differed. The blobs are LF already.
+go.mod text eol=lf
+go.sum text eol=lf
+*.go.mod text eol=lf
+*.go.sum text eol=lf
+
 # Shell scripts run under bash on every host, Git Bash on Windows included, and bash reads a
 # carriage return as part of the command. test.sh and scripts/siblings.sh are how a run checks
 # out its siblings; a CRLF checkout of them fails with "$'\r': command not found" rather than

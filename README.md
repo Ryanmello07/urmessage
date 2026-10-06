@@ -75,8 +75,9 @@ core SDK, this repository is built and tested on the maintainers' own hardware, 
   gvisor and goidenticons. It runs every module (the SDK, the commands, the acceptance
   suite against message-server, the native library and its C consumer) with the race
   detector, the wire corpus against the pinned connect, the schema's regeneration, the
-  codec's fuzz targets, and the module census over what ran. The full run is a linux host
-  with gcc; it prints what any other host skipped.
+  codec's fuzz targets, and the module census over what ran. The full run is two runs, a
+  linux host with gcc and a Windows clone made with `core.autocrlf=true` (below), and each
+  prints what it did not run.
 - Name the directory `message`. The modules find their siblings by relative path
   (`../connect`, `../sdk`, ...), and consumers' local `replace` directives point at
   `../message`.
