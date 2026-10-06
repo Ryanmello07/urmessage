@@ -8,10 +8,10 @@ import (
 )
 
 // THIS PACKAGE HAS TESTS SO THAT ITS TEST BINARY EXISTS AND STARTS. A main package with no test is
-// built and vetted in CI and never run, and a defect that shows only when a binary starts -- two
+// built and vetted by test.sh and never run, and a defect that shows only when a binary starts -- two
 // copies of message.proto linked into one binary, which protobuf refuses at init -- is invisible to
 // build and to vet. `go test` runs this package's init before its first case, so every run of these
-// cases is also that check; the module census in CI requires every main package to have one. What
+// cases is also that check; the module census requires every main package to have one. What
 // the cases themselves hold is the probe's own instruments: the credential scan over its transcript
 // and the difference it reports when a text comes back changed.
 

@@ -82,21 +82,22 @@ mls/testdata/corpus/** -text
 # It rewrites no git object -- all of them are LF in the index already.
 message/testdata/fuzz/** -text
 
-# syntax/testdata/fuzz/** is where go writes a crasher for the codec's fuzz targets, and where
-# .github/workflows/syntax.yml uploads it from; a committed one is go's corpus format, the shape
+# syntax/testdata/fuzz/** is where go writes a crasher for the codec's fuzz targets (test.sh runs
+# each for 60 s); a committed one is go's corpus format, the shape
 # the two paragraphs above say a CRLF checkout corrupts. The codec sat under mls/ until its
 # promotion to a peer package, and no rule above names its new place.
 syntax/testdata/fuzz/** -text
 
 # protocol/testdata/wire-golden.tsv is the wire corpus: a digest-pinned list of encodings, held
 # append-only by protocol/message_wiregolden_test.go and compared byte for byte with connect's
-# emission in CI, so a checkout must hand it over as the bytes git stores. Only the corpus: the
+# emission by test.sh, so a checkout must hand it over as the bytes git stores. Only the corpus: the
 # emitter beside it is Go, and stays under *.go text eol=lf, which mls's line-ending gate holds.
 protocol/testdata/wire-golden.tsv -text
 
-# Shell scripts run under bash on every runner, Git Bash on Windows included, and bash reads a
-# carriage return as part of the command. .github/scripts/siblings.sh is how CI checks out its
-# siblings; a CRLF checkout of it fails with "$'\r': command not found" rather than cloning.
+# Shell scripts run under bash on every host, Git Bash on Windows included, and bash reads a
+# carriage return as part of the command. test.sh and scripts/siblings.sh are how a run checks
+# out its siblings; a CRLF checkout of them fails with "$'\r': command not found" rather than
+# running.
 *.sh text eol=lf
 
 # The native ABI's C sources: sdk/cgo's callbacks and header, and the C harness under

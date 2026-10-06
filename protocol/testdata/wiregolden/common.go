@@ -3,7 +3,7 @@
 //
 //	-tags orig: github.com/urnetwork/connect/protocol, from a connect checkout from BEFORE the
 //	            schema left connect (the sibling ../../../../connect-golden, pinned in
-//	            .github/siblings.txt), as connect committed it;
+//	            scripts/siblings.txt), as connect committed it;
 //	-tags new:  github.com/urnetwork/message/protocol, this repository's, regenerated once with
 //	            go_package github.com/urnetwork/message/protocol;
 //	-tags dyn:  no generated copy: the schema is a serialized descriptor read from the file

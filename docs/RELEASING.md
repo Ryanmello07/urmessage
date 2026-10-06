@@ -10,7 +10,7 @@
   next to connect. The first tag is `v0.1.0`, after the cutover.
 - A nested module is tagged with its directory as prefix, as Go requires:
   `sdk/v0.1.0` releases `github.com/urnetwork/message/sdk`.
-- Forks never tag. CI never tags, releases or publishes.
+- Forks never tag. test.sh never tags, releases or publishes.
 - Until the first tag, consumers pin a commit: a pseudo-version, or a `replace` to
   a checkout at a pinned commit.
 

@@ -21,7 +21,7 @@ func cgoDirectory(t *testing.T) string {
 }
 
 // coreSdkRoot is the core SDK checkout the composition is built against: urnetwork/sdk at the
-// pinned commit, beside this repository, where CI's siblings step puts it. The module's go.mod
+// pinned commit, beside this repository, where test.sh puts it. The module's go.mod
 // replaces github.com/urnetwork/sdk with the same directory, so nothing in this module builds
 // without it either; its absence is a failure, not a skip.
 func coreSdkRoot(t *testing.T) string {

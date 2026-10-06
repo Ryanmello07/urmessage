@@ -2,7 +2,7 @@
 // .def entries and this directory's messaging exports, merged.
 //
 //	go run ./gen [-core <core sdk root>]      from sdk/cgo; the default core root is ../sdk
-//	                                          beside this repository, where CI checks it out
+//	                                          beside this repository, where test.sh checks it out
 //
 // THE .def IS A PROMISE ABOUT THE LIBRARY. An MSVC consumer builds its import library from it, so a
 // name it lacks is a link error at the consumer and a name the library does not export is one too.

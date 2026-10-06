@@ -51,7 +51,7 @@ require (
 // this repository: the foundational packages and the schema
 replace github.com/urnetwork/message => ../
 
-// the sibling checkout beside this repository, at the commit .github/siblings.txt pins
+// the sibling checkout beside this repository, at the commit scripts/siblings.txt pins
 replace github.com/urnetwork/connect => ../../connect
 
 // what connect itself replaces, which a replace in connect's go.mod cannot do for this module

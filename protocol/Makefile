@@ -1,6 +1,6 @@
 # Generates message.pb.go from message.proto. Adapted from connect/protocol/Makefile
 # (connect e449f7d8); the generator pair is pinned because the committed Go is checked
-# byte for byte by .github/workflows/protocol.yml: protoc 35.1, protoc-gen-go v1.36.11.
+# byte for byte by test.sh: protoc 35.1, protoc-gen-go v1.36.11.
 PROTOC_GEN_GO_VERSION = v1.36.11
 
 default: build

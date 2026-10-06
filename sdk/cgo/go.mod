@@ -110,7 +110,7 @@ replace github.com/urnetwork/message => ../..
 
 replace github.com/urnetwork/message/sdk => ..
 
-// the sibling checkouts beside this repository, at the commits .github/siblings.txt pins
+// the sibling checkouts beside this repository, at the commits scripts/siblings.txt pins
 replace github.com/urnetwork/sdk => ../../../sdk
 
 replace github.com/urnetwork/connect => ../../../connect

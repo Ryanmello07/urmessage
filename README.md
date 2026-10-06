@@ -9,7 +9,9 @@ on it.
 
 The code moves here from connect and the core SDK with its history, in the stages
 of the maintainers' design,
-[MESSAGEREVIEW.md at connect 13ced4c8](https://github.com/urnetwork/connect/blob/13ced4c8d50bf04c518667f2ad4b3948498abe56/MESSAGEREVIEW.md).
+[MESSAGEREVIEW.md at connect e8611390](https://github.com/urnetwork/connect/blob/e8611390466dcded7ccc4fd2d08bc14c297d9f41/MESSAGEREVIEW.md)
+(first written at 13ced4c8; e8611390 took CI out of the layout, because the maintainers
+build and test on their own hardware).
 
 ## Layout and status
 
@@ -19,7 +21,7 @@ pull requests that remove the moved code from those repositories merge first; se
 
 | Path | Contents | Comes from | Stage |
 |---|---|---|---|
-| `go.mod`, `docs/`, `.github/workflows/` | module metadata, documentation, CI | new | 1 |
+| `go.mod`, `docs/`, `test.sh`, `scripts/` | module metadata, documentation, and the test run with its scripts | new | 1 |
 | `CODESTYLE.md` | the Go style guide | connect, with its history | 1 |
 | `message/` | records, attachments, authentication preimages | `connect/message` | 2a |
 | `messagegroup/` | group sessions, ratchets, record encryption, the MLS adapter | `connect/messagegroup` | 2a |
@@ -30,11 +32,11 @@ pull requests that remove the moved code from those repositories merge first; se
 | `sdk/urmessage/` | device and group orchestration, durable MLS state | the core SDK's `urmessage/` | 3 |
 | `sdk/cgo/` | the messaging C ABI, and the native composition that lays it into the core SDK's library; its own module | the core SDK's messaging `cgo/` files | 3 |
 | `sdk/livepeer/`, `sdk/liveprobe/` | the live probes, each its own module | the core SDK's `livepeer/`, `liveprobe/` | 3 |
-| `sdk/cp3b/` | the cross-process acceptance suite, against a real message server; its own module, not yet in CI | the core SDK's `cp3b/` | 3 |
+| `sdk/cp3b/` | the cross-process acceptance suite, against a real message server; its own module | the core SDK's `cp3b/` | 3 |
 
 Stage 4 moves messaging onto a connect subprotocol.
 
-The root holds module metadata, documentation and CI only: no Go package, and no
+The root holds module metadata, documentation and `test.sh` only: no Go package, and no
 facade over the directories beneath it.
 
 ## Boundary
@@ -56,24 +58,42 @@ facade over the directories beneath it.
 
 ## Build and test
 
-Go 1.26.5, the `toolchain` in `go.mod`.
+Go 1.26.5, the `toolchain` in `go.mod`. There is no CI service: like connect and the
+core SDK, this repository is built and tested on the maintainers' own hardware, and
+[test.sh](test.sh) is the whole run.
 
     git clone -c core.autocrlf=false https://github.com/urnetwork/message.git message
     cd message
-    go build ./... && go vet ./... && go test ./...
+    ./test.sh
 
-- On Windows, clone with `core.autocrlf=false`. Several checks read source files
-  byte for byte, and a CRLF working tree can make such a check fail, or pass
-  without testing anything.
-- Name the directory `message`. The root module needs nothing beside it. The SDK
-  modules find their siblings by relative path: `../connect`, `../glog` and `../gvisor`, at
-  the commits [.github/siblings.txt](.github/siblings.txt) pins (`bash .github/scripts/siblings.sh connect glog gvisor`
-  checks them out). Consumers' local `replace` directives point at `../message`.
-- The SDK: `go -C sdk test ./...`. The native library also needs the core SDK and
-  goidenticons beside the checkout (`../sdk`, `../goidenticons`), then
-  `bash sdk/cgo/compose.sh` and, in `sdk/cgo`, `go build -buildmode=c-shared -o URnetworkSdk.dll .`
-  with a C compiler; `bash sdk/cgo/compose.sh --clean` removes what the compose added.
-  [native.yml](.github/workflows/native.yml) is the reference.
+- `go build ./... && go vet ./... && go test ./...` builds and tests the root module
+  with nothing beside it. It logs, and does not fail, where a check needs a sibling
+  that is not there (the core SDK under the record gate, connect's `frame.proto`).
+- `./test.sh` runs everything else too, and requires the siblings at the commits
+  [scripts/siblings.txt](scripts/siblings.txt) pins, cloning a missing one beside the
+  checkout: connect, the core SDK, message-server, connect from before the removal, glog,
+  gvisor and goidenticons. It runs every module (the SDK, the commands, the acceptance
+  suite against message-server, the native library and its C consumer) with the race
+  detector, the wire corpus against the pinned connect, the schema's regeneration, the
+  codec's fuzz targets, and the module census over what ran. The full run is a linux host
+  with gcc; it prints what any other host skipped.
+- Name the directory `message`. The modules find their siblings by relative path
+  (`../connect`, `../sdk`, ...), and consumers' local `replace` directives point at
+  `../message`.
+- Develop with `core.autocrlf=false`: several checks read source files byte for byte.
+  The line-ending gates are also written for a CRLF checkout, since the Windows machines
+  this project is built on run `core.autocrlf=true`, so run `./test.sh` on Windows from a
+  clone made with `-c core.autocrlf=true` as well.
+- The native library is the core SDK's cgo package main with `sdk/cgo` laid beside it:
+  `bash sdk/cgo/compose.sh`, then, in `sdk/cgo` and with a C compiler, the core SDK's
+  release recipe (its `cgo/Makefile`):
+
+      CGO_ENABLED=1 GOEXPERIMENT=greenteagc go build -trimpath -buildmode=c-shared \
+        -ldflags "-s -w -X github.com/urnetwork/sdk.Version=$WARP_VERSION -buildid=" \
+        -o URnetworkSdk.dll .
+
+  Without the `-X`, the library reports an empty SDK version. `bash sdk/cgo/compose.sh --clean`
+  removes what the compose added; `test.sh`'s native step is the reference.
 
 ## Contributing
 

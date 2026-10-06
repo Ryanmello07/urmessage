@@ -9,7 +9,7 @@ require (
 )
 
 // the schema as connect committed it, from before it left connect: the pinned sibling
-// connect-golden (.github/siblings.txt)
+// connect-golden (scripts/siblings.txt)
 replace github.com/urnetwork/connect => ../../../../connect-golden
 
 // this repository

@@ -20,7 +20,7 @@ package protocol_test
 // and the divergence would want revisiting; this fails then.
 //
 // The sibling is connect checked out beside this repository at the commit
-// .github/siblings.txt pins. CI requires it (URMESSAGE_REQUIRE_CONNECT_ROOT); a local run
+// scripts/siblings.txt pins. test.sh requires it (URMESSAGE_REQUIRE_CONNECT_ROOT); a run
 // without it skips, and says so.
 
 import (

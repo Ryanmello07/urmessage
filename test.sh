@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+# test.sh: build and test everything this repository holds, on the machine it runs on.
+#
+#   ./test.sh                                   from the repository root, or from anywhere
+#
+# THERE IS NO CI SERVICE. Like connect and the core SDK, this repository is built and tested on the
+# maintainers' own hardware (urnetwork/connect e8611390: "We build and test on our own hardware and
+# do not use GitHub Actions"), so this script is where every check beyond a plain `go test ./...`
+# runs, in this order:
+#
+#   1. the siblings beside the repository at the commits scripts/siblings.txt pins (a missing one is
+#      cloned), and the checkout's line endings;
+#   2. the module census's own controls, and its rows against the tree;
+#   3. formatting: gofmt over every tracked Go file outside testdata;
+#   4. every module scripts/module-census.sh has a row for, by its wiring:
+#        go          go mod verify, go mod tidy -diff, build, vet, every main package has a test,
+#                    go test with the race detector (the root module with the core SDK and
+#                    connect required beside it: the record gate and the frame code-point names);
+#        wiregolden  the corpus's pinned base lines against connect from before the removal, byte
+#                    for byte, and each emission decoded into the other build's types;
+#        composed    the native library: the core SDK's cgo package main composed under sdk/cgo, the
+#                    .def regenerated and unchanged, a c-shared build with the core's release flags,
+#                    its exports against the .def both ways, the composed module's tests;
+#        loopback    the loopback library and its C consumer (sdk/cgo/ctest/run.sh);
+#      and the platform builds of the root module (darwin, windows, js/wasm) and the SDK;
+#   5. protocol/message.pb.go regenerated with the pinned protoc 35.1 and protoc-gen-go v1.36.11;
+#   6. the codec's fuzz targets, 60 s each (a done-when of spec A section 13);
+#   7. the census over what ran: every row's receipts.
+#
+# Every step runs and is reported; the exit status is 0 only if none failed. A step this host cannot
+# run is SKIPPED with its reason, and a module that therefore lacks a receipt fails the census: the
+# full run is a linux host with gcc, where the race detector, nm and the pinned protoc all run. Run it
+# on a Windows checkout with core.autocrlf=true too: the line-ending gates are written for that
+# checkout, and step 1 asserts what they rely on there.
+#
+# Environment:
+#   MESSAGE_TEST_UNPINNED  comma list of siblings accepted at whatever commit they are checked out at
+#                          (scripts/siblings.sh); the verdict names them
+#   MESSAGE_TEST_FUZZTIME  per fuzz target (default 60s); any other value is named in the verdict
+#   MESSAGE_TEST_TIMEOUT   per go test invocation (default 3h)
+#   PROTOC                 a protoc 35.1 binary, when none is on PATH (linux x86-64 fetches the
+#                          pinned release by digest itself)
+#   WARP_VERSION           the SDK version the native library reports (default 0.0.0-test)
+set -uo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+cd "$here"
+export GOWORK=off
+
+work=$(mktemp -d)
+receipts="$work/receipts.tsv"
+: > "$receipts"
+results=()
+narrowings=()
+composed=0
+hidden=""
+
+cleanup() {
+  if [ -n "$hidden" ] && [ -f "$hidden" ]; then mv -f "$hidden" sdk/cgo/loopback_test_world.go; fi
+  if [ "$composed" = 1 ] && [ -f sdk/cgo/.composed ]; then bash sdk/cgo/compose.sh --clean > /dev/null; fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+record() {
+  results+=("$1|$2|$3")
+  if [ -n "$3" ]; then echo "-- $1: $2 ($3)"; else echo "-- $1: $2"; fi
+}
+pass() { record PASS "$1" "${2:-}"; }
+fail() { record FAIL "$1" "${2:-}"; }
+skip() { record SKIPPED "$1" "$2"; narrowings+=("$1: $2"); }
+receipt() { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-ok}" >> "$receipts"; }
+# run <name> <command...>: runs it, records PASS or FAIL by its exit status, and answers that status
+run() {
+  local name=$1
+  shift
+  echo
+  echo "== $name"
+  echo "   \$ $*"
+  if "$@"; then pass "$name"; return 0; fi
+  fail "$name"
+  return 1
+}
+
+goos=$(go env GOOS)
+goarch=$(go env GOARCH)
+timeout=${MESSAGE_TEST_TIMEOUT:-3h}
+fuzztime=${MESSAGE_TEST_FUZZTIME:-60s}
+version=${WARP_VERSION:-0.0.0-test}
+cc_ok=0
+if [ "$(go env CGO_ENABLED)" = 1 ] && command -v "$(go env CC)" > /dev/null 2>&1; then cc_ok=1; fi
+race=()
+if [ "$cc_ok" = 1 ]; then
+  race=(-race)
+elif [ "$goos" = linux ]; then
+  fail "the race detector" "linux with no C compiler or CGO_ENABLED=0: the full run needs gcc"
+else
+  skip "the race detector" "no C compiler on this $goos host"
+fi
+echo "$(go version); $goos/$goarch; C compiler: $([ "$cc_ok" = 1 ] && go env CC || echo none); race: ${race[*]:-off}"
+
+# ---------------------------------------------------------------- 1. siblings and line endings
+siblings=(connect connect-golden sdk message-server glog gvisor goidenticons)
+for name in "${siblings[@]}"; do
+  if [ ! -e "../$name" ]; then
+    run "sibling $name: clone at its pin" bash scripts/siblings.sh "$name"
+  fi
+done
+sibling_report=$(bash scripts/siblings.sh --verify "${siblings[@]}")
+sibling_status=$?
+echo "$sibling_report"
+if [ "$sibling_status" = 0 ]; then pass "siblings at their pins"; else fail "siblings at their pins" "see above"; fi
+while read -r state name rest; do
+  if [ "$state" = UNPINNED ]; then narrowings+=("sibling $name is UNPINNED: $rest"); fi
+done <<< "$sibling_report"
+
+if grep -q $'\r$' mls/GATES.md; then
+  echo "this checkout is CRLF (core.autocrlf=$(git config core.autocrlf))"
+  crlf_go=$(git ls-files -z -- '*.go' | xargs -0 grep -l $'\r' 2> /dev/null | head -5)
+  if [ -z "$crlf_go" ]; then
+    pass "a CRLF checkout keeps every .go file LF (.gitattributes *.go eol=lf, which the line-ending gates rely on)"
+  else
+    fail "a CRLF checkout keeps every .go file LF" "CR in $crlf_go"
+  fi
+  crlf=1
+else
+  crlf=0
+  if [ "$goos" = windows ]; then
+    skip "the CRLF checkout" "this Windows checkout is LF; clone with core.autocrlf=true to run the line-ending gates against the checkout they are written for"
+  fi
+fi
+
+# ---------------------------------------------------------------- 2. the census's controls and rows
+run "module census: its own controls" bash scripts/module-census.sh --self-test
+run "module census: the rows against the tree" bash scripts/module-census.sh --rows
+
+# ---------------------------------------------------------------- 3. gofmt
+gofmt_check() {
+  local gofmt control unformatted
+  gofmt="$(go env GOROOT)/bin/gofmt"
+  control="$work/gofmt-control"
+  mkdir -p "$control"
+  printf '%s\n' 'package p' 'func  f( ) {}' > "$control/c.go"
+  if [ -z "$("$gofmt" -l "$control")" ]; then echo "gofmt -l does not list a misformatted file; the check below would pass anything"; return 1; fi
+  unformatted=$(git ls-files -z -- '*.go' | tr '\0' '\n' | grep -v '/testdata/' | tr '\n' '\0' | xargs -0 "$gofmt" -l)
+  if [ -n "$unformatted" ]; then echo "gofmt would rewrite:"; echo "$unformatted"; return 1; fi
+}
+if [ "$crlf" = 1 ]; then
+  skip "gofmt" "a CRLF checkout, where gofmt -l lists every file; an LF checkout runs it"
+else
+  run "gofmt over every tracked Go file outside testdata" gofmt_check
+fi
+
+# ---------------------------------------------------------------- 4. the modules
+# go_module <module file> <directory> [environment for go test...]
+go_module() {
+  local mod=$1 dir=$2 mains bin pkg tests xtests missing=0 version_of
+  shift 2
+  run "$dir: go mod verify" go -C "$dir" mod verify && receipt "$mod" verify
+  run "$dir: go mod tidy -diff" go -C "$dir" mod tidy -diff && receipt "$mod" tidy
+  mains=$(go -C "$dir" list -f '{{if eq .Name "main"}}{{.ImportPath}} {{len .TestGoFiles}} {{len .XTestGoFiles}}{{end}}' ./...)
+  local list_status=$?
+  if [ -n "$(printf '%s' "$mains" | tr -d '[:space:]')" ]; then
+    bin="$work/bin/${dir//\//_}/"
+    mkdir -p "$bin"
+    # -o into a directory of its own: a pattern matching exactly one main package would otherwise
+    # write that command's binary into the checkout
+    run "$dir: go build ./..." go -C "$dir" build -o "$bin" ./... && receipt "$mod" build
+  else
+    run "$dir: go build ./..." go -C "$dir" build ./... && receipt "$mod" build
+  fi
+  run "$dir: go vet ./..." go -C "$dir" vet ./... && receipt "$mod" vet
+  # a main package is a binary that only a test starts; one without a test is never started here
+  if [ "$list_status" = 0 ]; then
+    while read -r pkg tests xtests; do
+      [ -n "$pkg" ] || continue
+      if [ "$tests" = 0 ] && [ "$xtests" = 0 ]; then echo "main package $pkg has no test, so its binary is never started"; missing=1; fi
+    done <<< "$mains"
+    if [ "$missing" = 0 ]; then
+      pass "$dir: every main package has a test" "$(printf '%s\n' "$mains" | grep -c .)"
+      receipt "$mod" mains "$(printf '%s\n' "$mains" | grep -c .)"
+    else
+      fail "$dir: every main package has a test"
+    fi
+  else
+    fail "$dir: list the main packages"
+  fi
+  run "$dir: go test ${race[*]:-} ./..." env "$@" go -C "$dir" test -count=1 "${race[@]}" -timeout "$timeout" ./... &&
+    receipt "$mod" test "${race[*]:-norace}"
+  if version_of=$(go -C "$dir" list -m -f '{{.Version}}' google.golang.org/protobuf 2> /dev/null) && [ -n "$version_of" ]; then
+    receipt "$mod" protobuf "$version_of"
+  else
+    fail "$dir: resolve google.golang.org/protobuf"
+  fi
+}
+
+# the root module: the record gate requires the core SDK beside the repository, and the frame
+# code-point names require connect's frame.proto (both are skipped with a log in a lone checkout)
+go_module go.mod . URMESSAGE_REQUIRE_CORE_SDK_ROOT=1 URMESSAGE_REQUIRE_CONNECT_ROOT=1
+# the messaging packages are linked into the SDK's js/wasm build and the native libraries for darwin
+# and windows; mls/crossplatform_test.go builds nine platforms inside go test, and this is the
+# explicit build, and the vet of the js test packages
+platforms_ok=1
+run "root module: darwin/arm64 build" env GOOS=darwin GOARCH=arm64 go build ./... || platforms_ok=0
+run "root module: windows/amd64 build" env GOOS=windows GOARCH=amd64 go build ./... || platforms_ok=0
+run "root module: js/wasm build and vet" bash -c 'GOOS=js GOARCH=wasm go build ./... && GOOS=js GOARCH=wasm go vet ./...' || platforms_ok=0
+if [ "$platforms_ok" = 1 ]; then receipt go.mod platforms "darwin/arm64 windows/amd64 js/wasm"; fi
+
+# the codec's fuzz targets, each for MESSAGE_TEST_FUZZTIME, derived from the source so a new target
+# is fuzzed without anyone listing it here
+fuzz_targets=$(grep -ho '^func Fuzz[A-Za-z0-9_]*' syntax/*_test.go | sed 's/^func //' | sort -u)
+if [ -z "$fuzz_targets" ]; then
+  fail "syntax: fuzz targets" "found none in syntax/*_test.go; the scan is broken, not the package"
+else
+  fuzz_ok=1
+  for target in $fuzz_targets; do
+    run "syntax: $target for $fuzztime" go test ./syntax -run=NONE -fuzz="^$target\$" -fuzztime="$fuzztime" || fuzz_ok=0
+  done
+  if [ "$fuzz_ok" = 1 ]; then receipt go.mod fuzz "$(printf '%s' "$fuzz_targets" | tr '\n' ' ')for $fuzztime each"; fi
+  if [ "$fuzztime" != 60s ]; then narrowings+=("fuzz targets ran $fuzztime each, not 60s"); fi
+fi
+
+# the wire corpus against connect from before the removal: the corpus's pinned base lines are what
+# connect's copy emits, byte for byte, and each emission decodes into the other build's types. The
+# count and digest are read from the test that pins them, so there is one place to change them.
+wiregolden() {
+  local mod=protocol/testdata/wiregolden/go.mod dir=protocol/testdata/wiregolden lines sha
+  lines=$(sed -n 's/^[[:space:]]*wireGoldenBaseLines[[:space:]]*=[[:space:]]*\([0-9][0-9]*\)$/\1/p' protocol/message_wiregolden_test.go)
+  sha=$(sed -n 's/^[[:space:]]*wireGoldenBaseSha256[[:space:]]*=[[:space:]]*"\([0-9a-f]\{64\}\)"$/\1/p' protocol/message_wiregolden_test.go)
+  if [ -z "$lines" ] || [ -z "$sha" ]; then fail "wire corpus: read the pinned base" "protocol/message_wiregolden_test.go"; return; fi
+  run "$dir: go mod verify" go -C "$dir" mod verify && receipt "$mod" verify
+  run "$dir: the emitter's tests under connect-golden's schema" go -C "$dir" test -count=1 -tags orig . && receipt "$mod" test:orig
+  run "$dir: the emitter's tests under this repository's schema" go -C "$dir" test -count=1 -tags new . && receipt "$mod" test:new
+  if ! (cd "$dir" && go run -tags orig . emit > "$work/orig.tsv" && go run -tags new . emit > "$work/new.tsv"); then
+    fail "wire corpus: emit under both schemas"
+    return
+  fi
+  head -n "$lines" protocol/testdata/wire-golden.tsv > "$work/base.tsv"
+  run "wire corpus: the base's $lines lines hash to the pinned $sha" \
+    bash -c "printf '%s  %s\n' '$sha' '$work/base.tsv' | sha256sum -c -" && receipt "$mod" base-pinned "$lines"
+  cp "$work/orig.tsv" "$work/orig.control"
+  printf 'x' >> "$work/orig.control"
+  if cmp -s "$work/base.tsv" "$work/orig.control"; then
+    fail "wire corpus: cmp's control" "cmp cannot see a changed byte"
+  elif run "wire corpus: connect-golden emits the base byte for byte" cmp "$work/base.tsv" "$work/orig.tsv"; then
+    receipt "$mod" cmp-connect-golden
+  fi
+  run "wire corpus: connect's emission decodes into this repository's types identically" \
+    bash -c "cd '$dir' && go run -tags new . check '$work/orig.tsv'" && receipt "$mod" cross-decode:new
+  run "wire corpus: the base decodes into connect-golden's types identically" \
+    bash -c "cd '$dir' && go run -tags orig . check '$work/base.tsv'" && receipt "$mod" cross-decode:orig
+}
+wiregolden
+
+# protocol/message.pb.go is generated once from message.proto by the pinned pair; regenerated here
+# into a scratch directory and compared, so the committed Go can be neither hand-edited nor stale
+regenerate() {
+  local protoc="" gen="" cache zip
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/urnetwork-message"
+  for candidate in "${PROTOC:-}" "$(command -v protoc 2> /dev/null)"; do
+    if [ -n "$candidate" ] && "$candidate" --version 2> /dev/null | grep -qx 'libprotoc 35.1'; then protoc=$candidate; break; fi
+  done
+  if [ -z "$protoc" ] && [ "$goos/$goarch" = linux/amd64 ]; then
+    zip=protoc-35.1-linux-x86_64.zip
+    mkdir -p "$cache/protoc-35.1"
+    if [ ! -x "$cache/protoc-35.1/bin/protoc" ]; then
+      curl -fsSLo "$cache/$zip" "https://github.com/protocolbuffers/protobuf/releases/download/v35.1/$zip" &&
+        echo "6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7  $cache/$zip" | sha256sum -c - &&
+        python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$cache/$zip" "$cache/protoc-35.1" &&
+        chmod +x "$cache/protoc-35.1/bin/protoc"
+    fi
+    if "$cache/protoc-35.1/bin/protoc" --version 2> /dev/null | grep -qx 'libprotoc 35.1'; then protoc="$cache/protoc-35.1/bin/protoc"; fi
+  fi
+  if [ -z "$protoc" ]; then
+    skip "protocol: regenerate message.pb.go" "no protoc 35.1 on this host (set PROTOC; linux x86-64 fetches it)"
+    return
+  fi
+  for candidate in "$(dirname "$protoc")/protoc-gen-go" "$(dirname "$protoc")/protoc-gen-go.exe" "$(command -v protoc-gen-go 2> /dev/null)" "$cache/gobin/protoc-gen-go" "$cache/gobin/protoc-gen-go.exe"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version 2> /dev/null | grep -qx 'protoc-gen-go v1.36.11'; then gen=$candidate; break; fi
+  done
+  if [ -z "$gen" ]; then
+    GOBIN="$cache/gobin" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 || { fail "protocol: install protoc-gen-go v1.36.11"; return; }
+    gen="$cache/gobin/protoc-gen-go"
+    [ -x "$gen" ] || gen="$gen.exe"
+  fi
+  mkdir -p "$work/protoc"
+  if ! (cd protocol && PATH="$(dirname "$gen"):$PATH" "$protoc" -I=. --go_out="$work/protoc" --go_opt=paths=source_relative message.proto); then
+    fail "protocol: regenerate message.pb.go"
+    return
+  fi
+  cp "$work/protoc/message.pb.go" "$work/protoc/control.pb.go"
+  printf '// control\n' >> "$work/protoc/control.pb.go"
+  if cmp -s "$work/protoc/control.pb.go" protocol/message.pb.go; then fail "protocol: the regeneration's control" "cmp cannot see a changed line"; return; fi
+  run "protocol: message.pb.go is exactly what $("$protoc" --version) and $("$gen" --version) generate" \
+    cmp "$work/protoc/message.pb.go" protocol/message.pb.go
+}
+regenerate
+
+# the SDK module, its platforms, and the modules beneath it
+go_module sdk/go.mod sdk
+# the SDK is linked into the native libraries for darwin and windows, and its stream store carries an
+# exclusion file per platform family; each must build
+platforms_ok=1
+run "sdk: darwin/arm64 build" env GOOS=darwin GOARCH=arm64 go -C sdk build ./... || platforms_ok=0
+run "sdk: windows/amd64 build and vet" bash -c 'GOOS=windows GOARCH=amd64 go -C sdk build ./... && GOOS=windows GOARCH=amd64 go -C sdk vet ./...' || platforms_ok=0
+if [ "$platforms_ok" = 1 ]; then receipt sdk/go.mod platforms "darwin/arm64 windows/amd64"; fi
+go_module sdk/livepeer/go.mod sdk/livepeer
+go_module sdk/liveprobe/go.mod sdk/liveprobe
+go_module sdk/cp3b/go.mod sdk/cp3b
+
+# the native library: the core SDK's cgo package main with sdk/cgo laid beside it
+native() {
+  local mod=sdk/cgo/go.mod dir=sdk/cgo library header exports_out
+  if ! run "sdk/cgo: compose the core SDK's cgo package main" bash sdk/cgo/compose.sh; then return; fi
+  composed=1
+  receipt "$mod" compose "$(grep -vc '^#' sdk/cgo/.composed) core files"
+  run "sdk/cgo: go mod verify" go -C "$dir" mod verify && receipt "$mod" verify
+  # go.mod is tidy over the composed tree WITHOUT the loopback harness, which only loopback.go.mod
+  # builds (it adds the message server); loopback.go.mod is tidy over all of it
+  hidden="$work/loopback_test_world.go"
+  mv sdk/cgo/loopback_test_world.go "$hidden"
+  run "sdk/cgo: go mod tidy -diff, the composed tree without the loopback harness" go -C "$dir" mod tidy -diff && receipt "$mod" tidy
+  mv "$hidden" sdk/cgo/loopback_test_world.go
+  hidden=""
+  run "sdk/cgo: go mod tidy -diff -modfile=loopback.go.mod" go -C "$dir" mod tidy -modfile=loopback.go.mod -diff &&
+    receipt sdk/cgo/loopback.go.mod tidy
+  run "sdk/cgo: the .def gen writes is the committed one" \
+    bash -c 'cd sdk/cgo && go run ./gen && git diff --exit-code -- include/urnetwork_sdk.def' && receipt "$mod" def-current
+  if [ "$cc_ok" = 1 ]; then
+    case "$goos" in
+      windows) library=build/library/URnetworkSdk.dll ;;
+      darwin) library=build/library/libURnetworkSdk.dylib ;;
+      *) library=build/library/libURnetworkSdk.so ;;
+    esac
+    header="${library%.*}.h"
+    mkdir -p "$dir/build/library"
+    rm -f "$dir/$library" "$dir/$header"
+    # the core SDK's release recipe (its cgo/Makefile): -trimpath, greenteagc, and the version
+    if run "sdk/cgo: build URnetworkSdk, c-shared, the core's release flags (Version=$version)" \
+      env CGO_ENABLED=1 GOEXPERIMENT=greenteagc go -C "$dir" build -trimpath -buildmode=c-shared \
+      -ldflags "-s -w -X github.com/urnetwork/sdk.Version=$version -buildid=" -o "$library" .; then
+      receipt "$mod" library "$dir/$library $(wc -c < "$dir/$library" | tr -d ' ')"
+      exports_out=$(bash scripts/native-exports.sh "$dir" "$dir/$header" "$dir/$library")
+      local exports_status=$?
+      echo "$exports_out"
+      if [ "$exports_status" = 0 ]; then
+        pass "sdk/cgo: the library's exports are the .def's names, both ways"
+        receipt "$mod" exports "$(printf '%s\n' "$exports_out" | sed -n 's/^header: \([0-9]*\) exports.*/\1/p')"
+      else
+        fail "sdk/cgo: the library's exports are the .def's names, both ways"
+      fi
+    fi
+  else
+    skip "sdk/cgo: the c-shared library and its exports" "no C compiler on this host"
+  fi
+  run "sdk/cgo: go vet ./..." go -C "$dir" vet ./... && receipt "$mod" vet
+  run "sdk/cgo: go test ${race[*]:-} ./..." go -C "$dir" test -count=1 "${race[@]}" -timeout "$timeout" ./... && receipt "$mod" test "${race[*]:-norace}"
+  receipt "$mod" protobuf "$(go -C "$dir" list -m -f '{{.Version}}' google.golang.org/protobuf)"
+  if [ "$cc_ok" = 1 ]; then
+    run "sdk/cgo: the loopback library and its C consumer (ctest/run.sh)" bash sdk/cgo/ctest/run.sh && receipt sdk/cgo/loopback.go.mod ctest
+  else
+    skip "sdk/cgo: the loopback library and its C consumer" "no C compiler on this host"
+  fi
+}
+native
+
+# ---------------------------------------------------------------- 7. the census over what ran
+run "module census: every row's receipts" bash scripts/module-census.sh --receipts "$receipts"
+
+# ---------------------------------------------------------------- the verdict
+echo
+echo "================================================================ summary"
+failed=0
+for result in "${results[@]}"; do
+  IFS='|' read -r status name detail <<< "$result"
+  printf '%-8s %s%s\n' "$status" "$name" "${detail:+ ($detail)}"
+  if [ "$status" = FAIL ]; then failed=$((failed + 1)); fi
+done
+if [ "${#narrowings[@]}" -gt 0 ]; then
+  echo
+  echo "NARROWER THAN THE FULL RUN:"
+  printf '  %s\n' "${narrowings[@]}"
+fi
+echo
+if [ "$failed" = 0 ]; then
+  if [ "${#narrowings[@]}" -gt 0 ]; then echo "VERDICT: PASS, narrower than the full run (above)"; else echo "VERDICT: PASS"; fi
+  exit 0
+fi
+echo "VERDICT: FAIL ($failed failed)"
+exit 1

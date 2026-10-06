@@ -82,7 +82,7 @@ var layeringRules = map[string]layeringRule{
 		reason: "this gate: standard library only",
 	},
 	"internal/repository": {
-		reason: "the repository-wide checks (NOTICE coverage): standard library only",
+		reason: "the repository-wide checks (NOTICE coverage, the root go.mod's boundary): standard library only",
 	},
 
 	// THE SDK MODULE (github.com/urnetwork/message/sdk) and the modules nested in it. Each package
@@ -285,7 +285,7 @@ func layeringViolations(scan repositoryScan, rules map[string]layeringRule, serv
 		violations = append(violations, fmt.Sprintf(format, args...))
 	}
 	if files, found := scan.files["."]; found {
-		report("the repository root holds Go source (%s); it holds module metadata, documentation and CI only", strings.Join(files, ", "))
+		report("the repository root holds Go source (%s); it holds module metadata, documentation and test.sh only", strings.Join(files, ", "))
 	}
 	for dir := range rules {
 		if _, found := scan.files[dir]; !found {

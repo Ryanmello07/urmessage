@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bash .github/scripts/native-exports.sh <sdk/cgo directory> <cgo header of the built library> [<library>]
+# Usage: bash scripts/native-exports.sh <sdk/cgo directory> <cgo header of the built library> [<library>]
 #
 # The composed native library's exports, held both ways against its .def. Run after a
 # `go build -buildmode=c-shared` of the composed sdk/cgo, with the header that build writes beside
