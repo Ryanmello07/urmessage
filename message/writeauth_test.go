@@ -2891,54 +2891,14 @@ func TestEveryPackageBuiltOnThisOneIsUnderTheConstantTimeGate(t *testing.T) {
 		}
 		covered[filepath.Clean(resolved)] = true
 	}
-	directories, importers := 0, []string{}
-	fileSet := token.NewFileSet()
-	walked := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			// testdata holds fixtures that are deliberately not buildable, and .git is not
-			// source at all
-			if entry.Name() == "testdata" || entry.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			directories++
-			return nil
-		}
-		if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-			return nil
-		}
-		parsed, err := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		for _, spec := range parsed.Imports {
-			imported, err := strconv.Unquote(spec.Path.Value)
-			if err != nil {
-				return fmt.Errorf("%s: an import path that is not a string: %s", path, spec.Path.Value)
-			}
-			if imported != self {
-				continue
-			}
-			directory := filepath.Clean(filepath.Dir(path))
-			if walked[directory] {
-				continue
-			}
-			walked[directory] = true
-			importers = append(importers, directory)
-		}
-		return nil
-	})
+	walk, err := authImportersOf(root, self)
 	if err != nil {
 		t.Fatalf("walking %s for the packages built on this one: %v", root, err)
 	}
-	if directories == 0 {
+	if walk.directories == 0 {
 		t.Fatalf("the walk of %s entered no directory, so it would clear every package in the module having read nothing", root)
 	}
-	slices.Sort(importers)
-	for _, directory := range importers {
+	for _, directory := range walk.importers {
 		if covered[directory] {
 			continue
 		}
@@ -2946,5 +2906,142 @@ func TestEveryPackageBuiltOnThisOneIsUnderTheConstantTimeGate(t *testing.T) {
 			directory, self, authScanRoots)
 	}
 	t.Logf("%d directories walked under %s, %d production packages import %s: %v; authScanRoots covers %v",
-		directories, root, len(importers), self, importers, authScanRoots)
+		walk.directories, root, len(walk.importers), self, walk.importers, authScanRoots)
+	// THE COMPLEMENT OF THE MODULE BOUNDARY, printed and not asserted. A nested module is another
+	// module's source, and the rules authScanRoots run read this module's; its importers of this
+	// package are a hardening item of their own, not a gap this gate closes by widening.
+	t.Logf("COMPLEMENT: %d nested module(s) not walked: %v; production packages in them importing %s: %d %v",
+		len(walk.nestedModules), walk.nestedModules, self, len(walk.nestedImporters), walk.nestedImporters)
+}
+
+// authImportWalk is what one walk for the importers of a package found.
+type authImportWalk struct {
+	directories int
+	// importers is every production package directory of the walked module importing the package.
+	importers []string
+	// nestedModules is every directory below the root holding its own go.mod, not walked.
+	nestedModules []string
+	// nestedImporters is the production package directories inside those modules importing the
+	// package: the complement of the module boundary, read so it can be printed.
+	nestedImporters []string
+}
+
+// authImportersOf walks the module rooted at root for the production packages importing self.
+//
+// IT STOPS AT A NESTED go.mod. In connect the module root held nothing but connect's packages; in
+// this repository the root also holds nested modules (sdk, and the modules nested in it), whose
+// source is another module's. A directory below root holding its own go.mod is listed in
+// nestedModules and not walked as this module; its importers of self are read separately, into
+// nestedImporters, so the boundary's complement is a list and not a silence. testdata holds
+// fixtures that are deliberately not buildable, and .git is not source at all, so both are
+// skipped in either half.
+func authImportersOf(root string, self string) (authImportWalk, error) {
+	walk := authImportWalk{}
+	fileSet := token.NewFileSet()
+	importerSeen := map[string]bool{}
+	nestedSeen := map[string]bool{}
+	var visit func(base string, nested bool) error
+	visit = func(base string, nested bool) error {
+		return filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				if entry.Name() == "testdata" || entry.Name() == ".git" {
+					return filepath.SkipDir
+				}
+				if !nested && path != base {
+					if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+						walk.nestedModules = append(walk.nestedModules, filepath.Clean(path))
+						if err := visit(path, true); err != nil {
+							return err
+						}
+						return filepath.SkipDir
+					}
+				}
+				if !nested {
+					walk.directories++
+				}
+				return nil
+			}
+			if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				return nil
+			}
+			parsed, err := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
+			if err != nil {
+				return fmt.Errorf("parse %s: %w", path, err)
+			}
+			for _, spec := range parsed.Imports {
+				imported, err := strconv.Unquote(spec.Path.Value)
+				if err != nil {
+					return fmt.Errorf("%s: an import path that is not a string: %s", path, spec.Path.Value)
+				}
+				if imported != self {
+					continue
+				}
+				directory := filepath.Clean(filepath.Dir(path))
+				if nested {
+					if !nestedSeen[directory] {
+						nestedSeen[directory] = true
+						walk.nestedImporters = append(walk.nestedImporters, directory)
+					}
+					continue
+				}
+				if !importerSeen[directory] {
+					importerSeen[directory] = true
+					walk.importers = append(walk.importers, directory)
+				}
+			}
+			return nil
+		})
+	}
+	if err := visit(root, false); err != nil {
+		return walk, err
+	}
+	slices.Sort(walk.importers)
+	slices.Sort(walk.nestedModules)
+	slices.Sort(walk.nestedImporters)
+	return walk, nil
+}
+
+// The importer walk holds the module boundary both ways, on a fixture: a production package of
+// the walked module that imports the package is an importer, wherever it sits; one inside a
+// nested module is not, and is listed in the complement instead, with the module; a test file's
+// import and a testdata file's import are neither.
+func TestTheConstantTimeImporterWalkStopsAtANestedModule(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string, body string) {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const self = "example.com/m/message"
+	importing := "package p\n\nimport _ \"" + self + "\"\n"
+	write("go.mod", "module example.com/m\n")
+	write("message/message.go", "package message\n")
+	write("elsewhere/uses.go", importing)
+	write("elsewhere/uses_test.go", importing)
+	write("elsewhere/testdata/fixture.go", importing)
+	write("nested/go.mod", "module example.com/m/nested\n")
+	write("nested/inner/uses.go", importing)
+	walk, err := authImportersOf(root, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{filepath.Join(root, "elsewhere")}; !slices.Equal(walk.importers, want) {
+		t.Errorf("importers %v, want %v: a root-module package importing this one must be found, and a nested module's must not be", walk.importers, want)
+	}
+	if want := []string{filepath.Join(root, "nested")}; !slices.Equal(walk.nestedModules, want) {
+		t.Errorf("nested modules %v, want %v", walk.nestedModules, want)
+	}
+	if want := []string{filepath.Join(root, "nested", "inner")}; !slices.Equal(walk.nestedImporters, want) {
+		t.Errorf("nested importers %v, want %v: the boundary's complement must be read, not dropped", walk.nestedImporters, want)
+	}
+	if walk.directories != 3 {
+		t.Errorf("walked %d directories of the module, want 3 (the root, message, elsewhere)", walk.directories)
+	}
 }

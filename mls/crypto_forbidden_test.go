@@ -94,6 +94,8 @@ func urmessageScanRoots() []string {
 // remembers to widen a list.
 //
 // It is measured over the whole module and the answer today is exactly the three roots above.
+// The whole MODULE, not the whole repository: the walk stops at a nested go.mod (sdk/ and the
+// modules inside it), which is another module's source, and prints what it stopped at.
 // mls/syntax is in the component and is NOT in the class, because it imports no crypto at all --
 // it is a codec -- and on the day it imports one it becomes a scan root here rather than a hole.
 // The module's root package, blocker and extender all do cryptography and are NOT in the
@@ -141,6 +143,9 @@ func cryptographicUrmessageDirectories(t *testing.T) ([]string, []string) {
 	edges := map[string][]string{}
 	fileSet := token.NewFileSet()
 	frontier := []string{moduleRoot}
+	// nested is every directory below the module root holding its own go.mod: another module,
+	// which this walk does not enter. See the stop below.
+	nested := []string{}
 	for 0 < len(frontier) {
 		dir := frontier[len(frontier)-1]
 		frontier = frontier[:len(frontier)-1]
@@ -162,7 +167,21 @@ func cryptographicUrmessageDirectories(t *testing.T) ([]string, []string) {
 				if strings.HasPrefix(name, ".") || name == "testdata" || name == "vendor" {
 					continue
 				}
-				frontier = append(frontier, filepath.Join(dir, name))
+				// THE WALK STOPS AT A NESTED go.mod. A directory holding its own go.mod is another
+				// module: the go tool's floor below does not list it, and this module's guardrails
+				// do not read it. The repository's sdk/ is one, and it imports crypto and is
+				// connected to messagegroup, so a walk that entered it would derive its packages
+				// into a class no root here covers; the SDK's own crypto-scope gate holds them.
+				child := filepath.Join(dir, name)
+				if _, err := os.Stat(filepath.Join(child, "go.mod")); err == nil {
+					childKey, err := filepath.Rel(moduleRoot, child)
+					if err != nil {
+						t.Fatalf("place %s inside the module: %v", child, err)
+					}
+					nested = append(nested, filepath.ToSlash(childKey))
+					continue
+				}
+				frontier = append(frontier, child)
 				continue
 			}
 			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -202,6 +221,13 @@ func cryptographicUrmessageDirectories(t *testing.T) ([]string, []string) {
 	}
 	if !holdsSource[ownKey] {
 		t.Fatalf("the walk found no production source in %s, which is the package it is running in", ownKey)
+	}
+	// THE STOP, EXERCISED ON EVERY RUN: sdk/ is a nested module that does cryptography and is
+	// connected to this one, so it is the fixture the stop exists for. Printed as out of scope.
+	slices.Sort(nested)
+	t.Logf("OUT OF SCOPE: %d nested module(s), not walked and not in the go tool's floor: %v", len(nested), nested)
+	if !slices.Contains(nested, "sdk") {
+		t.Fatalf("CONTROL FAILED: the walk did not stop at sdk/go.mod (nested modules: %v), so the stop this derivation relies on was not exercised", nested)
 	}
 	if !doesCrypto[ownKey] {
 		t.Fatalf("%s reads as importing no crypto package at all, so the class this rule derives cannot contain the package whose guardrails it is checking", ownKey)
