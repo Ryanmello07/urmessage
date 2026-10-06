@@ -88,6 +88,12 @@ message/testdata/fuzz/** -text
 # promotion to a peer package, and no rule above names its new place.
 syntax/testdata/fuzz/** -text
 
+# protocol/testdata/wire-golden.tsv is the wire corpus: a digest-pinned list of encodings, held
+# append-only by protocol/message_wiregolden_test.go and compared byte for byte with connect's
+# emission in CI, so a checkout must hand it over as the bytes git stores. Only the corpus: the
+# emitter beside it is Go, and stays under *.go text eol=lf, which mls's line-ending gate holds.
+protocol/testdata/wire-golden.tsv -text
+
 # Shell scripts run under bash on every runner, Git Bash on Windows included, and bash reads a
 # carriage return as part of the command. .github/scripts/siblings.sh is how CI checks out its
 # siblings; a CRLF checkout of it fails with "$'\r': command not found" rather than cloning.
