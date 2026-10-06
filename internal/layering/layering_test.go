@@ -77,6 +77,9 @@ var layeringRules = map[string]layeringRule{
 	"internal/layering": {
 		reason: "this gate: standard library only",
 	},
+	"internal/repository": {
+		reason: "the repository-wide checks (NOTICE coverage): standard library only",
+	},
 }
 
 // The server-safe packages, named one by one (MESSAGEREVIEW.md, "Preserve the server and

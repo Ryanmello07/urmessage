@@ -10,3 +10,39 @@ URnetwork repositories keep the copyright notices of those repositories:
     Copyright (c) 2024 BringYour, Inc.    github.com/urnetwork/sdk
 
 docs/HISTORY.md lists every import with its source repository and commit.
+
+Third-party test vectors
+
+The files below were written by others and are vendored as test data only; none
+is compiled into any package. Each "Path:" line is a pattern over the
+repository's files (a * stays inside one directory). internal/repository's
+TestEveryVendoredCorpusHasANoticeRow holds this section to the tree: every file
+under a testdata/vectors/ directory matches a row here or is one of the
+repository's own bookkeeping files listed there, and every row matches a file.
+
+Path: mls/testdata/vectors/*.json
+    Source: github.com/mlswg/mls-implementations, commit
+    cfd450286d1bfd9cd2519b95c80f9771f94a5b1a, test-vectors/, 16 files. Their
+    content is upstream's; their lines end in CRLF where upstream's end in LF
+    (mls/vectors_upstream_test.go holds each, line endings normalised, to its
+    upstream blob).
+    Terms: that repository publishes no license, so no license to these files
+    is granted here. They are vendored as test data only, pending a license
+    statement from the mlswg maintainers.
+
+Path: mls/testdata/vectors/rfc/hpke-rfc9180-x25519.json
+    Source: github.com/cfrg/draft-irtf-cfrg-hpke, commit
+    b1f7cb0cdeab6906c61b3d6574e8bdfdbe1cd3fb, test-vectors.json, filtered to
+    the two base-mode X25519 suites MLS registers; mls/interop/PINS.md gives
+    the transform and both digests.
+    Terms: Contributions to the IETF Standards Process under BCP 78, BCP 79
+    and the IETF Trust Legal Provisions, as that repository's CONTRIBUTING.md
+    states.
+
+Path: messagegroup/testdata/vectors/rfc/xwing-draft10.json
+    Source: github.com/dconnolly/draft-connolly-cfrg-xwing-kem, commit
+    9b6ce9e614811dba8d46841052f3883cbc4c1a65, spec/test-vectors.json, whole
+    and unmodified.
+    Terms: Contributions to the IETF Standards Process under BCP 78, BCP 79
+    and the IETF Trust Legal Provisions, as that repository's CONTRIBUTING.md
+    states.
