@@ -6,3 +6,11 @@
 # sdk: the core SDK, read (never built) by message/record_test.go's sdk-sibling job until the
 # messaging SDK moves into this repository. urnetwork/sdk main at 2026-10-05 06:21Z.
 sdk https://github.com/urnetwork/sdk.git 1ca8b35a43cfc00f5c4b8135470ab3347bd5c34e
+#
+# connect-golden: urnetwork/connect from BEFORE the messaging schema left it (the merge of #217,
+# 2026-10-05 09:10Z; protocol/message.pb.go is the copy this repository's was regenerated from).
+# protocol.yml's wire-golden job emits the corpus from it with -tags orig.
+connect-golden https://github.com/urnetwork/connect.git 92a657fadab90293b86703dd0c333b95595cffe9
+#
+# connect: read as text for frame.proto by protocol.yml's frame-code-points job.
+connect https://github.com/urnetwork/connect.git 92a657fadab90293b86703dd0c333b95595cffe9
