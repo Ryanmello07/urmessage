@@ -411,7 +411,14 @@ native() {
     # the C consumer, sdk/cgo/ctest/message_abi_test.c, is a Windows program (windows.h, CreateThread),
     # as it was in the core SDK; ctest/run.sh builds it against the loopback library and runs it
     if [ "$goos" = windows ]; then
-      run "sdk/cgo: the loopback library's C consumer (ctest/run.sh)" bash sdk/cgo/ctest/run.sh && receipt sdk/cgo/loopback.go.mod ctest
+      # run.sh then runs the consumer again against a -race build of the library. When
+      # ThreadSanitizer cannot map its shadow memory into the loaded dll, it prints RACE PASS DID NOT
+      # RUN ON THIS HOST and does not fail, so the verdict names that pass as not run
+      c_consumer() { bash sdk/cgo/ctest/run.sh 2>&1 | tee "$work/ctest.log"; return "${PIPESTATUS[0]}"; }
+      run "sdk/cgo: the loopback library's C consumer (ctest/run.sh)" c_consumer && receipt sdk/cgo/loopback.go.mod ctest
+      if grep -q 'RACE PASS DID NOT RUN ON THIS HOST' "$work/ctest.log" 2>/dev/null; then
+        narrowings+=("the C consumer's second pass, against a -race build of the loopback library, did not run: ThreadSanitizer could not map its shadow memory into the dll (ctest/run.sh); go test -race over sdk/cgo held the handle registry instead")
+      fi
     else
       narrowings+=("the loopback library's C consumer (sdk/cgo/ctest/message_abi_test.c) is a Windows program, windows.h and CreateThread: a Windows run builds and runs it")
     fi
