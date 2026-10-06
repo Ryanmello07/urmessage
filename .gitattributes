@@ -99,6 +99,14 @@ protocol/testdata/wire-golden.tsv -text
 # siblings; a CRLF checkout of it fails with "$'\r': command not found" rather than cloning.
 *.sh text eol=lf
 
+# The native ABI's C sources: sdk/cgo's callbacks and header, and the C harness under
+# sdk/cgo/ctest. They arrived with the SDK at stage 3. A compiler reads either ending, so this is
+# not about building them: the header is held to the Go exports by text (the messaging header's
+# currentness gates), and an edit anchored on one ending matches nothing in a file checked out
+# with the other, the failure the first paragraph of this file describes. The blobs are LF already.
+*.c text eol=lf
+*.h text eol=lf
+
 # messagegroup/testdata/eph-window-kat.txt is ONE HALF OF A PAIR. msgrepo carries the same 57
 # answers, byte for byte, at its own module root, and each repository drives its own copy of
 # MASTER section 8's sender formula over them. That is the only fastening available: Spec B
