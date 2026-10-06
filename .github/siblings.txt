@@ -1,0 +1,8 @@
+# Sibling checkouts CI places beside this repository, each at ONE pinned commit, by
+# .github/scripts/siblings.sh, which refuses an unpinned name, a short or symbolic commit and a
+# URL outside https://github.com/urnetwork/. Bump a pin in its own commit.
+# name  url  commit
+#
+# sdk: the core SDK, read (never built) by message/record_test.go's sdk-sibling job until the
+# messaging SDK moves into this repository. urnetwork/sdk main at 2026-10-05 06:21Z.
+sdk https://github.com/urnetwork/sdk.git 1ca8b35a43cfc00f5c4b8135470ab3347bd5c34e

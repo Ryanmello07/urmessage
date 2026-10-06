@@ -62,3 +62,24 @@ jobs:
             exit 1
           fi
           go mod verify
+
+      # .github/scripts/siblings.sh is how every job gets a sibling checkout, so its refusals are
+      # checked here: every pin in .github/siblings.txt passes them, and three pins it must refuse
+      # (a fork URL, a branch name, a path escaping the organization) are refused.
+      - name: The sibling pins are full commits from urnetwork, and a bad pin is refused
+        run: |
+          set -eu
+          names=$(grep -Ev '^[[:space:]]*(#|$)' .github/siblings.txt | awk '{print $1}')
+          test -n "$names"
+          bash .github/scripts/siblings.sh --check $names
+          bad=$(mktemp)
+          for pin in \
+            "sdk https://github.com/Ryanmello07/urnetwork-sdk.git 1ca8b35a43cfc00f5c4b8135470ab3347bd5c34e" \
+            "sdk https://github.com/urnetwork/sdk.git main" \
+            "sdk https://github.com/urnetwork/../Ryanmello07/urnetwork-sdk.git 1ca8b35a43cfc00f5c4b8135470ab3347bd5c34e"; do
+            printf '%s\n' "$pin" > "$bad"
+            if SIBLINGS_FILE="$bad" bash .github/scripts/siblings.sh --check sdk; then
+              echo "siblings.sh accepted a pin it must refuse: $pin"
+              exit 1
+            fi
+          done
