@@ -18,8 +18,9 @@ and message, and changes its id, so each import publishes a commit map: one
 |---|---|---|---|---|---|---|
 | 1 | `CODESTYLE.md` | connect `e449f7d8` | `d3b3b26a` | 24 | 1 | `e52b05a1` |
 | 2a | `message/`, `messagegroup/`, `mls/`, `mls/syntax/` as `syntax/`, `.gitattributes`, the codec's workflow | connect `e449f7d8` | `fbbc842d` | 465 | 837 | `a456b1cd` |
+| 2b | `protocol/message*` | connect `e449f7d8` | `28a9c4f1` | 10 | 8 | `0ebd54f6` |
 
-Later stages add their rows: 2b (`protocol/message*`) and 3 (the messaging SDK).
+Stage 3 (the messaging SDK) adds its row.
 
 ### Stage 1: CODESTYLE.md
 
@@ -66,6 +67,36 @@ Later stages add their rows: 2b (`protocol/message*`) and 3 (the messaging SDK).
   move could have narrowed, measured in connect and here, and who keeps each gate's
   non-moved half.
 
+### Stage 2b: the messaging schema
+
+- Source: the same `Ryanmello07/connect` `e449f7d8`. These eight files are blob-identical in
+  `urnetwork/connect` `7ca8e222` and `92a657fa`.
+- Filter: [connect-protocol-paths.txt](history/connect-protocol-paths.txt):
+  `protocol/message*` only; `frame.proto`, `subprotocol.proto` and connect's Makefile stay.
+- Imported: `28a9c4f132e3d7a266021e902eee8dc2f2451cea`, the 10 commits that change those
+  files. Four of them (`549bf3fc`, `6bbb77cd`, `8ddba71b`, `96e6b461`) also changed stage 2a
+  files, so they appear in both imported histories, each time with only its own side's files.
+- Commit map: [connect-protocol-commit-map.txt](history/connect-protocol-commit-map.txt),
+  10 rows.
+- Merged by `0ebd54f6a1a5192d9e9fe44dabbea6c597421c2f`, whose message carries the verifier's
+  summary for that merge.
+- Adapted by: `go_package` moved and `message.pb.go` regenerated once (a 7-byte diff); the
+  tests' imports rewritten; the frame code-point checks split (their numbers stay with
+  `frame.proto` in connect; their names are held here, reading `frame.proto` as text); the
+  wire corpus and its emitter; the append-only rule over the corpus; the schema's layering row;
+  CI.
+- The schema moves whole, at the same time connect drops its copy: there is no interim in
+  which two copies are linked, and no freeze. The corpus that connect's copy emitted is
+  [protocol/testdata/wire-golden.tsv](../protocol/testdata/wire-golden.tsv) (197 items, sha256
+  `9b5772b7...`); this package emits the same bytes, CI re-emits it from a pinned connect from
+  before the move, and `protocol/message_wiregolden_test.go` holds it append-only.
+- Scope: `TestNothingHereComputesTheAttestationPreimage` walks the repository root. In
+  connect it read 1,587 Go files and here 253, and it finds every label in the same files in
+  both (`message/writeauth.go`, `message/attachment.go` and their tests,
+  `messagegroup/keysource_test.go`, `protocol/message_op_test.go`; the attestation label in
+  none). Connect's remaining files hold none of them; the connect removal PR deletes the test
+  there with the code it was about.
+
 ## Re-running the verifier
 
 [verify_split.py](history/verify_split.py) proves, for every import the tip holds:
@@ -87,7 +118,7 @@ checkout:
     git init --bare ../connect-src.git
     git -C ../connect-src.git fetch https://github.com/Ryanmello07/connect.git e449f7d8126c0b5748f5083392a8855bac877b32:refs/heads/main
     git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git 7ca8e222e3496552146f2d97eb09237401662c99:refs/remotes/upstream/control
-    python3 docs/history/verify_split.py --sides connect-codestyle,connect-core --connect ../connect-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt --commit-map connect-core=docs/history/connect-core-commit-map.txt --manifest docs/history/adaptations.tsv
+    python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol --connect ../connect-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt --commit-map connect-core=docs/history/connect-core-commit-map.txt --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt --manifest docs/history/adaptations.tsv
 
 It must end with `PASS`. `--controls` also runs negative controls that must fire:
 the source file one change earlier, and synthetic changes to the expected tree.
@@ -101,6 +132,7 @@ import; later stages add their sides to `--sides`.
 - `connect-codestyle-paths.txt`: the `--paths-from-file` input of the stage 1 filter.
 - `connect-codestyle-commit-map.txt`: stage 1's old and new commit ids.
 - `connect-core-paths.txt`, `connect-core-commit-map.txt`: the same for stage 2a.
+- `connect-protocol-paths.txt`, `connect-protocol-commit-map.txt`: the same for stage 2b.
 - `rewritepaths.go.txt`: the module-path rewrite tool, as run by the stage 2a rewrite
   commit.
 - `2a-scope.md`: stage 2a's scope record.

@@ -3,3 +3,4 @@
 # verifies, so a history rewritten after its verification fails.
 # One commit per line: <40-hex commit> <stage> <note>. Each stage appends the tip it verified.
 3d1d12b607df394e50503a71576790ef1f106944 1 split/1-scaffold: verify_split.py --sides connect-codestyle printed PASS on Windows and Ubuntu (connect-codestyle import e52b05a1 + scaffold)
+5b594dd58b04cdb02f905ebdd93b386a4f5169c2 2a split/import-all at stage 2a: verify_split.py --sides connect-codestyle,connect-core --manifest printed PASS on Windows; go test ./... ok on Windows
