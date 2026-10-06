@@ -20,9 +20,9 @@
 //     messagegroup, directly or transitively, nor anything of the sdk module, connect or the
 //     core SDK. The server-safe paths are named one by one; the subtree
 //     github.com/urnetwork/message is never allowed as a whole.
-//   - No Go file names connect's old paths for the moved packages
-//     (github.com/urnetwork/connect/{mls,message,messagegroup}) except where staleLiteralUses
-//     says why. Once anything here requires connect, a go/importer or go/types fixture spelled
+//   - No Go file names the old paths of the moved packages (connect's
+//     github.com/urnetwork/connect/{mls,message,messagegroup} and the core SDK's
+//     github.com/urnetwork/sdk/urmessage) except where staleLiteralUses says why. Once anything here requires connect, a go/importer or go/types fixture spelled
 //     that way type-checks connect's frozen copy without failing, so a stale spelling is a
 //     gate quietly judging the wrong code.
 //
@@ -84,6 +84,47 @@ var layeringRules = map[string]layeringRule{
 	"internal/repository": {
 		reason: "the repository-wide checks (NOTICE coverage): standard library only",
 	},
+
+	// THE SDK MODULE (github.com/urnetwork/message/sdk) and the modules nested in it. Each package
+	// has its row like any other; none of the foundational rows above names any of them, so no
+	// foundational package may import the SDK, and serverSafeForbidden keeps the whole subtree out
+	// of the server-safe closure. No row here names the core SDK (github.com/urnetwork/sdk): the
+	// messaging SDK does not depend on it, and only the native composition build, outside this
+	// tree, lays the two side by side.
+	"sdk": {
+		module:   []string{"message", "messagegroup", "mls", "protocol"},
+		external: []string{"github.com/urnetwork/connect", "github.com/gorilla/websocket", "github.com/gopacket/gopacket", "google.golang.org/protobuf"},
+		reason:   "the messaging SDK: the message-server binding, the route client, the stream store and the tunnel. It reaches the server through connect, so it imports connect and the client half; gopacket is its tunnel tests' packet helper",
+	},
+	"sdk/urmessage": {
+		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "syntax"},
+		external: []string{"github.com/urnetwork/connect", "google.golang.org/protobuf"},
+		reason:   "the device and group orchestration over the SDK's transport and stores",
+	},
+	"sdk/cgo": {
+		module:   []string{"messagegroup", "protocol", "sdk", "sdk/urmessage"},
+		external: []string{"github.com/urnetwork/connect", "github.com/urnetwork/message-server"},
+		reason:   "the messaging half of the native C ABI, built laid over the core SDK's cgo package main by the composition build; the loopback harness (loopback_test_world.go, its own modfile) runs a message server in-process",
+	},
+	"sdk/cgo/gen": {
+		module: []string{"sdk/urmessage"},
+		reason: "the C header's text limits, read against urmessage's own",
+	},
+	"sdk/cp3b": {
+		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "sdk/urmessage"},
+		external: []string{"github.com/urnetwork/connect", "github.com/urnetwork/message-server", "google.golang.org/protobuf"},
+		reason:   "the cross-process suite: devices against a real message server and its store",
+	},
+	"sdk/livepeer": {
+		module:   []string{"protocol", "sdk", "sdk/urmessage"},
+		external: []string{"github.com/urnetwork/connect"},
+		reason:   "the live peer command: one device on a real network",
+	},
+	"sdk/liveprobe": {
+		module:   []string{"messagegroup", "mls", "protocol", "sdk", "sdk/urmessage"},
+		external: []string{"github.com/urnetwork/connect"},
+		reason:   "the live probe command: a group's round trips against a deployment",
+	},
 }
 
 // The server-safe packages, named one by one (MESSAGEREVIEW.md, "Preserve the server and
@@ -99,9 +140,10 @@ var (
 	staleLiterals = []string{
 		"github.com/urnetwork/connect/mls",
 		"github.com/urnetwork/connect/message",
+		// the core SDK's path for the URmessage client, which lives here as sdk/urmessage
+		"github.com/urnetwork/sdk/urmessage",
 	}
 	staleLiteralUses = map[string]string{
-		"message/record_test.go":             "names the record layer's old import paths as patterns its sdk complement check detects in OTHER code; nothing is imported or type-checked under them",
 		"internal/layering/layering_test.go": "this gate: the stale spellings are its patterns, and its fixture plants them",
 	}
 )
@@ -337,7 +379,7 @@ func layeringViolations(scan repositoryScan, rules map[string]layeringRule, serv
 				used[file] = true
 				continue
 			}
-			report("%s names %s, connect's old path for a package that lives here now", file, literal)
+			report("%s names %s, an old path (connect's or the core SDK's) for a package that lives here now", file, literal)
 		}
 	}
 	for file := range staleUses {

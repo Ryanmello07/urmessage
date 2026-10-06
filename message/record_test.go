@@ -680,18 +680,19 @@ const (
 // of this gate's surface area, so it names a place and not a filename.
 var joinAllowedPaths = []string{"record.go"}
 
-// Where the sdk module sits, derived from where this module ends rather than written
-// down. sdk is a sibling repository of connect and not a directory inside it, so a root
-// of "../sdk" — which is what this said — resolves to connect/sdk and can never exist,
-// and the gate logged that it would cover sdk the day it appeared while that day could
-// not come. Walking up to the module root and stepping out of it is the same sentence in
-// code, and it cannot resolve to a path inside connect.
+// Where this repository's sdk/ sits, derived from where the root module ends rather than written
+// down. Until stage 3 this was a SIBLING checkout of urnetwork/sdk, which a tree could genuinely
+// lack, so its absence was logged and an environment variable turned the log into a failure. At
+// stage 3 the SDK's URmessage code moved into this repository as github.com/urnetwork/message/sdk,
+// so the root is part of every checkout of this tree and is REQUIRED: joinScanRoots fails without
+// it, and TestTheSdkRootIsThisRepositorysOwnSdkModule holds it to being inside this repository and
+// to declaring that module.
 func joinSdkRoot(t *testing.T) string {
 	t.Helper()
 	moduleRoot := messageRoot
 	for range 8 {
 		if _, err := os.Stat(filepath.Join(moduleRoot, "go.mod")); err == nil {
-			return filepath.ToSlash(filepath.Join(moduleRoot, "..", "sdk"))
+			return filepath.ToSlash(filepath.Join(moduleRoot, "sdk"))
 		}
 		moduleRoot = filepath.Join(moduleRoot, "..")
 	}
@@ -699,129 +700,48 @@ func joinSdkRoot(t *testing.T) string {
 	return ""
 }
 
-// The scan roots, computed rather than fixed: sdk is a separate checkout and a tree that
-// holds only connect is a tree where it is genuinely absent, so its absence is logged
-// instead of assumed — and asserted about, in TestTheSdkRootIsASiblingOfThisModule,
-// because a root that is present and uncovered is the failure this logging hides.
+// The scan roots: the record layer's three trees, the codec, and the whole of sdk/.
+//
+// THE STAGE-3 SUBSET RULE IS RETIRED HERE. In the sibling checkout, URmessage's code sat beside the
+// core SDK's VPN data path, which the gate cannot judge (an IP header's version nibble is
+// packet[0]>>4, the split shape exactly), so a rule picked URmessage's files out by name and what
+// it left out was held to a property of its own. In this repository every file under sdk/ is
+// URmessage code, so the directory is one root, and TestNoSdkCodeIsLeftOutOfTheGate holds that the
+// scan read every .go file under it.
 func joinScanRoots(t *testing.T) []string {
 	t.Helper()
-	roots := []string{messageRoot, mlsRoot, messagegroupRoot, syntaxRoot}
 	sdkRoot := joinSdkRoot(t)
-	if entry, err := os.Stat(sdkRoot); err == nil && entry.IsDir() {
-		messaging, err := joinSdkMessagingRoots(sdkRoot)
-		if err != nil {
-			t.Fatalf("%s is checked out and the stage-3 rule cannot find its URmessage code in it: %v", sdkRoot, err)
-		}
-		roots = append(roots, messaging...)
-	} else if os.Getenv("URMESSAGE_REQUIRE_SDK_ROOT") != "" {
-		t.Fatalf("URMESSAGE_REQUIRE_SDK_ROOT is set and %s is not checked out: the integration job needs the sibling it pins", sdkRoot)
-	} else {
-		t.Logf("%s is not checked out beside connect, so the gate covers %v; it joins the roots the day it appears", sdkRoot, roots)
+	if entry, err := os.Stat(sdkRoot); err != nil || !entry.IsDir() {
+		t.Fatalf("%s is not a directory of this checkout: the SDK's URmessage code is part of this repository and the gate requires it (%v)", sdkRoot, err)
 	}
-	return roots
+	return []string{messageRoot, mlsRoot, messagegroupRoot, syntaxRoot, sdkRoot}
 }
 
-// The sdk sibling's URmessage code, by the rule that moves it into this repository at stage 3
-// (docs/history/verify_split.py, project_sdk): the root's message*.go files, four directories,
-// and the cgo message files. Everything else in that checkout is the core SDK's VPN data path,
-// and the gate cannot judge it for the reason connect's data path is not among the roots above:
-// it is full of unrelated bit arithmetic. An IP header's version nibble is packet[0]>>4, which
-// is the split shape exactly. What the rule leaves out is not assumed to be clean; it is
-// printed and held to a property of its own in TestTheSdkCodeLeftOutOfTheGateImportsNoRecordLayer.
-//
-// Retired at stage 3, where the root becomes this repository's own sdk/ and every file under it
-// is URmessage code.
-var (
-	joinSdkMessagingDirs     = []string{"urmessage", "cp3b", "livepeer", "liveprobe"}
-	joinSdkMessagingCgoFiles = []string{"cgo/exports_message.go", "cgo/exports_message_test.go",
-		"cgo/loopback_test_world.go", "cgo/gen/text_limits_test.go"}
-	// the record layer and the URmessage client under every spelling the core SDK has had
-	joinRecordLayerImports = []string{"github.com/urnetwork/connect/message", "github.com/urnetwork/connect/messagegroup",
-		"github.com/urnetwork/connect/mls", "github.com/urnetwork/sdk/urmessage", "github.com/urnetwork/message"}
-)
-
-// One root per root-level message*.go file and per cgo message file, one per messaging
-// directory. Every group must match: a group that matches nothing is a rule that no longer
-// describes the checkout, and a stale rule reads less than it says.
-func joinSdkMessagingRoots(sdkRoot string) ([]string, error) {
-	entries, err := os.ReadDir(sdkRoot)
-	if err != nil {
-		return nil, err
-	}
-	roots := []string{}
-	for _, entry := range entries {
-		if name := entry.Name(); !entry.IsDir() && strings.HasPrefix(name, "message") && strings.HasSuffix(name, ".go") {
-			roots = append(roots, filepath.ToSlash(filepath.Join(sdkRoot, name)))
-		}
-	}
-	if len(roots) == 0 {
-		return nil, fmt.Errorf("%s holds no root message*.go file", sdkRoot)
-	}
-	for _, dir := range joinSdkMessagingDirs {
-		path := filepath.Join(sdkRoot, dir)
-		if entry, err := os.Stat(path); err != nil || !entry.IsDir() {
-			return nil, fmt.Errorf("%s has no %s/ directory", sdkRoot, dir)
-		}
-		roots = append(roots, filepath.ToSlash(path))
-	}
-	for _, file := range joinSdkMessagingCgoFiles {
-		path := filepath.Join(sdkRoot, filepath.FromSlash(file))
-		if _, err := os.Stat(path); err != nil {
-			return nil, fmt.Errorf("%s has no %s", sdkRoot, file)
-		}
-		roots = append(roots, filepath.ToSlash(path))
-	}
-	return roots, nil
-}
-
-func joinImportsTheRecordLayer(imported string) bool {
-	for _, prefix := range joinRecordLayerImports {
-		if imported == prefix || strings.HasPrefix(imported, prefix+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-// Every .go file of the sibling the messaging roots do not hold, and those of them that import
-// the record layer or the URmessage client.
-func joinSdkComplement(sdkRoot string, roots []string) (complement []string, offenders []string, err error) {
-	inSubset := func(path string) bool {
-		slash := filepath.ToSlash(path)
-		for _, root := range roots {
-			if slash == root || strings.HasPrefix(slash, root+"/") {
-				return true
-			}
-		}
-		return false
-	}
-	fileSet := token.NewFileSet()
+// The .go files under sdkRoot that a scan did not read, by an enumeration that does not share the
+// scan's walk: a directory the scan skips by design (testdata, interop) is answered as SKIPPED and
+// printed, and anything else is MISSED, which is the gate reading less than the code it exists for.
+func joinSdkComplement(sdkRoot string, scanned map[string]*ast.File) (skipped []string, missed []string, err error) {
 	err = filepath.WalkDir(sdkRoot, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() {
-			if name := entry.Name(); path != sdkRoot && (name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
-				return filepath.SkipDir
-			}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") || inSubset(path) {
+		slash := filepath.ToSlash(path)
+		if _, read := scanned[slash]; read {
 			return nil
 		}
-		complement = append(complement, filepath.ToSlash(path))
-		syntax, err := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		for _, spec := range syntax.Imports {
-			if imported, _ := strconv.Unquote(spec.Path.Value); joinImportsTheRecordLayer(imported) {
-				offenders = append(offenders, fmt.Sprintf("%s imports %s", filepath.ToSlash(path), imported))
+		for _, part := range strings.Split(strings.TrimPrefix(slash, sdkRoot+"/"), "/") {
+			if part == "testdata" || part == "interop" {
+				skipped = append(skipped, slash)
+				return nil
 			}
 		}
+		missed = append(missed, slash)
 		return nil
 	})
-	return complement, offenders, err
+	return skipped, missed, err
 }
 
 // Which half of the crossing a rule names. Both halves are the same defect — a second
@@ -1452,77 +1372,69 @@ func TestJoinScanCoversEveryRoot(t *testing.T) {
 	}
 }
 
-// The sdk root has to be a path a checkout can actually put sdk in. It is a sibling
-// repository of connect, so a root that resolves inside connect is one sdk will never be
-// at — and because a missing root is logged rather than failed, an unreachable one is a
-// gate that promises to cover sdk in a message and never does. This is the assertion the
-// log line cannot make for itself.
-func TestTheSdkRootIsASiblingOfThisModule(t *testing.T) {
+// The sdk root is THIS repository's sdk/: it resolves inside the repository, it is the module
+// github.com/urnetwork/message/sdk, and the gate scans it. This is the inversion of the test it
+// replaces, TestTheSdkRootIsASiblingOfThisModule, which held the root OUTSIDE connect because
+// the SDK was a sibling repository then; it is a directory of this one now, and a root that
+// resolved outside the repository would be a gate reading some other checkout.
+func TestTheSdkRootIsThisRepositorysOwnSdkModule(t *testing.T) {
 	sdkRoot := joinSdkRoot(t)
-	moduleRoot, err := filepath.Abs(filepath.Join(messageRoot, ".."))
+	repositoryRoot, err := filepath.Abs(filepath.Join(messageRoot, ".."))
 	if err != nil {
-		t.Fatalf("resolving the module root: %v", err)
+		t.Fatalf("resolving the repository root: %v", err)
 	}
 	sdkAbsolute, err := filepath.Abs(sdkRoot)
 	if err != nil {
 		t.Fatalf("resolving %s: %v", sdkRoot, err)
 	}
-	if strings.HasPrefix(sdkAbsolute, moduleRoot+string(filepath.Separator)) {
-		t.Errorf("the sdk root %s resolves inside %s; sdk is a sibling repository and no checkout puts it there", sdkAbsolute, moduleRoot)
+	if sdkAbsolute != filepath.Join(repositoryRoot, "sdk") {
+		t.Fatalf("the sdk root %s is not %s: the SDK's URmessage code is this repository's sdk/ directory", sdkAbsolute, filepath.Join(repositoryRoot, "sdk"))
 	}
-	// and when the sibling really is checked out, the gate has to be covering it
-	entry, err := os.Stat(sdkRoot)
-	if err != nil || !entry.IsDir() {
-		t.Skipf("sdk is not checked out beside connect at %s, so there is nothing to cover", sdkAbsolute)
-	}
-	messaging, err := joinSdkMessagingRoots(sdkRoot)
+	goMod, err := os.ReadFile(filepath.Join(sdkRoot, "go.mod"))
 	if err != nil {
-		t.Fatalf("%s is checked out and the stage-3 rule cannot find its URmessage code in it: %v", sdkAbsolute, err)
+		t.Fatalf("%s has no go.mod, so it is not the sdk module: %v", sdkAbsolute, err)
 	}
-	roots := joinScanRoots(t)
-	for _, root := range messaging {
-		if !slices.Contains(roots, root) {
-			t.Errorf("%s is checked out and the gate does not cover its URmessage code at %s", sdkAbsolute, root)
-		}
+	if !slices.Contains(strings.Split(strings.ReplaceAll(string(goMod), "\r\n", "\n"), "\n"), "module github.com/urnetwork/message/sdk") {
+		t.Fatalf("%s/go.mod does not declare module github.com/urnetwork/message/sdk", sdkAbsolute)
+	}
+	if roots := joinScanRoots(t); !slices.Contains(roots, sdkRoot) {
+		t.Fatalf("the gate's roots %v do not include %s", roots, sdkRoot)
 	}
 }
 
-// What the stage-3 rule leaves out of the sdk sibling is printed and held to a property: none of
-// it imports the record layer or the URmessage client. A file that did would be URmessage code
-// the rule has missed, and the gate would be reading less than the code it exists for.
-func TestTheSdkCodeLeftOutOfTheGateImportsNoRecordLayer(t *testing.T) {
+// Nothing under sdk/ is left out of the gate. This replaces the property held over the sibling
+// checkout's complement (TestTheSdkCodeLeftOutOfTheGateImportsNoRecordLayer): there, the subset
+// rule left the core SDK's data path out and the property was that none of it imported the record
+// layer. Here nothing is the core's, so the complement must be EMPTY: every .go file under sdk/,
+// enumerated independently of the scan, is one the scan read, apart from the directories the scan
+// skips by design, which are printed.
+func TestNoSdkCodeIsLeftOutOfTheGate(t *testing.T) {
 	sdkRoot := joinSdkRoot(t)
-	if entry, err := os.Stat(sdkRoot); err != nil || !entry.IsDir() {
-		if os.Getenv("URMESSAGE_REQUIRE_SDK_ROOT") != "" {
-			t.Fatalf("URMESSAGE_REQUIRE_SDK_ROOT is set and %s is not checked out", sdkRoot)
+	scan := mustScanJoinSources(t, joinScanRoots(t))
+	skipped, missed, err := joinSdkComplement(sdkRoot, scan.syntax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := 0
+	for _, root := range scan.rootOf {
+		if root == sdkRoot {
+			read += 1
 		}
-		t.Skipf("%s is not checked out, so nothing is left out", sdkRoot)
 	}
-	roots, err := joinSdkMessagingRoots(sdkRoot)
-	if err != nil {
-		t.Fatal(err)
+	if read == 0 {
+		t.Fatalf("the scan read no file under %s, so the complement was asked of nothing", sdkRoot)
 	}
-	complement, offenders, err := joinSdkComplement(sdkRoot, roots)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(complement) == 0 {
-		t.Fatalf("the rule left nothing of %s out, so this property was asked of nothing", sdkRoot)
-	}
-	byDir := map[string]int{}
-	for _, path := range complement {
-		byDir[filepath.ToSlash(filepath.Dir(path))]++
-	}
-	t.Logf("left out of the gate, %d files of the core SDK by directory: %v", len(complement), byDir)
-	for _, offender := range offenders {
-		t.Errorf("%s: URmessage code the stage-3 rule does not select; the rule and the move list must both take it", offender)
+	t.Logf("%d .go files under %s read by the scan; skipped by design (testdata, interop): %d %v", read, sdkRoot, len(skipped), skipped)
+	for _, path := range missed {
+		t.Errorf("%s is under %s and the scan did not read it: the gate is reading less than the code it exists for", path, sdkRoot)
 	}
 }
 
-// Both halves fire on a fixture checkout: a banned shape in a messaging directory is reported,
-// the same shape in a data-path file is left out and listed, a data-path file importing the
-// record layer is an offender, and a checkout missing a messaging directory is refused.
-func TestTheSdkRuleAndItsComplementFireOnAFixture(t *testing.T) {
+// Both halves fire on a fixture checkout: a banned shape anywhere under a fixture sdk/ is
+// reported, in a messaging directory and in a root file alike, because the subset rule is retired
+// and every file is in scope; a file the scan did not read is reported as missed; and a file in a
+// directory the scan skips by design is answered as skipped and not as missed.
+func TestTheSdkRootAndItsComplementFireOnAFixture(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join(joinControlDir, "join.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -1537,23 +1449,12 @@ func TestTheSdkRuleAndItsComplementFireOnAFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	plain := []byte("package sdk\n")
-	write("message_client.go", plain)
-	for _, dir := range joinSdkMessagingDirs {
-		write(dir+"/main.go", []byte("package main\n"))
-	}
-	for _, file := range joinSdkMessagingCgoFiles {
-		write(file, []byte("package main\n"))
-	}
+	write("message_client.go", []byte("package sdk\n"))
 	write("urmessage/join.go", fixture)
 	write("socket.go", fixture)
-	write("vpn.go", []byte("package sdk\n\nimport _ \"github.com/urnetwork/connect/message\"\n"))
+	write("testdata/planted.go", fixture)
 
-	roots, err := joinSdkMessagingRoots(sdkRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scan := mustScanJoinSources(t, roots)
+	scan := mustScanJoinSources(t, []string{sdkRoot})
 	paths := joinScannedPaths(scan.syntax)
 	reported := map[string]bool{}
 	for _, shape := range classBucketJoinShapes {
@@ -1561,27 +1462,31 @@ func TestTheSdkRuleAndItsComplementFireOnAFixture(t *testing.T) {
 			reported[path] = true
 		}
 	}
-	if !reported[sdkRoot+"/urmessage/join.go"] {
-		t.Errorf("the banned shapes in a messaging directory were not reported: %v", reported)
+	for _, want := range []string{sdkRoot + "/urmessage/join.go", sdkRoot + "/socket.go"} {
+		if !reported[want] {
+			t.Errorf("the banned shapes in %s were not reported: %v", want, reported)
+		}
 	}
-	if reported[sdkRoot+"/socket.go"] {
-		t.Errorf("a data-path file was scanned; the rule selects URmessage code only")
-	}
-	complement, offenders, err := joinSdkComplement(sdkRoot, roots)
+
+	skipped, missed, err := joinSdkComplement(sdkRoot, scan.syntax)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(complement, sdkRoot+"/socket.go") || !slices.Contains(complement, sdkRoot+"/vpn.go") {
-		t.Errorf("the complement %v does not list the two data-path files", complement)
+	if len(missed) != 0 {
+		t.Errorf("a scan of the whole fixture root missed %v", missed)
 	}
-	if want := []string{sdkRoot + "/vpn.go imports github.com/urnetwork/connect/message"}; !slices.Equal(offenders, want) {
-		t.Errorf("the complement's offenders are %v, want %v", offenders, want)
+	if want := []string{sdkRoot + "/testdata/planted.go"}; !slices.Equal(skipped, want) {
+		t.Errorf("skipped by design %v, want %v", skipped, want)
 	}
-	if err := os.RemoveAll(filepath.Join(sdkRoot, "urmessage")); err != nil {
-		t.Fatal(err)
+	// a scan that did not read socket.go: the complement must name it
+	partial := map[string]*ast.File{}
+	for path, syntax := range scan.syntax {
+		if path != sdkRoot+"/socket.go" {
+			partial[path] = syntax
+		}
 	}
-	if _, err := joinSdkMessagingRoots(sdkRoot); err == nil {
-		t.Errorf("a checkout without urmessage/ was accepted; a stale rule must be refused")
+	if _, missed, _ := joinSdkComplement(sdkRoot, partial); !slices.Equal(missed, []string{sdkRoot + "/socket.go"}) {
+		t.Errorf("the complement of a scan that did not read socket.go is %v, want exactly that file", missed)
 	}
 }
 
