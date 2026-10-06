@@ -29,7 +29,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
-	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/protocol"
 )
 
 // ── The URmessage MessageType block (Spec B §4.2, Spec A §10.1) ──────────────

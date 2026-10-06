@@ -16,7 +16,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
-	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/protocol"
 )
 
 // sampleScalar returns a distinctive non-zero value for a scalar field, so that a

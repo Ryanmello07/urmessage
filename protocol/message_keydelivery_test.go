@@ -86,7 +86,7 @@ package protocol_test
 //	message KeyBagEntry { bytes write_key = 1; bytes read_key = 2; }
 //	ShimEntry shim = 20;
 //
-//	-> ok github.com/urnetwork/connect/protocol 0.379s
+//	-> ok github.com/urnetwork/message/protocol 0.379s
 //
 // Item 244's own defect for the second time in two commits, with all four key gates
 // green. TWO MORE REPAIRS, and neither is a wider name match:
@@ -137,7 +137,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 
-	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/protocol"
 )
 
 // The name of the type the epoch keys travel in, and the name of the type they must
@@ -1379,7 +1379,7 @@ func controlFile(t *testing.T) protoreflect.FileDescriptor {
 //	message KeyBagEntry { bytes write_key = 1; bytes read_key = 2; }
 //	ShimEntry shim = 20;
 //
-//	-> ok github.com/urnetwork/connect/protocol 0.379s
+//	-> ok github.com/urnetwork/message/protocol 0.379s
 //
 // That is item 244's own defect again — the next epoch's write and read key, under those
 // exact names, on the served fetch answer — with all four key gates green. ISOLATED IN
@@ -1512,7 +1512,7 @@ func TestTheKeyCheckWalkDescendsAndSkipsOnlyMapEntries(t *testing.T) {
 //	bytes wk = 20;
 //	bytes rk = 21;
 //
-//	-> ok github.com/urnetwork/connect/protocol 0.404s
+//	-> ok github.com/urnetwork/message/protocol 0.404s
 //
 // That is item 244's own defect on the served fetch answer — the next epoch's write and
 // read key, in raw octets, handed to a removed member forever — with every gate in this

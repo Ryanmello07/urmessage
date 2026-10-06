@@ -30,7 +30,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/protocol"
 )
 
 // The four domain-separation labels this file looks for, ASSEMBLED FROM TWO PIECES

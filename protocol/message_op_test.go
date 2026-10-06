@@ -33,7 +33,7 @@ import (
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/protocol"
 )
 
 // armAuth is what Spec A §5.7 / Spec B §4.3.8 say about one oneof arm of
