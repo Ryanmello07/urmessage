@@ -90,7 +90,7 @@ syntax/testdata/fuzz/** -text
 
 # Shell scripts run under bash on every runner, Git Bash on Windows included, and bash reads a
 # carriage return as part of the command. .github/scripts/siblings.sh is how CI checks out its
-# siblings; a CRLF checkout of it fails with "$'': command not found" rather than cloning.
+# siblings; a CRLF checkout of it fails with "$'\r': command not found" rather than cloning.
 *.sh text eol=lf
 
 # messagegroup/testdata/eph-window-kat.txt is ONE HALF OF A PAIR. msgrepo carries the same 57
