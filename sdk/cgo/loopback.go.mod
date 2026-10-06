@@ -1,4 +1,4 @@
-module github.com/urnetwork/sdk/cgo
+module github.com/urnetwork/message/sdk/cgo
 
 go 1.26.5
 
@@ -6,6 +6,8 @@ require (
 	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/glog v0.0.0
 	github.com/urnetwork/message-server v0.0.0
+	github.com/urnetwork/message v0.0.0
+	github.com/urnetwork/message/sdk v0.0.0
 	github.com/urnetwork/sdk v0.0.0
 	golang.org/x/tools v0.48.0
 )
@@ -100,16 +102,21 @@ require (
 	src.agwa.name/tlshacks v0.0.4 // indirect
 )
 
-replace github.com/urnetwork/sdk => ..
+// the core SDK sibling, whose cgo package main the composition build lays this ABI over
+replace github.com/urnetwork/sdk => ../../../sdk
 
-replace github.com/urnetwork/connect => ../../connect
+replace github.com/urnetwork/message/sdk => ..
 
-replace github.com/urnetwork/glog => ../../glog
+replace github.com/urnetwork/message => ../..
 
-replace github.com/urnetwork/goidenticons => ../../goidenticons
+replace github.com/urnetwork/connect => ../../../connect
 
-replace github.com/urnetwork/message-server => ../../message-server
+replace github.com/urnetwork/glog => ../../../glog
 
-replace github.com/pion/sctp => ../../connect/sctp
+replace github.com/urnetwork/goidenticons => ../../../goidenticons
 
-replace gvisor.dev/gvisor => ../../gvisor
+replace github.com/urnetwork/message-server => ../../../message-server
+
+replace github.com/pion/sctp => ../../../connect/sctp
+
+replace gvisor.dev/gvisor => ../../../gvisor

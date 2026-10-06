@@ -1,11 +1,12 @@
-module github.com/urnetwork/message/sdk/liveprobe
+module github.com/urnetwork/message/sdk
 
 go 1.26.5
 
 require (
+	github.com/gorilla/websocket v1.5.3
 	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/message v0.0.0
-	github.com/urnetwork/message/sdk v0.0.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -14,7 +15,6 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect
@@ -37,31 +37,25 @@ require (
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/urnetwork/glog v0.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb // indirect
 	src.agwa.name/tlshacks v0.0.4 // indirect
 )
 
-replace github.com/urnetwork/connect => ../../../connect
+// this repository: the foundational packages and the schema
+replace github.com/urnetwork/message => ../
 
-replace github.com/urnetwork/message/sdk => ..
+// the sibling checkout beside this repository, at the commit .github/siblings.txt pins
+replace github.com/urnetwork/connect => ../../connect
 
-replace github.com/urnetwork/message => ../..
+// what connect itself replaces, which a replace in connect's go.mod cannot do for this module
+replace github.com/pion/sctp => ../../connect/sctp
 
-replace github.com/urnetwork/glog => ../../../glog
+replace github.com/urnetwork/glog => ../../glog
 
-replace github.com/urnetwork/goidenticons => ../../../goidenticons
-
-// THE TWO REPLACES THE ROOT MODULE AND upstream connect CARRY, repeated here because a replace in a
-// dependency's go.mod is ignored. Without them this module still builds, against the proxy's gvisor
-// and stock pion/sctp instead of urnetwork's patched copies (msgrepo ledger 277's survey).
-replace github.com/pion/sctp => ../../../connect/sctp
-
-replace gvisor.dev/gvisor => ../../../gvisor
+replace gvisor.dev/gvisor => ../../gvisor

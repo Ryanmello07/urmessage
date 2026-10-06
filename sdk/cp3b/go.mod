@@ -1,11 +1,12 @@
-module github.com/urnetwork/sdk/cp3b
+module github.com/urnetwork/message/sdk/cp3b
 
 go 1.26.5
 
 require (
 	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/message-server v0.0.0
-	github.com/urnetwork/sdk v0.0.0
+	github.com/urnetwork/message v0.0.0
+	github.com/urnetwork/message/sdk v0.0.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -98,19 +99,21 @@ require (
 	src.agwa.name/tlshacks v0.0.4 // indirect
 )
 
-replace github.com/urnetwork/connect => ../../connect
+replace github.com/urnetwork/connect => ../../../connect
 
-replace github.com/urnetwork/glog => ../../glog
+replace github.com/urnetwork/glog => ../../../glog
 
-replace github.com/urnetwork/goidenticons => ../../goidenticons
+replace github.com/urnetwork/goidenticons => ../../../goidenticons
 
-replace github.com/urnetwork/message-server => ../../message-server
+replace github.com/urnetwork/message-server => ../../../message-server
 
-replace github.com/urnetwork/sdk => ../
+replace github.com/urnetwork/message/sdk => ../
+
+replace github.com/urnetwork/message => ../../
 
 // THE TWO REPLACES THE ROOT MODULE AND upstream connect CARRY, repeated here because a replace in a
 // dependency's go.mod is ignored. Without them this module still builds, against the proxy's gvisor
 // and stock pion/sctp instead of urnetwork's patched copies (msgrepo ledger 277's survey).
-replace github.com/pion/sctp => ../../connect/sctp
+replace github.com/pion/sctp => ../../../connect/sctp
 
-replace gvisor.dev/gvisor => ../../gvisor
+replace gvisor.dev/gvisor => ../../../gvisor
