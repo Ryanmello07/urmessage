@@ -88,9 +88,9 @@ var layeringRules = map[string]layeringRule{
 	// THE SDK MODULE (github.com/urnetwork/message/sdk) and the modules nested in it. Each package
 	// has its row like any other; none of the foundational rows above names any of them, so no
 	// foundational package may import the SDK, and serverSafeForbidden keeps the whole subtree out
-	// of the server-safe closure. No row here names the core SDK (github.com/urnetwork/sdk): the
-	// messaging SDK does not depend on it, and only the native composition build, outside this
-	// tree, lays the two side by side.
+	// of the server-safe closure. One row names the core SDK (github.com/urnetwork/sdk), the
+	// composition module's gen, whose parity test links both SDKs; the messaging SDK itself does
+	// not depend on it, and the composed library is laid out by compose.sh outside this tree.
 	"sdk": {
 		module:   []string{"message", "messagegroup", "mls", "protocol"},
 		external: []string{"github.com/urnetwork/connect", "github.com/gorilla/websocket", "github.com/gopacket/gopacket", "google.golang.org/protobuf"},
@@ -107,8 +107,9 @@ var layeringRules = map[string]layeringRule{
 		reason:   "the messaging half of the native C ABI, built laid over the core SDK's cgo package main by the composition build; the loopback harness (loopback_test_world.go, its own modfile) runs a message server in-process",
 	},
 	"sdk/cgo/gen": {
-		module: []string{"sdk/urmessage"},
-		reason: "the C header's text limits, read against urmessage's own",
+		module:   []string{"sdk", "sdk/urmessage"},
+		external: []string{"github.com/urnetwork/sdk"},
+		reason:   "the composed library's .def generator and its tests: the C header's text limits against urmessage's, and the one test that links both SDKs, MessageServiceUrls against the core SDK's ServiceUrl",
 	},
 	"sdk/cp3b": {
 		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "sdk/urmessage"},
