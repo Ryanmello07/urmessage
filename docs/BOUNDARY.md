@@ -52,8 +52,13 @@ at startup; `TestOneCopyOfMessageProtoIsRegistered` is the check that runs in th
 whose numbers stay in connect's `frame.proto` and whose names are held here against
 `message/protocol`'s messages.
 
-There is no freeze. The wire corpus (`protocol/testdata/wire-golden.tsv`) is append-only: a
-change to the schema that would re-encode any existing row fails, and new rows are appended.
+There is no freeze. The wire corpus (`protocol/testdata/wire-golden.tsv`) is append-only, and
+the rule is compatibility: every recorded row must still decode into the current types with no
+unknown field and re-encode to exactly its bytes, and every recorded descriptor must stay a
+structural subset of the current one. A field or enum value added to an existing message passes
+once the rows it changes are appended; a field removed, renumbered or retyped fails. The first
+197 rows are pinned by digest forever, so they stay byte-equal to what the pinned pre-removal
+connect emits.
 
 No version is tagged before the cutover; see [RELEASING.md](RELEASING.md).
 

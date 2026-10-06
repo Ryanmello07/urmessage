@@ -1,11 +1,14 @@
 // wiregolden emits the wire and authentication-input corpus of message.proto from a binary that
-// links exactly ONE generated copy of the schema, chosen by build tag:
+// links at most ONE generated copy of the schema, chosen by build tag:
 //
 //	-tags orig: github.com/urnetwork/connect/protocol, from a connect checkout from BEFORE the
 //	            schema left connect (the sibling ../../../../connect-golden, pinned in
 //	            .github/siblings.txt), as connect committed it;
 //	-tags new:  github.com/urnetwork/message/protocol, this repository's, regenerated once with
-//	            go_package github.com/urnetwork/message/protocol.
+//	            go_package github.com/urnetwork/message/protocol;
+//	-tags dyn:  no generated copy: the schema is a serialized descriptor read from the file
+//	            WIREGOLDEN_DESCRIPTOR names, as dynamic types (src_dyn.go). The append-only rule's
+//	            controls emit a changed schema this way, through this same code.
 //
 //	wiregolden emit            one line per item: kind \t message full name \t label \t hex
 //	wiregolden check <file>    decode every line of another build's corpus into THIS build's Go
@@ -14,7 +17,7 @@
 // protocol/testdata/wire-golden.tsv is the committed corpus; its first lines are the corpus
 // connect's copy emitted, and protocol/message_wiregolden_test.go holds the rule that keeps
 // them: the corpus is append-only. This module lives under testdata so `go test ./...` and every
-// scanner that skips testdata leave it alone; CI's wire-golden job runs it with both tags.
+// scanner that skips testdata leave it alone; test.sh's wire-golden step runs it with orig and new.
 //
 // The emitter was written for inventory D of the move (2026-10-04) and is unchanged in what it
 // emits; only its output is routed through emit's writers so its own test can read it.
