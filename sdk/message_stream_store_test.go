@@ -2111,22 +2111,14 @@ func TestEveryForcedFlushInTheStoreIsCounted(t *testing.T) {
 // the way messageFragmentPartSizeCopyRulings excuses copies of the part size: keyed by the file and
 // the declaration the call sits in, each with a sentence, and each asserted to match something.
 //
-// Every entry arrived with the merge of upstream urnetwork/sdk main (msgrepo ledger 277). Before it
-// the store's forceFlush held the only Sync in the package and this gate said so in those words.
-// Package sdk is upstream's package, and upstream's own persistence syncs files of its own. A Sync
-// added anywhere in the package still fails the gate until somebody rules on it, which is the
-// decision being asked for rather than skipped.
-var streamStoreSyncRulings = map[string]string{
-	"device_rpc.go addListenerWithRpcCall": "deviceRemote.Sync() is DeviceRemote's own method, which wakes its " +
-		"reconnect monitor to publish listener state. It is not a file sync at all: it is in the class because " +
-		"the class is a selector named Sync",
-	"local_state_auth.go LocalState.writeAuthStateLocked": "the auth state's atomic write: a temp file synced " +
-		"before its rename, then its directory. Upstream's local state, with no flush counter of the store's in it",
-	"local_state_location.go LocalState.writePreferenceBytesWithLock": "a preference file's atomic write, the " +
-		"same shape for the same reason. Upstream's local state",
-	"peer_client_key_pin_store_bounded.go boundedPeerClientKeyPinStore.persistWithLock": "the peer key-pin " +
-		"store's commit: its file and then its directory. Upstream's store, not this one",
-}
+// It is EMPTY here, and that is measured rather than assumed: the gate below fails on a Sync this
+// table does not excuse and on an excuse that matches no Sync. In urnetwork/sdk it held four
+// entries, every one of them a Sync of the core SDK's own (the device rpc's listener wake, the
+// local state's two atomic writes, the peer key-pin store's commit), in scope only because the
+// messaging code shared that package. Those files stayed in the core SDK, and in this package the
+// store's forceFlush is again the only Sync, which is what the gate said before they arrived. A
+// Sync added anywhere in the package still fails the gate until somebody rules on it.
+var streamStoreSyncRulings = map[string]string{}
 
 func streamTestProductionSources(t *testing.T) []string {
 	t.Helper()

@@ -1183,7 +1183,7 @@ func TestThePartSizeHasExactlyOneDeclarationInPackageSdk(t *testing.T) {
 	excused := []string{}
 	unexcused := []messageFragmentCopy{}
 	matched := map[string]bool{}
-	rulings := messageFragmentPartSizeRulings(os.O_EXCL)
+	rulings := messageFragmentPartSizeRulings()
 	for _, copied := range outside {
 		key, ruled := messageFragmentPartSizeRulingKey(copied, rulings)
 		if !ruled {
@@ -1267,24 +1267,21 @@ func copiesOf(copies []messageFragmentCopy) []string {
 // It holds no entry in the binding's own files and cannot: a copy there is
 // refused before this table is consulted. This is a table for values that are
 // not this bound, never a second home for this bound.
-// messageFragmentPartSizeRulings merges the table below with the existing linux
-// half and the imported os.O_EXCL value on the current target. Taking that value
-// as an argument lets the regression exercise both platform outcomes on one host.
-func messageFragmentPartSizeRulings(exclusiveFlag int) map[string]string {
+// messageFragmentPartSizeRulings merges the table below with this platform's
+// half (message_transport_fragment_rulings_*_test.go).
+//
+// In urnetwork/sdk it also added, on darwin only, an expression ruling for the
+// core SDK's census writer, whose os.O_EXCL is 0x800 there, the part size. That
+// writer stayed in the core SDK, so the ruling, and the test that tracked it
+// against the platform's flag value, did not come here: on darwin it would be
+// an excuse for a copy that is not there, which the gate refuses.
+func messageFragmentPartSizeRulings() map[string]string {
 	merged := map[string]string{}
 	for key, ruling := range messageFragmentPartSizeCopyRulings {
 		merged[key] = ruling
 	}
 	for key, ruling := range messageFragmentPartSizePlatformCopyRulings {
 		merged[key] = ruling
-	}
-	if exclusiveFlag == messageFragmentPartBytes {
-		merged["memory_owner_census.go DeviceLocal.WriteMemoryOwnerCensus os.O_EXCL"] =
-			"os.O_EXCL -- the exclusive-create flag in os.OpenFile's flag argument. It is 0x800 " +
-				"on Darwin, so its value equals the part size there; on Linux and Windows it is " +
-				"0x80 and is outside this gate's class. The census writer requires a fresh diagnostic " +
-				"file, not a fragment byte budget. Only this expression is ruled: a literal or " +
-				"arithmetic copy in the same method still requires its own ruling"
 	}
 	return merged
 }
@@ -1299,36 +1296,16 @@ func messageFragmentPartSizeRulingKey(copied messageFragmentCopy, rulings map[st
 	return declaration, ruled
 }
 
-func TestPartSizeExclusiveFlagRulingTracksPlatformValue(t *testing.T) {
-	copy := messageFragmentCopy{file: "memory_owner_census.go", where: "DeviceLocal.WriteMemoryOwnerCensus", text: "os.O_EXCL"}
-	for _, test := range []struct {
-		name string
-		flag int
-		want bool
-	}{
-		{"darwin-collision", 0x800, true},
-		{"linux-windows-no-collision", 0x80, false},
-		{"zero-no-collision", 0, false},
-		{"below-part-size", messageFragmentPartBytes - 1, false},
-		{"above-part-size", messageFragmentPartBytes + 1, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			rulings := messageFragmentPartSizeRulings(test.flag)
-			key, ruled := messageFragmentPartSizeRulingKey(copy, rulings)
-			if ruled != test.want {
-				t.Fatalf("flag %#x: ruled=%t, want %t", test.flag, ruled, test.want)
-			}
-			if ruled && key != "memory_owner_census.go DeviceLocal.WriteMemoryOwnerCensus os.O_EXCL" {
-				t.Fatalf("exclusive-create ruling covers more than its audited expression: %q", key)
-			}
-		})
-	}
-}
-
 func TestPartSizeExclusiveFlagRulingDoesNotExcuseFragmentCopies(t *testing.T) {
 	// Plant value-equivalent copies in the very method whose imported flag has
 	// a ruling. Type-check the fixture so arithmetic mutations enter the same
 	// evaluated-value class as the package-wide gate, without editing production.
+	//
+	// The ruling is a FIXTURE here. The real one was the core SDK census
+	// writer's darwin os.O_EXCL, which stayed in urnetwork/sdk with its file. What
+	// this test holds is the rule that ruling exercised, and that rule is
+	// messageFragmentPartSizeRulingKey's, which did come here: an EXPRESSION
+	// ruling excuses its expression and nothing else in the same declaration.
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "memory_owner_census.go", `package sdk
 type DeviceLocal struct{}
@@ -1345,7 +1322,9 @@ func (*DeviceLocal) WriteMemoryOwnerCensus() {
 	if _, err := (&types.Config{}).Check("fragment-ruling-fixture", fset, []*ast.File{file}, info); err != nil {
 		t.Fatal(err)
 	}
-	rulings := messageFragmentPartSizeRulings(messageFragmentPartBytes)
+	rulings := map[string]string{
+		"memory_owner_census.go DeviceLocal.WriteMemoryOwnerCensus os.O_EXCL": "the fixture's one expression ruling",
+	}
 	copies := 0
 	for expr, value := range info.Types {
 		number, exact := messageFragmentIntValue(value.Value)
@@ -1374,27 +1353,13 @@ func (*DeviceLocal) WriteMemoryOwnerCensus() {
 	}
 }
 
-var messageFragmentPartSizeCopyRulings = map[string]string{
-	"device_local_ioloop.go IoLoop.run": "MessagePoolGet(2048) — the buffer the !windows fd read loop " +
-		"reads one packet into. It is a packet buffer and not a frame budget: it bounds a read from a " +
-		"tun fd, nothing carries it to a MessageServerFragment, and it predates this binding. It is in " +
-		"the class because the class is the VALUE, which is the property that makes the class worth " +
-		"having, and it is excused by name here rather than by narrowing the scope back to three files.",
-
-	// UPSTREAM sdk's, with the merge of urnetwork/sdk main (msgrepo ledger 277): five more values that
-	// happen to equal the part size, ruled the same way rather than by narrowing the scope.
-	"device_local.go providerLocalUserNatSettings": "connect.MemoryScaledCount(2048, 256) -- the provider's " +
-		"local user-NAT UDP buffer global limit: a COUNT of buffers, scaled by device memory. Not a byte budget of any " +
-		"kind, and nothing carries it to a MessageServerFragment",
-	"mobile_memory_policy.go mobilePackQueueBudgetMaxByteCount": "2 * 1024 * 1024 -- 2 MiB, the mobile Pack " +
-		"queue's byte budget. Its 2048 is the subexpression 2 * 1024 of a MiB product, not a part size",
-	"mobile_memory_policy.go mobileReceiveQueueBudgetMaxByteCount": "2 * 1024 * 1024 -- 2 MiB, the mobile " +
-		"receive queue's byte budget. The same MiB product for the same reason",
-	"mobile_packet_pressure.go mobilePacketPressureMaxOutstandingByteCount": "512 * 2048 -- 1 MiB of outstanding " +
-		"packet bytes, written as 512 packet slots of 2048. A packet-pressure gate, not a frame budget",
-	"mobile_packet_pressure.go mobilePacketPressureH1AckMaxOutstandingByteCount": "2 * 1024 * 1024 -- 2 MiB, the " +
-		"H1 acknowledgement allowance. The same MiB product",
-}
+// EMPTY here, and measured so: the gate above fails on a copy outside the binding that no entry
+// excuses, and on an entry that matches no copy. In urnetwork/sdk it held six entries, every
+// one a value of the core SDK's that happens to equal 2048 (a packet buffer, a NAT buffer count,
+// four MiB products of queue and pressure budgets), in scope only because the messaging code
+// shared that package. Those files stayed in the core SDK, which after the split holds no
+// MessageServerFragment for any of its values to be a copy of the part size for.
+var messageFragmentPartSizeCopyRulings = map[string]string{}
 
 // The declaration an expression sits inside, named the way a ruling names it:
 // `Type.Method` for a method, the function's name for a function, and the first
