@@ -6702,7 +6702,7 @@ func readExcuses(excuses map[string]awaitingFirstCaller, declaredIn map[string]m
 func declarationsOfEveryScannedPackage(t *testing.T) map[string]map[string]string {
 	t.Helper()
 	declared := map[string]map[string]string{}
-	for path := range mustScanSources(t, forbiddenScanRoots).sourceTexts {
+	for path := range mustScanSources(t, urmessageScanRoots()).sourceTexts {
 		where := filepath.ToSlash(filepath.Dir(path))
 		if _, read := declared[where]; read {
 			continue
@@ -7126,7 +7126,7 @@ func TestNoStubShapesRemainInSource(t *testing.T) {
 	}
 	scanned := 0
 	packages := map[string][]parsedSource{}
-	for path, text := range productionSources(mustScanSources(t, forbiddenScanRoots).sourceTexts) {
+	for path, text := range productionSources(mustScanSources(t, urmessageScanRoots()).sourceTexts) {
 		scanned++
 		parsed := mustParseText(t, path, text)
 		if shapes := providerStubShapesIn(parsed); len(shapes) != 0 {

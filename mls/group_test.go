@@ -1969,7 +1969,7 @@ func TestEveryProposalGeneratorOnThisGroupSendsWhatItEmitsThroughItsOwnDoors(t *
 	// both roots the guardrails walk, for the seam gate's reason: the door class is derived from
 	// exported names, and scoping a derivation to the directory its first members happen to sit in
 	// is the defect this project has paid for more than once.
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	parsed := []parsedSource{}
 	for _, path := range slices.Sorted(maps.Keys(scan.sourceTexts)) {
 		parsed = append(parsed, mustParseText(t, path, scan.sourceTexts[path]))

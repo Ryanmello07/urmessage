@@ -1180,7 +1180,7 @@ func gatesTestSources(t *testing.T) (paths []string, fileSet *token.FileSet, par
 	// of by a number is the COUNT instance this file records first, and the sentence
 	// "all of them production source" is a claim about members nobody could check off a count.
 	skipped := []string{}
-	for _, root := range forbiddenScanRoots {
+	for _, root := range urmessageScanRoots() {
 		walked := 0
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {

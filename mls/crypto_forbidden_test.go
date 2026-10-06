@@ -34,6 +34,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -64,6 +65,18 @@ import (
 // the commit that recorded the ninth. The derivation asserting this list is directly below.
 var forbiddenScanRoots = []string{".", "../message", "../messagegroup"}
 
+// The packages connected to this one that do NOT do cryptography: today exactly the codec, which
+// sat beneath this package as mls/syntax until MESSAGEREVIEW promoted it to a peer. While it was a
+// child, every recursive scan of the roots above read it by recursion; as a peer it is read only
+// because it is named here. Derived and asserted both ways in
+// TestTheScanRootsAreEveryCryptographicPackageConnectedToThisOne, like the list above.
+var codecScanRoots = []string{"../syntax"}
+
+// The scope every recursive scan of this file reads: the cryptographic roots and the codec.
+func urmessageScanRoots() []string {
+	return append(slices.Clone(forbiddenScanRoots), codecScanRoots...)
+}
+
 // The directories this list must name, derived rather than read off it.
 //
 // R5, and it is the half this list was failing: the class these guardrails cover was a written
@@ -92,7 +105,7 @@ var forbiddenScanRoots = []string{".", "../message", "../messagegroup"}
 // failure mode. So the class is derived and only the answer is written down, and the two are
 // required to be equal in both directions: a root in the class and not in the list fails here, and
 // so does a root in the list that the class does not contain.
-func cryptographicUrmessageDirectories(t *testing.T) []string {
+func cryptographicUrmessageDirectories(t *testing.T) ([]string, []string) {
 	t.Helper()
 	const moduleRoot = ".."
 	modulePath := ""
@@ -167,20 +180,25 @@ func cryptographicUrmessageDirectories(t *testing.T) []string {
 					strings.HasPrefix(imported, "golang.org/x/crypto/") {
 					doesCrypto[key] = true
 				}
-				if sibling, found := strings.CutPrefix(imported, modulePath); found {
-					sibling = strings.TrimPrefix(sibling, "/")
-					if sibling == "" {
-						sibling = "."
-					}
+				if sibling, found := moduleSiblingOf(imported, modulePath); found {
 					edges[key] = append(edges[key], sibling)
 					edges[sibling] = append(edges[sibling], key)
 				}
 			}
 		}
 	}
-	// three floors, because a walk that read nothing answers what a clean module answers
-	if !holdsSource["."] {
-		t.Fatal("the walk found no production source in the module's own root package, so it did not reach the top of the module and the component below is whatever it happened to see")
+	// three floors, because a walk that read nothing answers what a clean module answers. The first
+	// was "the module's root package holds production source"; the message module's root holds
+	// none by design, so the same property -- the walk reached the whole module -- is asked of the
+	// go tool instead, in both directions.
+	listed := goListModulePackageDirs(t, moduleRoot)
+	walked := []string{}
+	for key := range holdsSource {
+		walked = append(walked, key)
+	}
+	slices.Sort(walked)
+	if !slices.Equal(walked, listed) {
+		t.Fatalf("the walk read production source in %v and the go tool lists the module's packages as %v; a walk that did not reach the whole module derives its component from whatever it happened to see", walked, listed)
 	}
 	if !holdsSource[ownKey] {
 		t.Fatalf("the walk found no production source in %s, which is the package it is running in", ownKey)
@@ -218,7 +236,97 @@ func cryptographicUrmessageDirectories(t *testing.T) []string {
 	}
 	t.Logf("%d packages walked, component %d, cryptographic %v, connected and not cryptographic %v",
 		len(holdsSource), len(component), class, outside)
-	return class
+	return class, outside
+}
+
+// moduleSiblingOf answers the directory, relative to the module root, of an import path inside the
+// module, and false for any other path. The module path is a PATH PREFIX, not a string prefix:
+// with the module renamed github.com/urnetwork/message, a bare string prefix also matches
+// github.com/urnetwork/message-server/..., which would add an edge to a directory named
+// "-server/...". That edge reaches no package today, so it changed no answer; it is a reading
+// that would, the day such a key collided with a real one, so it is closed with a boundary and held
+// by TestTheDerivationsModuleEdgesStopAtAPathBoundary.
+func moduleSiblingOf(imported string, modulePath string) (string, bool) {
+	if imported != modulePath && !strings.HasPrefix(imported, modulePath+"/") {
+		return "", false
+	}
+	sibling := strings.TrimPrefix(strings.TrimPrefix(imported, modulePath), "/")
+	if sibling == "" {
+		sibling = "."
+	}
+	return sibling, true
+}
+
+// The derivation's edges: in-module paths map to their directory, and the paths beside the module
+// that share its spelling as a string prefix -- message-server above all, which links the record
+// package -- are not edges at all.
+func TestTheDerivationsModuleEdgesStopAtAPathBoundary(t *testing.T) {
+	const modulePath = "github.com/urnetwork/message"
+	rows := []struct {
+		imported string
+		sibling  string
+		found    bool
+	}{
+		{"github.com/urnetwork/message/syntax", "syntax", true},
+		{"github.com/urnetwork/message/mls", "mls", true},
+		{"github.com/urnetwork/message/sdk/urmessage", "sdk/urmessage", true},
+		{"github.com/urnetwork/message", ".", true},
+		// the control rows: a string prefix of the module path that is not a path inside it
+		{"github.com/urnetwork/message-server/api", "", false},
+		{"github.com/urnetwork/messagex", "", false},
+		{"github.com/urnetwork/connect/protocol", "", false},
+	}
+	for _, row := range rows {
+		sibling, found := moduleSiblingOf(row.imported, modulePath)
+		if sibling != row.sibling || found != row.found {
+			t.Errorf("moduleSiblingOf(%q) = %q, %v; want %q, %v", row.imported, sibling, found, row.sibling, row.found)
+		}
+	}
+}
+
+// goListModulePackageDirs answers the module's package directories, relative to its root, slash
+// separated, as the go tool lists them: the reading the walk above is held to.
+func goListModulePackageDirs(t *testing.T, moduleRoot string) []string {
+	t.Helper()
+	// a package counts when it holds non-test source on SOME platform, which is what the walk counts:
+	// go list ./... also names test-only packages, and GoFiles alone drops a package whose files are
+	// all constrained to other platforms
+	command := exec.Command("go", "list", "-f", "{{.Dir}}{{range .GoFiles}} {{.}}{{end}}{{range .CgoFiles}} {{.}}{{end}}{{range .IgnoredGoFiles}} {{.}}{{end}}", "./...")
+	command.Dir = moduleRoot
+	out, err := command.Output()
+	if err != nil {
+		t.Fatalf("go list ./... from %s: %v", moduleRoot, err)
+	}
+	root, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		t.Fatalf("resolve the module root: %v", err)
+	}
+	dirs := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		ships := false
+		for _, name := range fields[1:] {
+			if !strings.HasSuffix(name, "_test.go") {
+				ships = true
+			}
+		}
+		if !ships {
+			continue
+		}
+		rel, err := filepath.Rel(root, fields[0])
+		if err != nil {
+			t.Fatalf("place %s inside the module: %v", line, err)
+		}
+		dirs = append(dirs, filepath.ToSlash(rel))
+	}
+	if len(dirs) < 2 {
+		t.Fatalf("go list named %v, which is not a module this package belongs to", dirs)
+	}
+	slices.Sort(dirs)
+	return dirs
 }
 
 // TestTheScanRootsAreEveryCryptographicPackageConnectedToThisOne is R5 over this file's own scope.
@@ -229,7 +337,7 @@ func cryptographicUrmessageDirectories(t *testing.T) []string {
 // cryptography and shares an import edge with these fails here on the commit that adds it, and a
 // root left in the list after its package stopped qualifying fails here too.
 func TestTheScanRootsAreEveryCryptographicPackageConnectedToThisOne(t *testing.T) {
-	derived := cryptographicUrmessageDirectories(t)
+	derived, codec := cryptographicUrmessageDirectories(t)
 
 	ownPath, err := filepath.Abs(".")
 	if err != nil {
@@ -248,6 +356,14 @@ func TestTheScanRootsAreEveryCryptographicPackageConnectedToThisOne(t *testing.T
 		declared = append(declared, filepath.ToSlash(filepath.Clean(filepath.Join(filepath.ToSlash(ownKey), root))))
 	}
 	slices.Sort(declared)
+	declaredCodec := []string{}
+	for _, root := range codecScanRoots {
+		declaredCodec = append(declaredCodec, filepath.ToSlash(filepath.Clean(filepath.Join(filepath.ToSlash(ownKey), root))))
+	}
+	slices.Sort(declaredCodec)
+	if !slices.Equal(codec, declaredCodec) {
+		t.Errorf("codecScanRoots names %v and the packages connected to this one that do no cryptography are %v; every recursive scan here reads that list, so a connected package missing from it is a package the scans stopped reading the day it moved", declaredCodec, codec)
+	}
 	if !slices.Equal(derived, declared) {
 		t.Errorf("forbiddenScanRoots names %v and the cryptographic packages this one is connected to are %v. Every gate in this package that aliases that list reads exactly the directories it names, so a package in the class and not in the list is a package no guardrail in this tree scans: a direct crypto/hkdf call there is guardrail 1 gone, and an entropy taking function there is the nil source substitution p5 shipped twice",
 			declared, derived)
@@ -629,7 +745,7 @@ func controlFileAt(t *testing.T, control forbiddenScan, path string) string {
 
 // The gate: no file in either package may name a banned primitive in code.
 func TestForbiddenPrimitivesAreAbsent(t *testing.T) {
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	for path, text := range sourcesUnderGate(t, scan) {
 		for _, token := range forbiddenTokensIn(text, forbiddenPrimitiveTokens) {
 			t.Errorf("%s references the forbidden primitive %q", path, token)
@@ -675,7 +791,7 @@ func hkdfAllowedPathsFor(needle string) []string {
 // file which no longer calls the function is a hole standing open for the next person to
 // write one into, and it reads as coverage.
 func TestHkdfExtractHasOnlyTwoCallSites(t *testing.T) {
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	sources := productionSources(sourcesUnderGate(t, scan))
 	for _, needle := range hkdfEntryPointNeedles(t) {
 		allowed := hkdfAllowedPathsFor(needle)
@@ -699,7 +815,7 @@ func TestHkdfExtractHasOnlyTwoCallSites(t *testing.T) {
 
 // The gate on guardrail 3, the call site half.
 func TestEcdhHasOneCallSite(t *testing.T) {
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	sources := productionSources(sourcesUnderGate(t, scan))
 	for _, path := range confinementViolations(sources, ecdhNeedle, ecdhAllowedPaths) {
 		t.Errorf("%s calls %s; only %s may", path, ecdhNeedle, strings.Join(ecdhAllowedPaths, " and "))
@@ -710,7 +826,7 @@ func TestEcdhHasOneCallSite(t *testing.T) {
 // confinement gates: a test that shrugs off an x25519 error is a test that would pass on
 // a broken refusal.
 func TestEcdhResultIsNeverDiscarded(t *testing.T) {
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	for path, text := range sourcesUnderGate(t, scan) {
 		for _, line := range discardedEcdhLines(text) {
 			t.Errorf("%s discards an x25519 result: %s", path, line)
@@ -845,7 +961,7 @@ func TestScanRefusesARootItCannotCover(t *testing.T) {
 		}
 	}
 	// and the real roots must pass it, or the refusal above is just "everything fails"
-	if _, err := scanSources(forbiddenScanRoots); err != nil {
+	if _, err := scanSources(urmessageScanRoots()); err != nil {
 		t.Errorf("scanning the real roots failed: %v", err)
 	}
 }
@@ -854,17 +970,17 @@ func TestScanRefusesARootItCannotCover(t *testing.T) {
 // the part the scan itself does not do: a per root count that no longer adds up to the
 // collected set means files are being counted for a root that did not supply them.
 func TestForbiddenScanCoversEveryRoot(t *testing.T) {
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	total := 0
-	for _, root := range forbiddenScanRoots {
+	for _, root := range urmessageScanRoots() {
 		t.Logf("root %s contributed %d go files", root, scan.rootFileCounts[root])
 		total += scan.rootFileCounts[root]
 	}
 	if len(scan.sourceTexts) != total {
 		t.Errorf("the scan holds %d files while the roots counted %d", len(scan.sourceTexts), total)
 	}
-	if len(scan.rootFileCounts) != len(forbiddenScanRoots) {
-		t.Errorf("%d roots contributed files, want %d", len(scan.rootFileCounts), len(forbiddenScanRoots))
+	if len(scan.rootFileCounts) != len(urmessageScanRoots()) {
+		t.Errorf("%d roots contributed files, want %d", len(scan.rootFileCounts), len(urmessageScanRoots()))
 	}
 }
 
@@ -872,7 +988,7 @@ func TestForbiddenScanCoversEveryRoot(t *testing.T) {
 // If a directory named testdata ever stopped being skipped, the gates would fail on the
 // control instead of on the code, which is loud but misleading; this names the reason.
 func TestForbiddenScanSkipsTheControlFixture(t *testing.T) {
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	for _, path := range scannedPaths(scan.sourceTexts) {
 		if strings.HasPrefix(path, "testdata/") || strings.Contains(path, "/testdata/") {
 			t.Errorf("the gates read %s; vendored corpora and the control fixture must stay out of scope", path)

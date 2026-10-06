@@ -1490,7 +1490,7 @@ func TestTheConstructionBypassSeamGateDerivesTheTypesThatCarryTheAuthenticators(
 
 	// and over the real scan, where the two things that matter are that the closure grows past
 	// its seed and that what it grows into is production's own
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	parsed := []parsedSource{}
 	for _, path := range slices.Sorted(maps.Keys(scan.sourceTexts)) {
 		parsed = append(parsed, mustParseText(t, path, scan.sourceTexts[path]))
@@ -1557,7 +1557,7 @@ func TestTheConstructionBypassSeamGateDerivesTheDoorBeneathTheWrapper(t *testing
 	// and over the real scan, where what matters is that the chain grew past its seed, that it
 	// reached the encode method at the far end of it, and that every frame it found is one the go
 	// tool compiles into a shipped binary rather than into the test one.
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	parsed := []parsedSource{}
 	for _, path := range slices.Sorted(maps.Keys(scan.sourceTexts)) {
 		parsed = append(parsed, mustParseText(t, path, scan.sourceTexts[path]))
@@ -1702,7 +1702,7 @@ const seamReceiverForgeMethod = "reviewSealsFromItsReceiver"
 // by existing rather than by being added to a list, which is the whole difference between this
 // and the table that certified the exclusion.
 func TestTheConstructionBypassSeamGateReadsAForgeOverEveryCarrierInReceiverPosition(t *testing.T) {
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	parsed := []parsedSource{}
 	for _, path := range slices.Sorted(maps.Keys(scan.sourceTexts)) {
 		parsed = append(parsed, mustParseText(t, path, scan.sourceTexts[path]))
@@ -1772,7 +1772,7 @@ func TestTheConstructionBypassSeamGateFollowsACallEdgeWrittenUnderAnAmbiguousNam
 			names, forge, seamWireDoor)
 	}
 
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	parsed := []parsedSource{}
 	for _, path := range slices.Sorted(maps.Keys(scan.sourceTexts)) {
 		parsed = append(parsed, mustParseText(t, path, scan.sourceTexts[path]))
@@ -1820,7 +1820,7 @@ func TestEveryConstructionBypassSeamIsDeclaredInTestSource(t *testing.T) {
 	// matcher already reads. Deriving a class and then scoping it to the directory its first
 	// two members happen to sit in is the defect this project has paid for more than once, so
 	// the scope is the walk every other package wide gate here uses.
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	// and the scope is OBSERVED rather than stated, because it was measured to be invisible
 	// otherwise: narrowing this scan back to this directory alone passes every assertion below,
 	// since connect/message declares no member of the class today. That is the same silence the

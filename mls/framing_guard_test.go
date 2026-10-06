@@ -1142,6 +1142,8 @@ func TestNoPackageBeneathTheseRootsComparesAWholeOctetStringWithGoEquality(t *te
 	for _, root := range forbiddenScanRoots {
 		beneath = append(beneath, productionPackagesBeneath(t, root)...)
 	}
+	// the codec was beneath this package until its promotion; it is judged here by name now
+	beneath = append(beneath, codecScanRoots...)
 	if len(beneath) == 0 {
 		t.Fatalf("no production package was found beneath %v, so this gate judged nothing; mls/syntax is the one it was written over",
 			forbiddenScanRoots)

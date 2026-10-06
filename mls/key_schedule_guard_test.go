@@ -50,7 +50,11 @@ import (
 var keyScheduleCodecVerbs = []string{"Marshal", "Unmarshal", "Parse"}
 
 // The subpackage the codec lives in, relative to this package's directory.
-const keyScheduleCodecPackageDir = "syntax"
+const keyScheduleCodecPackageDir = "../syntax"
+
+// The identifier the codec is imported under. It was the same string as the directory while the
+// codec was this package's child; the promotion made them two things.
+const keyScheduleCodecPackageName = "syntax"
 
 // syntaxCodecHooks is the sanctioned half of the rule: the codec entry points a type of this
 // package MAY declare, read off the interfaces mls/syntax declares rather than written down.
@@ -638,7 +642,7 @@ func keyScheduleEntryPointCallsIn(body *ast.BlockStmt, entryPoints []string) []*
 			return true
 		}
 		base, isIdentifier := selector.X.(*ast.Ident)
-		if isIdentifier && base.Name == keyScheduleCodecPackageDir &&
+		if isIdentifier && base.Name == keyScheduleCodecPackageName &&
 			slices.Contains(entryPoints, selector.Sel.Name) {
 			calls = append(calls, call)
 		}

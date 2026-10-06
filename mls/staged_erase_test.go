@@ -381,7 +381,7 @@ type eraseSourceReading struct {
 func eraseReadingOf(t *testing.T) eraseSourceReading {
 	t.Helper()
 	reading := eraseSourceReading{structs: map[string]*ast.StructType{}}
-	scan := mustScanSources(t, forbiddenScanRoots)
+	scan := mustScanSources(t, urmessageScanRoots())
 	candidates := []eraseHelperCandidate{}
 	paths := slices.Sorted(maps.Keys(productionSources(scan.sourceTexts)))
 	for _, path := range paths {
