@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // ── the pre-kinds local copy ─────────────────────────────────────────────────────────────────

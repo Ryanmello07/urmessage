@@ -50,8 +50,8 @@ import (
 
 	"github.com/urnetwork/connect"
 	"github.com/urnetwork/connect/protocol"
-	"github.com/urnetwork/sdk"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 type party struct {

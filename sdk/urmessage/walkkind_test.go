@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
 	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 // ── the walk, over records that carry a content envelope ─────────────────────────────────────

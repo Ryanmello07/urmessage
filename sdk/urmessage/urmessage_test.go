@@ -10,16 +10,16 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/messagegroup"
 	"github.com/urnetwork/connect/protocol"
-	"github.com/urnetwork/sdk"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/sdk"
 )
 
 // THE CASES THAT DO NOT NEED A SERVER LIVE HERE, and the one that does lives in the nested module
 // github.com/urnetwork/sdk/cp3b, which requires github.com/urnetwork/message-server.
 //
 // The split is a decision about the SHIPPED MODULE and not about where a file is tidy: a test in
-// this package would put the server module -- and pgx with it -- in github.com/urnetwork/sdk's own
+// this package would put the server module -- and pgx with it -- in github.com/urnetwork/message/sdk's own
 // go.mod, where a build of the mobile SDK would carry it and a checkout without ../msgrepo beside
 // it would not resolve at all. ../cp3b is its own module, so `go build ./...` and `go test ./...`
 // here neither see it nor need it; test.sh finds it with the same depth-2 sweep it finds cgo, js

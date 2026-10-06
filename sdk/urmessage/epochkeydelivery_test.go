@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
 	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/message"
 	"google.golang.org/protobuf/proto"
 )
 

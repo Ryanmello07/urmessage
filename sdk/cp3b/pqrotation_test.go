@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
 	"github.com/urnetwork/message-server/store"
+	"github.com/urnetwork/message/message"
 )
 
 // RULING 37's ORDER, AGAINST A REAL SERVER: THE EPOCH FAN-OUT IS ON THE WIRE BEFORE THE COMMIT.

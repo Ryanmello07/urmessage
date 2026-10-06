@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 )
 
 // ── [Group.RemoveMember]: the removal track's product verb, on the SEND side ──────────────────

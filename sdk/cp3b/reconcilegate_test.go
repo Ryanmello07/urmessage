@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // ── the reconciliation may only conclude from a walk that saw the history ────────────────────

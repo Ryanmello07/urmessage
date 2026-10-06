@@ -1867,7 +1867,7 @@ func messageFragmentTypeCheck(t *testing.T) messageFragmentChecked {
 		}),
 		Error: func(err error) { problems = append(problems, err.Error()) },
 	}
-	pkg, err := config.Check("github.com/urnetwork/sdk", checked.fset, checked.files, checked.info)
+	pkg, err := config.Check("github.com/urnetwork/message/sdk", checked.fset, checked.files, checked.info)
 	if len(problems) != 0 {
 		t.Fatalf("package sdk did not type-check cleanly (%d problem(s)); every gate that reads a "+
 			"constant VALUE out of this tree would be reading silence where the checker gave up: %v",

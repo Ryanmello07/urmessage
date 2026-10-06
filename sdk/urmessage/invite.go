@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // InviteVersion is the version every [Invite] this build encodes carries. A blob written by another

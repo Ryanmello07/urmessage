@@ -914,13 +914,13 @@ func TestEveryGodocLinkInThisRepositorysProductionProseNamesADeclaration(t *test
 			"this module's prose writes into it -- the complement prints how many. Read %s",
 			filepath.Join(root, "go.mod"))
 	}
-	messagegroupDir, ownsIt := module.dirOf("github.com/urnetwork/connect/messagegroup")
+	messagegroupDir, ownsIt := module.dirOf("github.com/urnetwork/message/messagegroup")
 	if ownsIt {
 		t.Fatalf("CONTROL FAILED: the resolver thinks connect/messagegroup is a directory of THIS " +
 			"module, so the two sides of the seam are not being told apart")
 	}
 	if messagegroupDir == "" {
-		t.Fatalf("CONTROL FAILED: the resolver turns github.com/urnetwork/connect/messagegroup into " +
+		t.Fatalf("CONTROL FAILED: the resolver turns github.com/urnetwork/message/messagegroup into " +
 			"no directory although go.mod replaces that module with one. Every link into it would " +
 			"then fall through to the out-of-build disposition, where a row excuses it and nothing " +
 			"reads connect at all")

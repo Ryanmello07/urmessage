@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // THE THREE LINES THESE CASES TURN ON. Typed here so a case comparing against a literal at the

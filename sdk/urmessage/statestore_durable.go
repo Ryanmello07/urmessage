@@ -15,8 +15,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 )
 
 // ── S2-14: the durable mls.StateStore ────────────────────────────────────────────────────────

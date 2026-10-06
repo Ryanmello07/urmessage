@@ -163,9 +163,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 )
 
 // The three MASTER section 7 octets that have no code point in any document. connect's wrap.go

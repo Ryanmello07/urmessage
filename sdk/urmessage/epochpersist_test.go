@@ -34,8 +34,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 func TestAnEpochChangeIsPersistedAndTheRestartComesBackAtItAndSeals(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // MemoryStateStore is [mls.StateStore] in three maps.

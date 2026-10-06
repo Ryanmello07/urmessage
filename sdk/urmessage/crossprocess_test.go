@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/sdk"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/sdk"
 )
 
 // THE RESTORE CROSSES A REAL PROCESS BOUNDARY, AND UNTIL THIS FILE EXISTED NOTHING IN THIS MODULE

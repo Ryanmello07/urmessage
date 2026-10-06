@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // ── the content envelope ─────────────────────────────────────────────────────────────────────

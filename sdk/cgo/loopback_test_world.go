@@ -21,7 +21,7 @@ import (
 	"github.com/urnetwork/message-server/api"
 	"github.com/urnetwork/message-server/peer"
 	"github.com/urnetwork/message-server/store"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // A RUNNING MESSAGE SERVER AND ITS CLIENTS, FOR THE C CONSUMER TEST AND FOR NOTHING ELSE.

@@ -14,8 +14,8 @@ import (
 	"github.com/urnetwork/message-server/api"
 	"github.com/urnetwork/message-server/peer"
 	"github.com/urnetwork/message-server/store"
-	"github.com/urnetwork/sdk"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // THE WORLD: ONE RUNNING MESSAGE SERVER AND AS MANY REAL CLIENTS AS A CASE ASKS FOR.

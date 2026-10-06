@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 // ── invariant H1, as a gate rather than a paragraph ──────────────────────────────────────────
@@ -206,7 +206,7 @@ func headGateTypeCheck(t *testing.T, fileSet *token.FileSet, files []*ast.File) 
 		DisableUnusedImportCheck: true,
 	}
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}}
-	pkg, _ := config.Check("github.com/urnetwork/sdk/urmessage", fileSet, files, info)
+	pkg, _ := config.Check("github.com/urnetwork/message/sdk/urmessage", fileSet, files, info)
 	if pkg == nil {
 		t.Fatal("the type-check produced no package, so nothing below resolves")
 	}

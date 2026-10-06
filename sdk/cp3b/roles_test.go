@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
 	"github.com/urnetwork/connect/protocol"
-	"github.com/urnetwork/sdk"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // THE ROLE MODEL OVER A RUNNING SERVER, BOTH ARMS (MASTER §11, ledger item 242's R1 and R2). Three

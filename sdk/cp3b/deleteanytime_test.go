@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/sdk"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // DELETE FOR EVERYONE HAS NO TIME LIMIT (the owner's ruling of 2026-10-02, verbatim: "I think you

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // ForgetGroup is THIS DEVICE'S HALF OF LEAVING A GROUP, and it is the only half a device can do by

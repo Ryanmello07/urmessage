@@ -138,7 +138,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/messagegroup"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 // ── 1. PERMANENCE, DRIVEN RATHER THAN ASSERTED ───────────────────────────────────────────────

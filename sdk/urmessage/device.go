@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
 	"github.com/urnetwork/connect/protocol"
-	"github.com/urnetwork/sdk"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/sdk"
 )
 
 // THE EPOCH ZERO EXPORTER, RESTATED HERE BECAUSE connect DOES NOT PUBLISH IT.

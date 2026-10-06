@@ -16,7 +16,7 @@ import (
 	"github.com/urnetwork/message-server/api"
 	"github.com/urnetwork/message-server/peer"
 	"github.com/urnetwork/message-server/store"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // ── a store that records every ct_body it is ever ASKED to write ─────────────────────────────

@@ -24,8 +24,8 @@ import (
 	"github.com/urnetwork/message-server/endpoint"
 	"github.com/urnetwork/message-server/peer"
 	"github.com/urnetwork/message-server/store"
-	"github.com/urnetwork/sdk"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // THE SERVER AS ITS OWN HOST: THE SAME EXCHANGE, CARRIED BY A PINNED TLS SESSION INSTEAD OF THE

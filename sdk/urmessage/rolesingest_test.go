@@ -9,11 +9,11 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/connect/mls/syntax"
 	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/syntax"
 )
 
 // ── the receiving arm, end to end, through real devices and the seam's own commits ──────────

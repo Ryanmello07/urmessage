@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // ── the content envelope, and every refusal it owes ──────────────────────────────────────────

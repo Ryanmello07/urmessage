@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/urnetwork/connect/messagegroup"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 // The adapter that presents the durable stream store as the sink a sender ratchet allocates from.

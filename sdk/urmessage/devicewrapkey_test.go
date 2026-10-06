@@ -33,8 +33,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 )
 
 // mintLeafKeys is one X-Wing key pair, as `deviceIdentity` mints one: the encoded leaf keys body

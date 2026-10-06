@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // "DELETE FOR ME AND LEAVE", [urmessage.Device.ForgetGroup], over a running server. The owner's

@@ -702,7 +702,7 @@ func TestEveryWrapSeedInThisPackageGoesWhereTheDispositionSaysItGoes(t *testing.
 // Applied one at a time with a python edit that ASSERTS count == 1, and reverted by a byte copy of
 // a snapshot taken before the run whose sha256 is verified after: no `git checkout --`, no stash.
 // The clean tree was re-run as a control after every single row and answered
-// `ok github.com/urnetwork/sdk/urmessage` each time.
+// `ok github.com/urnetwork/message/sdk/urmessage` each time.
 //
 //	M1  the finding's own mutant A: fmt.Errorf("…(seed %x)…", wrapSeed, err) at deviceIdentity's
 //	    persist failure -- the taint started at a PRODUCER CALL

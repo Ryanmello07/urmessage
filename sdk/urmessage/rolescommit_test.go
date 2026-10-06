@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 )
 
 // ── the committing arm: the same predicate, over the same value, before the commit exists ────

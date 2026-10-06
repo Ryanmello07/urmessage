@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // [urmessage.Group.RemoveMember] OVER A RUNNING SERVER (ledger item 258, ruling 49). The feature

@@ -32,8 +32,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/mls"
 )
 
 // sealAs seals one already-encoded content plaintext through the sender's OWN SESSION, with the

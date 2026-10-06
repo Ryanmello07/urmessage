@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // LEDGER ITEM 241, STEP A7: HISTORY SURVIVES A MEMBERSHIP CHANGE FOR THE MEMBERS WHO WERE THERE, AND A

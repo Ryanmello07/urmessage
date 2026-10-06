@@ -131,8 +131,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 )
 
 // ── the world's two missing doors ────────────────────────────────────────────────────────────

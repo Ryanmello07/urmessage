@@ -60,8 +60,8 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 )
 
 // The caps, ruling 7: 500 identities AND 1,000 leaves in v1, and MASTER §11's ten device leaves

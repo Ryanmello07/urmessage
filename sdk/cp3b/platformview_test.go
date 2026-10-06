@@ -21,8 +21,8 @@ import (
 	"github.com/urnetwork/message-server/api"
 	"github.com/urnetwork/message-server/peer"
 	"github.com/urnetwork/message-server/store"
-	"github.com/urnetwork/sdk"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // WHAT THE URNETWORK PLATFORM CAN READ ON THE URMESSAGE PATH, MEASURED RATHER THAN ARGUED.

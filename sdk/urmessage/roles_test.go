@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/syntax"
 )
 
 // ── the rules, one table, no device ──────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // OBSERVER READ-ONLY OVER A RUNNING SERVER: item 242's R4, through the public verbs and nothing

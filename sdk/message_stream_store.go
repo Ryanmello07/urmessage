@@ -16,7 +16,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/urnetwork/connect/messagegroup"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 // StreamStore is the durable stream-index reservation store spec A section 8.2 assigns to sdk,

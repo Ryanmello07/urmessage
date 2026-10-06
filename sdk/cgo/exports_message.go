@@ -18,9 +18,9 @@ import (
 	"unsafe"
 
 	"github.com/urnetwork/connect"
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/sdk"
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // THE MESSAGING C ABI, AND IT IS HAND-WRITTEN ON PURPOSE.

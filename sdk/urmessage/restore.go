@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"github.com/urnetwork/connect/messagegroup"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 // ── S2-14's other half: coming back ──────────────────────────────────────────────────────────

@@ -1237,4 +1237,4 @@ func TestEveryPqSecretInThisPackageGoesWhereTheDispositionSaysItGoes(t *testing.
 //	    -> AND "restoreOne|return" the same, independently
 //
 // The clean tree was re-run after every revert and answered
-// `ok github.com/urnetwork/sdk/urmessage`.
+// `ok github.com/urnetwork/message/sdk/urmessage`.

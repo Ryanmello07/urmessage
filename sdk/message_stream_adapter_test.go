@@ -21,9 +21,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 )
 
 // ----------------------------------------------------------------------------------------------
@@ -846,7 +846,7 @@ func TestTheAdapterIsTheOnlyProductionSourceThatNamesAMessagegroupSentinel(t *te
 	for name, file := range parsed {
 		for _, imported := range file.Imports {
 			path, err := strconv.Unquote(imported.Path.Value)
-			if err != nil || path != "github.com/urnetwork/connect/messagegroup" {
+			if err != nil || path != "github.com/urnetwork/message/messagegroup" {
 				continue
 			}
 			if imported.Name != nil {

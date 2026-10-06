@@ -19,7 +19,7 @@ import (
 // method below forwards, and none of them decides anything.
 //
 // WHY A WRAPPER AT ALL. The send/receive seam of the alpha lives in package
-// github.com/urnetwork/sdk/urmessage rather than here, for a reason that is a measurement rather
+// github.com/urnetwork/message/sdk/urmessage rather than here, for a reason that is a measurement rather
 // than a taste: TestNoProductionSourceOfPackageSdkSpellsAStreamKeyFieldName refuses the
 // identifiers `GroupId` and `SenderHandle` in EVERY production file of package sdk's own
 // directory, and the seam spells both on every second line -- they are field names of

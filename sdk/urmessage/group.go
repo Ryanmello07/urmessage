@@ -9,11 +9,11 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/messagegroup"
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/connect/mls/syntax"
 	"github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/syntax"
 )
 
 // GroupIdBytes is the width of the identifier the server keys its rows by, and the width a record

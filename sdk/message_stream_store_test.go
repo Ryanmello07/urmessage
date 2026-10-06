@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/messagegroup"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 // ----------------------------------------------------------------------------------------------
@@ -309,7 +309,7 @@ func TestNoProductionSourceOfPackageSdkSpellsAStreamKeyFieldName(t *testing.T) {
 		}
 		for _, imported := range parsed.Imports {
 			path, err := strconv.Unquote(imported.Path.Value)
-			if err == nil && path == "github.com/urnetwork/connect/messagegroup" {
+			if err == nil && path == "github.com/urnetwork/message/messagegroup" {
 				sawTheKeyType = append(sawTheKeyType, name)
 			}
 		}

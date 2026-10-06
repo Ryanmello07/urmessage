@@ -12,7 +12,7 @@ import (
 
 	"github.com/urnetwork/connect"
 	"github.com/urnetwork/connect/protocol"
-	"github.com/urnetwork/sdk"
+	"github.com/urnetwork/message/sdk"
 )
 
 // ── the reconnect window ─────────────────────────────────────────────────────────────────────

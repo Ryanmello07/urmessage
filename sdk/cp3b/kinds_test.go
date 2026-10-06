@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/sdk/urmessage"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // THE CONTENT ENVELOPE, END TO END, THROUGH A REAL SERVER.

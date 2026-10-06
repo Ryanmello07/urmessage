@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/messagegroup"
+	"github.com/urnetwork/message/messagegroup"
 )
 
 // The values every case below round-trips. They are spelled once so that a case comparing against
