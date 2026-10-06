@@ -5178,7 +5178,7 @@ const file_message_proto_rawDesc = "" +
 	"\x17REASON_EPOCH_INCOMPLETE\x10\x0e\x12\x1e\n" +
 	"\x1aREASON_WRAP_TARGET_UNKNOWN\x10\x0f\x12\x17\n" +
 	"\x13REASON_CARD_RETIRED\x10\x10\x12\x1c\n" +
-	"\x18REASON_CARD_RATE_LIMITED\x10\x11B'Z%github.com/urnetwork/connect/protocolb\x06proto3"
+	"\x18REASON_CARD_RATE_LIMITED\x10\x11B'Z%github.com/urnetwork/message/protocolb\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once
