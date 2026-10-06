@@ -85,13 +85,14 @@ type MessageClientConfig struct {
 	// an error message has published it.
 	ByClientJwt string
 
-	// The operator's host name, e.g. "ur.io". The platform and api urls are derived from it
-	// through [ServiceUrl], which is the same derivation NetworkSpace performs -- so a
-	// non-default Env lands on the same authority the rest of this module would dial rather
-	// than on a hand-built "wss://connect." + host, which is right only for the main env.
+	// The operator's host name, e.g. "ur.io", for a deployment that follows the service-host
+	// convention: the platform and api urls are derived from it by [MessageServiceUrls], so a
+	// non-default Env lands on the authority the core SDK's network space would dial rather than
+	// on a hand-built "wss://connect." + host, which is right only for the main env. A caller that
+	// has resolved its own network space passes PlatformUrl and ApiUrl instead, and needs no host.
 	Host string
 
-	// The environment, "" or "main" for the deployed one. [NormalEnvName] is applied.
+	// The environment, "" or "main" (any case) for the deployed one; see [MessageServiceUrls].
 	Env string
 
 	// This installation's instance id. The zero value draws a fresh one, which is what a
@@ -102,8 +103,9 @@ type MessageClientConfig struct {
 	// What to report as the app version. "" takes [messageClientDefaultAppVersion].
 	AppVersion string
 
-	// Absolute overrides for the two derived urls, for a deployment that does not follow the
-	// service-host convention. Empty takes the derivation.
+	// The two service urls, explicitly. This is the preferred form (MESSAGEREVIEW.md, "Move the
+	// SDK messaging implementation"): an application that resolved its network space, core SDK
+	// or otherwise, passes what it resolved. Either one left empty is derived from Host and Env.
 	PlatformUrl string
 	ApiUrl      string
 }
@@ -198,28 +200,54 @@ func NewMessageClient(ctx context.Context, config *MessageClientConfig) (*Messag
 	}, nil
 }
 
-// messageClientUrls is the two service urls this client dials, derived rather than concatenated.
+// MessageServiceUrls is the host/env convenience's whole contract: the platform and api urls of
+// an operator whose services follow the service-host convention.
 //
-// IT GOES THROUGH [ServiceUrl] because that is the derivation the rest of this module already
-// performs, env prefix and all: on env "main" or "" the platform is wss://connect.<host>, and on
-// any other env it is wss://<env>-connect.<host>. sdk/liveprobe built "wss://connect." + host by
-// hand, which silently dials the production authority from a non-production env.
+//   - env "" or "main", in any case, is the deployed one: wss://connect.<host> and
+//     https://api.<host>;
+//   - any other env prefixes the service label with the env, lower-cased:
+//     wss://<env>-connect.<host> and https://<env>-api.<host>;
+//   - an empty or all-blank host is refused with [ErrMessageClientNoHost]; any other host is used
+//     exactly as given.
+//
+// It is the core SDK's ServiceUrl for a network space with no overrides, written here so this
+// package needs nothing from the core SDK; the composition build, which links both, holds the
+// two to the same answers. A deployment off the convention (an env secret, a migration host,
+// absolute endpoints) passes MessageClientConfig.PlatformUrl and ApiUrl instead.
+func MessageServiceUrls(host string, env string) (platformUrl string, apiUrl string, err error) {
+	if strings.TrimSpace(host) == "" {
+		return "", "", ErrMessageClientNoHost
+	}
+	serviceUrl := func(scheme string, service string) string {
+		switch env := strings.ToLower(env); env {
+		case "", "main":
+			return scheme + "://" + service + "." + host
+		default:
+			return scheme + "://" + env + "-" + service + "." + host
+		}
+	}
+	return serviceUrl("wss", "connect"), serviceUrl("https", "api"), nil
+}
+
+// messageClientUrls is the two service urls this client dials: each one given explicitly, or
+// derived by [MessageServiceUrls] rather than concatenated. sdk/liveprobe built
+// "wss://connect." + host by hand, which silently dials the production authority from a
+// non-production env.
 func messageClientUrls(config *MessageClientConfig) (platformUrl string, apiUrl string, err error) {
 	platformUrl = strings.TrimRight(config.PlatformUrl, "/")
 	apiUrl = strings.TrimRight(config.ApiUrl, "/")
 	if platformUrl != "" && apiUrl != "" {
 		return platformUrl, apiUrl, nil
 	}
-	if strings.TrimSpace(config.Host) == "" {
-		return "", "", ErrMessageClientNoHost
+	derivedPlatform, derivedApi, err := MessageServiceUrls(config.Host, config.Env)
+	if err != nil {
+		return "", "", err
 	}
-	key := NetworkSpaceKey{HostName: config.Host, EnvName: NormalEnvName(config.Env)}
-	values := NetworkSpaceValues{}
 	if platformUrl == "" {
-		platformUrl = ServiceUrl(&key, &values, "wss", "connect")
+		platformUrl = derivedPlatform
 	}
 	if apiUrl == "" {
-		apiUrl = ServiceUrl(&key, &values, "https", "api")
+		apiUrl = derivedApi
 	}
 	return platformUrl, apiUrl, nil
 }

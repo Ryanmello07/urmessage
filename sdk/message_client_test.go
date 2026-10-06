@@ -115,11 +115,13 @@ func TestAMessageClientRefusesEveryCredentialThatWouldDialAsNobody(t *testing.T)
 	}
 }
 
-// THE TWO SERVICE URLS, DERIVED THROUGH [ServiceUrl] RATHER THAN CONCATENATED.
+// THE TWO SERVICE URLS, DERIVED THROUGH [MessageServiceUrls] RATHER THAN CONCATENATED.
 //
 // sdk/liveprobe built "wss://connect." + host by hand, which is right on the deployed env and
-// silently dials the PRODUCTION authority from any other. The rows below are what the rest of this
-// module derives for the same key, so a change to ServiceUrl moves both together.
+// silently dials the PRODUCTION authority from any other. The rows below are the resolver's
+// contract, production and non-production. They were the core SDK's ServiceUrl answers while this
+// code lived there; since it moved, the composition build, which links both SDKs, holds
+// MessageServiceUrls to the core SDK's ServiceUrl over these rows and more.
 //
 // THE OVERRIDES ARE HELD TOO, INCLUDING THE CASE THAT USED TO NEED NO HOST: two absolute urls are
 // a complete answer and must not require a host name that nothing would then use.
