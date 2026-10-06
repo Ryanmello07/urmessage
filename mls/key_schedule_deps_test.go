@@ -876,11 +876,23 @@ func TestNoPinBlockShrinksWithoutFailing(t *testing.T) {
 // by pins_test.go instead.
 const firstPartyImportPrefix = "github.com/urnetwork/message"
 
+// isFirstPartyImport is a PATH prefix match on firstPartyImportPrefix. A string prefix was
+// enough while the module was github.com/urnetwork/connect; renamed to
+// github.com/urnetwork/message it also matches github.com/urnetwork/message-server, a
+// different module whose symbols this file has no business pinning. The control fixture
+// below imports one, and it must not be collected.
+func isFirstPartyImport(path string) bool {
+	return path == firstPartyImportPrefix || strings.HasPrefix(path, firstPartyImportPrefix+"/")
+}
+
 // firstPartyConsumptionControl names one first party symbol in a comment, one through a
 // value and one through a call, and one standard library symbol. A collector that had
 // started reading text rather than the syntax tree reports the comment; one that had lost
 // its import filter reports strings.TrimSpace. Both are shapes this package actually has:
 // errors_key_schedule.go's doc names syntax.Unmarshal in prose without calling it.
+// It also reaches x.NotFirstParty through github.com/urnetwork/message-server/x, the module
+// beside this one whose path begins with this one's: a collector matching the module path as a
+// string prefix reports it.
 var firstPartyConsumptionControl = strings.Join([]string{
 	"package control",
 	"",
@@ -888,6 +900,7 @@ var firstPartyConsumptionControl = strings.Join([]string{
 	"\t\"strings\"",
 	"",
 	"\t\"github.com/urnetwork/message/syntax\"",
+	"\t\"github.com/urnetwork/message-server/x\"",
 	")",
 	"",
 	"// syntax.NamedOnlyInAComment is prose and not a consumer.",
@@ -897,6 +910,7 @@ var firstPartyConsumptionControl = strings.Join([]string{
 	"\t}",
 	"\tw := syntax.NewWriter()",
 	"\t_ = w",
+	"\t_ = x.NotFirstParty",
 	"\treturn nil",
 	"}",
 	"",
@@ -909,7 +923,7 @@ func firstPartyQualifiedNames(file *ast.File) []string {
 	locals := map[string]bool{}
 	for _, imported := range file.Imports {
 		path := strings.Trim(imported.Path.Value, "\"")
-		if !strings.HasPrefix(path, firstPartyImportPrefix) {
+		if !isFirstPartyImport(path) {
 			continue
 		}
 		local := path[strings.LastIndex(path, "/")+1:]
