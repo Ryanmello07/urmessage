@@ -2907,11 +2907,72 @@ func TestEveryPackageBuiltOnThisOneIsUnderTheConstantTimeGate(t *testing.T) {
 	}
 	t.Logf("%d directories walked under %s, %d production packages import %s: %v; authScanRoots covers %v",
 		walk.directories, root, len(walk.importers), self, walk.importers, authScanRoots)
-	// THE COMPLEMENT OF THE MODULE BOUNDARY, printed and not asserted. A nested module is another
-	// module's source, and the rules authScanRoots run read this module's; its importers of this
-	// package are a hardening item of their own, not a gap this gate closes by widening.
+	// THE COMPLEMENT OF THE MODULE BOUNDARY, printed and held to its dispositions. A nested module is
+	// another module's source, and the rules authScanRoots run read this module's; its importers of
+	// this package are a hardening item of their own (F3, ruling O20), not a gap this gate closes by
+	// widening. But each one is named in authNestedImporterDispositions, both ways, so a new importer
+	// over there (the SDK comparing tags with bytes.Equal, say) fails here until someone writes down
+	// why it stands, and a row whose package stopped importing this one fails until it is deleted.
+	relative := []string{}
+	for _, directory := range walk.nestedImporters {
+		rel, err := filepath.Rel(root, directory)
+		if err != nil {
+			t.Fatalf("%s is not under %s: %v", directory, root, err)
+		}
+		relative = append(relative, filepath.ToSlash(rel))
+	}
 	t.Logf("COMPLEMENT: %d nested module(s) not walked: %v; production packages in them importing %s: %d %v",
-		len(walk.nestedModules), walk.nestedModules, self, len(walk.nestedImporters), walk.nestedImporters)
+		len(walk.nestedModules), walk.nestedModules, self, len(relative), relative)
+	for _, problem := range authNestedImporterProblems(relative, authNestedImporterDispositions) {
+		t.Error(problem)
+	}
+}
+
+// The production packages of nested modules that import this one, each with why it stands outside
+// the constant-time gate, held both ways by TestEveryPackageBuiltOnThisOneIsUnderTheConstantTimeGate.
+// Keys are repository-relative directories.
+var authNestedImporterDispositions = map[string]string{
+	"sdk/urmessage": "the SDK module's device and group orchestration. The constant-time rules cover the root module, " +
+		"as they covered the connect module (ruling O20); carrying them into the SDK module is hardening item F3, " +
+		"not part of the move",
+}
+
+// authNestedImporterProblems holds the nested importers against their dispositions, both ways.
+func authNestedImporterProblems(importers []string, dispositions map[string]string) []string {
+	problems := []string{}
+	seen := map[string]bool{}
+	for _, directory := range importers {
+		seen[directory] = true
+		if _, disposed := dispositions[directory]; !disposed {
+			problems = append(problems, fmt.Sprintf("%s is a production package of a nested module importing this one, "+
+				"outside the constant-time gate, and authNestedImporterDispositions has no row for it: write down why it "+
+				"stands (or bring it under a gate of its own module)", directory))
+		}
+	}
+	for _, directory := range slices.Sorted(maps.Keys(dispositions)) {
+		if !seen[directory] {
+			problems = append(problems, fmt.Sprintf("%s has a row in authNestedImporterDispositions and no longer imports "+
+				"this package: delete the row", directory))
+		}
+	}
+	return problems
+}
+
+// The nested importers' dispositions on planted inputs: the real rows pass; a planted extra importer
+// (the SDK module's own package) is reported; a row whose package stopped importing is reported.
+func TestTheNestedImporterDispositionsAreHeldBothWays(t *testing.T) {
+	real := slices.Sorted(maps.Keys(authNestedImporterDispositions))
+	if problems := authNestedImporterProblems(real, authNestedImporterDispositions); len(problems) != 0 {
+		t.Fatalf("the dispositions' own directories were refused: %q", problems)
+	}
+	planted := authNestedImporterProblems(append(slices.Clone(real), "sdk"), authNestedImporterDispositions)
+	if len(planted) != 1 || !strings.HasPrefix(planted[0], "sdk is a production package of a nested module") {
+		t.Errorf("a planted nested importer with no row: %q", planted)
+	}
+	gone := authNestedImporterProblems(nil, authNestedImporterDispositions)
+	if len(gone) != len(real) || !strings.HasPrefix(gone[0], real[0]+" has a row") {
+		t.Errorf("rows whose packages stopped importing: %q", gone)
+	}
 }
 
 // authImportWalk is what one walk for the importers of a package found.

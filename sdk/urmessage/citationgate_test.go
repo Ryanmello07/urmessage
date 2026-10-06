@@ -5,9 +5,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -111,6 +113,64 @@ var citationDeclaredElsewhere = map[string]string{
 // urnetwork/sdk, and the both-ways check below reported the entry as excusing nothing. The table
 // stays, so a carve-out has somewhere to be written and held the day one is needed.
 var citationIsNotACase = map[string]string{}
+
+// citationOutsideSubjectUnresolved is every citation in the production prose OUTSIDE this module (the
+// root module's) that resolves to no single declaration, each with the reason it stands. That prose
+// is not this gate's subject (it was in no citation gate's subject in connect), so nothing above
+// asserts it; but its complement is held to this map BOTH WAYS, so a new unresolved citation over
+// there fails until it is given a row or fixed, and a row whose citation resolved, or is no longer
+// cited, fails until it is deleted. Three are test names wrapped across two comment lines, each of
+// which this repository declares once under its full name; one is message-server's.
+var citationOutsideSubjectUnresolved = map[string]string{
+	"TestDiscardProcessedAfterA": "wrapped across two comment lines (messagegroup/engine.go): " +
+		"TestDiscardProcessedAfterASuccessfulApplyCommitErasesNothing, declared once in messagegroup/engineroles_test.go",
+	"TestMembersAfterNamesTheIdentityTheCommitLeavesAtTheCommitters": "wrapped across two comment lines " +
+		"(messagegroup/engine.go): TestMembersAfterNamesTheIdentityTheCommitLeavesAtTheCommittersLeaf, " +
+		"declared once in messagegroup/engineroles_test.go",
+	"TestTheRetractedSentinelSurvivesOnlyInThe": "wrapped across two comment lines (messagegroup/doc.go): " +
+		"TestTheRetractedSentinelSurvivesOnlyInTheParagraphThatRetractsIt, declared once in messagegroup/ephkey_test.go",
+	"TestEveryDependencyOfThisModuleIsOneSpecB22Allows": "message-server's dependency gate, deps_test.go in " +
+		"urnetwork/message-server, a sibling repository (messagegroup/doc.go cites it as the server's own gate)",
+}
+
+// citationOutsideProblems holds the unresolved citations outside the subject against their
+// dispositions, both ways: an unresolved name with no row, and a row that names no unresolved name.
+func citationOutsideProblems(unresolved []string, dispositions map[string]string) []string {
+	problems := []string{}
+	seen := map[string]bool{}
+	for _, name := range unresolved {
+		seen[name] = true
+		if _, disposed := dispositions[name]; !disposed {
+			problems = append(problems, fmt.Sprintf("%s is cited outside this module and resolves to no single "+
+				"declaration, and citationOutsideSubjectUnresolved has no row for it: fix the citation, or add the row "+
+				"with what it is", name))
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(dispositions)) {
+		if !seen[name] {
+			problems = append(problems, fmt.Sprintf("%s has a row in citationOutsideSubjectUnresolved and is no "+
+				"longer an unresolved citation outside this module: delete the row", name))
+		}
+	}
+	return problems
+}
+
+// The outside-subject dispositions on planted inputs: the real set passes; a planted unresolved
+// citation with no row is reported; a row whose citation resolved is reported.
+func TestTheOutsideSubjectDispositionsAreHeldBothWays(t *testing.T) {
+	real := slices.Sorted(maps.Keys(citationOutsideSubjectUnresolved))
+	if problems := citationOutsideProblems(real, citationOutsideSubjectUnresolved); len(problems) != 0 {
+		t.Fatalf("the dispositions' own names were refused: %q", problems)
+	}
+	planted := citationOutsideProblems(append(slices.Clone(real), "TestPlantedAndDeclaredNowhere"), citationOutsideSubjectUnresolved)
+	if len(planted) != 1 || !strings.HasPrefix(planted[0], "TestPlantedAndDeclaredNowhere is cited outside this module") {
+		t.Errorf("a planted unresolved citation with no row: %q", planted)
+	}
+	resolved := citationOutsideProblems(real[1:], citationOutsideSubjectUnresolved)
+	if len(resolved) != 1 || !strings.HasPrefix(resolved[0], real[0]+" has a row") {
+		t.Errorf("a row whose citation resolved: %q", resolved)
+	}
+}
 
 // citationCorpus is every `Test...` function this repository declares and every citation of one in
 // its production prose, read ONCE and answered to by the rule above.
@@ -372,28 +432,37 @@ func TestEveryTestNameCitedInThisRepositorysProductionProseResolvesToOneDeclarat
 			"vacuous and only the carve-outs are being exercised")
 	}
 
-	// ── THE COMPLEMENT OF THE SUBJECT, PRINTED AND NOT ASSERTED ──────────────────────────────────
+	// ── THE COMPLEMENT OF THE SUBJECT, PRINTED AND HELD TO ITS DISPOSITIONS ─────────────────────
 	//
 	// The subject is this module's prose, as it was in urnetwork/sdk. The root module's prose is
 	// outside it: in connect no gate read it, and making it this gate's subject is a change of
 	// subject to be decided rather than one a move makes silently. So it is printed here, every
-	// cited name that does not resolve to exactly one declaration listed with where it is cited,
-	// so that what the narrowing leaves out is on the page beside what it holds.
+	// cited name that does not resolve to exactly one declaration listed with where it is cited, and
+	// that list is held both ways to citationOutsideSubjectUnresolved, so what the narrowing leaves
+	// out can neither grow nor go stale without a failure.
 	outsideNames := []string{}
 	unresolvedOutside := []string{}
+	unresolvedNames := []string{}
 	for name := range scan.citedOutside {
 		outsideNames = append(outsideNames, name)
 	}
 	sort.Strings(outsideNames)
 	for _, name := range outsideNames {
 		if len(declared[name]) != 1 {
+			unresolvedNames = append(unresolvedNames, name)
 			unresolvedOutside = append(unresolvedOutside, fmt.Sprintf("%s (declared %d time(s), cited at %s)",
 				name, len(declared[name]), strings.Join(scan.citedOutside[name], ", ")))
 		}
 	}
 	t.Logf("COMPLEMENT of the subject: the production prose outside this module cites %d distinct "+
-		"name(s); %d of them resolve to no single declaration, and are NOT asserted here: %v",
-		len(outsideNames), len(unresolvedOutside), unresolvedOutside)
+		"name(s); %d of them resolve to no single declaration, each held to its row in "+
+		"citationOutsideSubjectUnresolved: %v", len(outsideNames), len(unresolvedOutside), unresolvedOutside)
+	if len(outsideNames) == 0 {
+		t.Errorf("the prose outside this module cites no Test... name at all, so the complement was asked of nothing")
+	}
+	for _, problem := range citationOutsideProblems(unresolvedNames, citationOutsideSubjectUnresolved) {
+		t.Error(problem)
+	}
 }
 
 // repositoryRoot is the root of urnetwork/message: the directory above this module whose go.mod
