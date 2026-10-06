@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""verify_split3.py: the staged byte-level proof for the message repository's imports.
+"""verify_split.py: the staged byte-level proof for the message repository's imports.
+
+Revision 4 (2026-10-06), two changes and nothing else:
+  - the sdk side is pinned from three counted runs over P_sdk (two on Ubuntu 24.04, git 2.43.0,
+    Python 3.12.3; one on Windows, git 2.53.0, Python 3.14.4; one tip), its history check
+    excludes the one path the second filter pass removed, and its control is the fork's
+    beta/message before the SX-0 sync;
+  - B/C accepts an imported merge that kept FEWER parents than its source in one case only, the
+    merge analogue of the root rule below: every dropped source parent projects onto NOTHING and
+    has no imported commit behind it (its side of the history never held a kept path, so it has
+    no image for git-filter-repo to point at). The kept parents must match the source's in
+    order and pass every ordinary parent check. With --controls, the same rule must refuse to
+    drop any parent of every merge that was kept whole.
 
 Revision 3 (2026-10-05), after red-team review. For every import the message repository has
 taken so far it proves that
@@ -34,7 +46,8 @@ Sides (pass the ones the tip should hold with --sides):
   connect-core      stage 2a: message/, messagegroup/, mls/ (minus syntax), mls/syntax -> syntax/,
                     .gitattributes, .github/workflows/mls-syntax.yml
   connect-protocol  stage 2b: protocol/message* (8 files)
-  sdk               stage 3:  refuses to run until pinned from a counted run over the SX-0 sync
+  sdk               stage 3:  the messaging SDK, root message*.go, urmessage/, cp3b/, livepeer/,
+                    liveprobe/ and the cgo message files -> sdk/... (liveprobe.exe dropped)
 
 Exit status 0 only if every assertion holds.
 """
@@ -153,16 +166,37 @@ SIDES = {
     ),
     "sdk": dict(
         projector=project_sdk,
-        pathspecs=[":(glob)message*.go", "urmessage", "cp3b", "livepeer", "liveprobe"] + sorted(SDK_EXTRA_FILES),
-        rule_counts=None,      # PIN after the SX-0 sync, from a counted run, before the first real use
-        filtered_tip=None,     # PIN after the SX-0 sync
-        source_rev=None,       # PIN after the SX-0 sync (the fork sdk main that carries upstream 1ca8b35a)
-        commits=None,
-        neighbours=["internal/subprotocolrpc/message.go", "cgo/exports_core.go", "cgo/handles.go",
+        # the history check reads every source commit that changes a kept path; the second filter
+        # pass removed liveprobe.exe (36 MB, added, changed and deleted by three commits that each
+        # change other kept paths too), so that one path is not a kept path
+        pathspecs=[":(glob)message*.go", "urmessage", "cp3b", "livepeer", "liveprobe"] + sorted(SDK_EXTRA_FILES)
+        + [":(exclude)liveprobe/liveprobe.exe"],
+        rule_counts={"sdk root message*.go -> sdk/": 29, "sdk urmessage/ -> sdk/urmessage/": 61,
+                     "sdk cgo message files -> sdk/cgo/": 11, "sdk cp3b/ -> sdk/cp3b/": 39,
+                     "sdk livepeer/ -> sdk/livepeer/": 4, "sdk liveprobe/ -> sdk/liveprobe/": 4},
+        # git-filter-repo 2.47.0, defaults as for connect: sdk-paths.stage3.txt (sha256
+        # 9b685031...d169), then --invert-paths --path sdk/liveprobe/liveprobe.exe on a fresh clone,
+        # both --preserve-commit-hashes, over P_sdk: three runs, one tip (2026-10-06)
+        filtered_tip="e522383045379792fec68bb81614fc6be24c6030",
+        # P_sdk: Ryanmello07/urnetwork-sdk beta/message after the SX-0 sync (upstream sdk 0c6462f2
+        # merged in), fork tag split/source-sdk-3
+        source_rev="6141b98d05bcac98d5ccae11c54c7748919017e6",
+        commits=123,
+        neighbours=["subprotocol_rpc_message.go", "cgo/exports_core.go", "cgo/handles.go", "cgo/callbacks.c",
                     "cgo/exports_gen.go", "cgo/include/urnetwork_sdk.def", "cgo/gen/gen.go",
                     "cgo/gen/manual_exports_test.go", "cgo/go.mod",
                     "LICENSE", ".gitattributes", "network_space.go", "device_local_provider.go"],
-        control=None,
+        # the fork's beta/message BEFORE the SX-0 sync: it lacks three upstream message test files
+        # and differs in eight module files and three message tests, and in nothing else here
+        control=("d20d82c1da4be370050f9d00c2b658166e024fc0",
+                 {"UNEXPECTED in import: sdk/message_stream_adapter_census_extender_native_test.go",
+                  "UNEXPECTED in import: sdk/message_stream_adapter_census_extender_other_test.go",
+                  "UNEXPECTED in import: sdk/message_transport_fragment_rulings_darwin_test.go"}
+                 | {kind + " sdk/" + path for kind in ("BLOB", "BYTES") for path in (
+                     "cgo/loopback.go.mod", "cgo/loopback.go.sum", "cp3b/go.mod", "cp3b/go.sum",
+                     "livepeer/go.mod", "livepeer/go.sum", "liveprobe/go.mod", "liveprobe/go.sum",
+                     "message_stream_adapter_test.go", "message_transport_fragment_rulings_other_test.go",
+                     "message_transport_fragment_test.go")}),
         mechanical_stage="3",
     ),
 }
@@ -484,7 +518,7 @@ def read_commit_map(path):
     return rows
 
 
-def history_check(label, src_repo, src_tip, dst, side_tip, proj, pathspecs, published_maps):
+def history_check(label, src_repo, src_tip, dst, side_tip, proj, pathspecs, published_maps, controls=False):
     fails = []
     dst_commits = git(dst, "rev-list", side_tip).decode().split()
     src_commits = git(src_repo, "rev-list", src_tip).decode().split()
@@ -529,6 +563,21 @@ def history_check(label, src_repo, src_tip, dst, side_tip, proj, pathspecs, publ
     # the parents: a reordered or re-parented history keeps every tree and every message and
     # changes only these lines, so they are compared as carefully as the trees are
     parent_checks = 0
+
+    def pair_holds(p, q):
+        return p in mapping and dst_tree(p) == projected(q) and is_ancestor(src_repo, mapping[p], q)
+
+    imported_sources = set(mapping.values())
+
+    def side_holds_nothing(q):
+        """Revision 4: true when source parent q projects onto no path and no imported commit lies
+        behind it, so dropping it can hide no imported history: the merge analogue of the root rule."""
+        if projected(q):
+            return False
+        behind = set(git(src_repo, "rev-list", q).decode().split())
+        return not (behind & imported_sources)
+
+    dropped_empty = []
     for d, s in sorted(mapping.items()):
         pd = [p.decode() for p in meta_dst[d].get("parent", [])]
         ps = [p.decode() for p in meta_src[s].get("parent", [])]
@@ -538,6 +587,28 @@ def history_check(label, src_repo, src_tip, dst, side_tip, proj, pathspecs, publ
                              % (label, d[:12], s[:12], ps[0][:12], len(projected(ps[0]))))
             parent_checks += 1
             continue
+        if len(pd) < len(ps):
+            # the kept parents must be the source's in order; each source parent left over must be
+            # a side that never held a kept path, or the history was cut or re-parented
+            at, matched, dropped = 0, [], []
+            for q in ps:
+                if at < len(pd) and pair_holds(pd[at], q):
+                    matched.append((pd[at], q))
+                    at += 1
+                else:
+                    dropped.append(q)
+            if at != len(pd):
+                fails.append("%s: %s has %d parents and its source %s has %d, and the %d kept do not match the source's in order"
+                             % (label, d[:12], len(pd), s[:12], len(ps), len(pd)))
+                continue
+            for q in dropped:
+                parent_checks += 1
+                if side_holds_nothing(q):
+                    dropped_empty.append("%s<-%s dropped %s" % (d[:10], s[:10], q[:10]))
+                else:
+                    fails.append("%s: %s dropped its source %s's parent %s, whose side holds kept paths or imported "
+                                 "history: the history was cut" % (label, d[:12], s[:12], q[:12]))
+            pd, ps = [p for p, _ in matched], [q for _, q in matched]
         if len(pd) != len(ps):
             fails.append("%s: %s has %d parents and its source %s has %d" % (label, d[:12], len(pd), s[:12], len(ps)))
             continue
@@ -552,6 +623,19 @@ def history_check(label, src_repo, src_tip, dst, side_tip, proj, pathspecs, publ
             if not is_ancestor(src_repo, mapping[p], q):
                 fails.append("%s: parent %d of %s maps to %s, which is not an ancestor-or-self of the source parent %s"
                              % (label, i + 1, d[:12], mapping[p][:12], q[:12]))
+
+    if dropped_empty:
+        print("    %s: %d imported merges dropped a source parent whose side never held a kept path: %s"
+              % (label, len(dropped_empty), dropped_empty))
+    if controls:
+        # the rule must refuse to drop any parent of a merge that was kept whole
+        whole = [(d, s) for d, s in sorted(mapping.items()) if len(meta_dst[d].get("parent", [])) > 1]
+        accepted = ["%s parent %d" % (d[:10], i + 1) for d, s in whole
+                    for i, q in enumerate(p.decode() for p in meta_src[s].get("parent", [])) if side_holds_nothing(q)]
+        print("  control: the dropped-parent rule asked about each parent of the %d merges kept whole -> %s"
+              % (len(whole), "refused every one" if not accepted else "ACCEPTED %s" % accepted))
+        if accepted:
+            fails.append("%s: the dropped-parent control accepted %s" % (label, accepted))
 
     changing = set(git(src_repo, "log", "--full-history", "--no-merges", "--format=%H", src_tip, "--", *pathspecs).decode().split())
     imported = set(mapping.values())
@@ -942,7 +1026,7 @@ def main():
                     failures.append("%s: synthetic control missed: %s" % (s, title))
         # B/C
         if not a.no_history:
-            failures += history_check(s, repo, rv, a.dst, side, cfg["projector"], cfg["pathspecs"], maps.get(s, []))
+            failures += history_check(s, repo, rv, a.dst, side, cfg["projector"], cfg["pathspecs"], maps.get(s, []), a.controls)
         sources[s] = (repo, rv, cfg["projector"], cfg["mechanical_stage"])
 
     if a.manifest:

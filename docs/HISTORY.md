@@ -127,8 +127,13 @@ import; later stages add their sides to `--sides`.
 
 ## Files in docs/history
 
-- `verify_split.py`: the verifier, sha256
-  `85fcadf4916099fcf33bda29070eb970e0dd22749f588809a2cbd238e351571e`.
+- `verify_split.py`: the verifier, revision 4, sha256
+  `ed620472a7656e889f1f25b9fd50094b9282f312d433f16d87f391cf99106e7e`. Stages 1 and 2 were
+  verified with revision 3 (`85fcadf4916099fcf33bda29070eb970e0dd22749f588809a2cbd238e351571e`),
+  whose output revision 4 reproduces line for line on those sides, plus one new control line
+  per side. Revision 4 pins the sdk side and adds one rule: an imported merge may keep fewer
+  parents than its source only when each dropped parent's side never held a kept path (the
+  sdk's sync merge `990e84ff`, whose upstream side had no messaging file yet).
 - `connect-codestyle-paths.txt`: the `--paths-from-file` input of the stage 1 filter.
 - `connect-codestyle-commit-map.txt`: stage 1's old and new commit ids.
 - `connect-core-paths.txt`, `connect-core-commit-map.txt`: the same for stage 2a.
