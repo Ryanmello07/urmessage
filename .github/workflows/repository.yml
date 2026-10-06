@@ -65,7 +65,9 @@ jobs:
 
       # .github/scripts/siblings.sh is how every job gets a sibling checkout, so its refusals are
       # checked here: every pin in .github/siblings.txt passes them, and three pins it must refuse
-      # (a fork URL, a branch name, a path escaping the organization) are refused.
+      # (a fork URL, a branch name, a path escaping the organization) are refused. The connect and
+      # sdk pins are PLACEHOLDERS until the two removal pull requests' heads are filled in, and this
+      # step refuses them until then, by design.
       - name: The sibling pins are full commits from urnetwork, and a bad pin is refused
         run: |
           set -eu
@@ -83,3 +85,35 @@ jobs:
               exit 1
             fi
           done
+
+  census:
+    name: module census
+    # .github/scripts/module-census.sh: every go.mod and alternate modfile is built, vetted and has
+    # its main packages' tests run, or is listed as not yet wired with the reason, held both ways;
+    # and protobuf resolves to one version in every module it builds.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out message
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+
+      # The control first: a module file the census has no row for must fail it.
+      - name: The census refuses a module it has no row for
+        run: |
+          set -eu
+          bash .github/scripts/module-census.sh --rows-only
+          if CENSUS_PLANT=sdk/planted/go.mod bash .github/scripts/module-census.sh --rows-only; then
+            echo "the census accepted a module file it has no row for"
+            exit 1
+          fi
+
+      - name: Check out the pinned siblings
+        run: bash .github/scripts/siblings.sh connect connect-golden glog gvisor
+
+      - name: The census
+        run: bash .github/scripts/module-census.sh

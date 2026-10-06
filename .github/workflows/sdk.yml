@@ -1,0 +1,143 @@
+# The messaging SDK -- github.com/urnetwork/message/sdk, the sdk/ module -- and the two commands
+# beside it (sdk/livepeer, sdk/liveprobe), on the platforms the SDK ships to. Build and test only:
+# this repository's upstream CI never tags, releases or publishes (docs/RELEASING.md).
+#
+# The SDK builds against connect, so every job first checks out the pinned siblings
+# (.github/siblings.txt): connect, at the head of the connect pull request that removes messaging
+# from connect, and glog and gvisor, which connect replaces by path. The native library is
+# native.yml's. sdk/cp3b is not run here yet: it needs a message server that has switched to this
+# repository's packages, and .github/scripts/module-census.sh lists it as not yet wired.
+name: Test — sdk
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: go test (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out message
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+
+      - name: Check out the pinned siblings
+        run: bash .github/scripts/siblings.sh connect glog gvisor
+
+      - name: The module is verified and tidy
+        working-directory: sdk
+        run: |
+          set -eu
+          go mod verify
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Build
+        working-directory: sdk
+        run: go build ./...
+
+      - name: Vet
+        working-directory: sdk
+        run: go vet ./...
+
+      # -count=1 defeats the test cache. No -run filter and no package filter: a filter is a
+      # narrowing.
+      - name: Test
+        working-directory: sdk
+        run: go test -count=1 -timeout 30m ./...
+
+      # The SDK is linked into the native libraries for darwin and windows; its stream store carries
+      # an exclusion file per platform family, and each must build.
+      - name: Platform builds
+        working-directory: sdk
+        run: |
+          set -eu
+          GOOS=darwin GOARCH=arm64 go build ./...
+          GOOS=windows GOARCH=amd64 go build ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+
+  race:
+    name: go test -race (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out message
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+      - name: Check out the pinned siblings
+        run: bash .github/scripts/siblings.sh connect glog gvisor
+      - name: Test with the race detector
+        working-directory: sdk
+        run: go test -race -count=1 -timeout 80m ./...
+
+  windows:
+    name: go test (windows, CRLF checkout)
+    # The Windows client is the SDK's first consumer, and the machines this project is developed on
+    # run core.autocrlf=true at system scope. The stream store's Windows exclusion and every
+    # source-reading gate in this module meet a real CRLF checkout here.
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out message
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+      - name: The checkout is a CRLF checkout
+        shell: bash
+        run: |
+          set -eu
+          test "$(git config core.autocrlf)" = true || { echo "core.autocrlf is '$(git config core.autocrlf)', not true: this job would test an LF checkout"; exit 1; }
+          if grep -q $'\r$' sdk/message_client.go; then echo "a .go file holds CRLF despite eol=lf"; exit 1; fi
+      - name: Check out the pinned siblings
+        shell: bash
+        run: bash .github/scripts/siblings.sh connect glog gvisor
+      - name: Test
+        working-directory: sdk
+        run: go test -count=1 -timeout 50m ./...
+
+  commands:
+    name: livepeer and liveprobe (linux)
+    # Each command is a module of its own, and a main package. Its tests are what make its binary
+    # start in CI: a main package that is only built would hide a registration conflict at init.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out message
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+      - name: Check out the pinned siblings
+        run: bash .github/scripts/siblings.sh connect glog gvisor
+      - name: Build, vet and test each command
+        run: |
+          set -eu
+          for command in livepeer liveprobe; do
+            echo "== sdk/$command"
+            go -C "sdk/$command" mod verify
+            go -C "sdk/$command" mod tidy
+            git diff --exit-code -- "sdk/$command/go.mod" "sdk/$command/go.sum"
+            go -C "sdk/$command" build ./...
+            go -C "sdk/$command" vet ./...
+            go -C "sdk/$command" test -count=1 ./...
+          done

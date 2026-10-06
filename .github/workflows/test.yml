@@ -3,9 +3,10 @@
 # publishes (docs/RELEASING.md).
 #
 # The root module is the foundational packages, and they depend on neither connect nor the
-# core SDK, so no sibling checkout is needed here. The one job that does need one --
-# message/record_test.go's sibling sdk root -- is `sdk-sibling` below, pinned in
-# .github/siblings.txt, and it fails rather than skips when the checkout is absent.
+# core SDK, so no sibling checkout is needed here. message/record_test.go reads this
+# repository's own sdk/ directory, which every checkout has (until the messaging SDK moved in it
+# read a sibling sdk checkout, in a job of its own that is retired). The sdk module's suites are
+# sdk.yml's, and the native composition's native.yml's.
 name: Test — message
 
 on:
@@ -116,25 +117,3 @@ jobs:
           if grep -q $'\r$' mls/crossplatform_test.go; then echo "a .go file holds CRLF despite eol=lf"; exit 1; fi
       - name: Test
         run: go test -count=1 -timeout 50m ./...
-
-  sdk-sibling:
-    name: record gate over the sibling sdk (pinned)
-    # message/record_test.go scans <repo>/../sdk when it is checked out. Until the messaging SDK
-    # moves into this repository the client half of the record layer lives there, so this job
-    # puts the pinned SDK revision beside the checkout and REQUIRES the root:
-    # URMESSAGE_REQUIRE_SDK_ROOT turns "absent, logged" into a failure.
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Check out message
-        uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Check out the pinned siblings
-        run: bash .github/scripts/siblings.sh sdk
-      - name: The record gate, with the sdk root required
-        env:
-          URMESSAGE_REQUIRE_SDK_ROOT: "1"
-        run: go test -count=1 -timeout 15m ./message/
