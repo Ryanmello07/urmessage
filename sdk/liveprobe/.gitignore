@@ -1,0 +1,9 @@
+# The two names README.md tells an operator to build into this tracked directory (`go build -o
+# liveprobe .`, and the arm64 cross build), and the Windows spelling: `go build` here on Windows
+# writes liveprobe.exe, 36 MB. That binary was staged once, on 2026-09-17, before the core SDK's
+# .gitignore named it, and stage 3's import needed a second git-filter-repo pass to strip it from
+# this directory's history. Carried from the core SDK's .gitignore (urnetwork/sdk b8e0da26, lines
+# 3-9), whose rules the sdk removal drops with the directory.
+/liveprobe
+/liveprobe-arm64
+*.exe
