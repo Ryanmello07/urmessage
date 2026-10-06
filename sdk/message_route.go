@@ -113,7 +113,7 @@ func ParseMessageRoutePin(value string) ([]byte, error) {
 
 // MessageRouteConfig is one route to one message server.
 type MessageRouteConfig struct {
-	// The server's endpoint, e.g. "wss://74.50.11.53/urmessage/v1". An IP address sends no TLS
+	// The server's endpoint, e.g. "wss://203.0.113.53/urmessage/v1". An IP address sends no TLS
 	// server name, so an exit sees an address and a port and no name.
 	Endpoint string
 	// SHA-256 of the server certificate's SubjectPublicKeyInfo.

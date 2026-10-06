@@ -3,6 +3,7 @@ module github.com/urnetwork/message/sdk
 go 1.26.5
 
 require (
+	github.com/gopacket/gopacket v1.7.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/message v0.0.0

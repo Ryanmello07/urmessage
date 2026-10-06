@@ -409,7 +409,7 @@ func urnet_message_device_wait_push(self C.uint64_t, timeoutMs C.int64_t) *C.cha
 // administrator -- and the server sees the exit's address. Or URNET_MESSAGE_ROUTE_DIRECT (1): an
 // ordinary connection, which shows this device's address to the message server.
 //
-// endpoint is a wss:// url, e.g. "wss://74.50.11.53/urmessage/v1". pin is the SHA-256 of the
+// endpoint is a wss:// url, e.g. "wss://203.0.113.53/urmessage/v1". pin is the SHA-256 of the
 // server certificate's SubjectPublicKeyInfo as 64 hex characters, optionally "sha256/"-prefixed;
 // a server presenting any other key is never sent a frame. by_client_jwt and host are needed for
 // URNET_MESSAGE_ROUTE_URNETWORK, where the tunnel's window clients are minted from the credential
