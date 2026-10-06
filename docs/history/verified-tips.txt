@@ -2,3 +2,4 @@
 # Part D of the verifier requires each commit listed here to be an ancestor of the tip it
 # verifies, so a history rewritten after its verification fails.
 # One commit per line: <40-hex commit> <stage> <note>. Each stage appends the tip it verified.
+3d1d12b607df394e50503a71576790ef1f106944 1 split/1-scaffold: verify_split.py --sides connect-codestyle printed PASS on Windows and Ubuntu (connect-codestyle import e52b05a1 + scaffold)

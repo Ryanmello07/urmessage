@@ -1,17 +1,59 @@
 # adaptations.tsv: what the tip holds beyond its imports and its base, for verify_split.py part E.
 # Columns (tab-separated): path, kind, reason, and sha256=<hex> for new, edit and rename+edit rows.
 # Kinds: new, edit, literal, delete, manifest, rename-to:<path>, rename+edit-to:<path>.
-# Imported paths that are byte-identical to their source (CODESTYLE.md) and unchanged base
-# paths (LICENSE) need no row; a row nothing needs is a failure.
-.github/workflows/repository.yml	new	stage 1: repository-shape CI (module path; no Go source at the root; no connect or core SDK in go.mod; go mod verify), the v1 draft	sha256=019232f1325b899ddf89956bdf73fcea5a8c45578d7a4faedac4449ca8a5abde
-NOTICE	new	stage 1: the BringYour notices of connect and the core SDK; third-party rows arrive with the files they describe	sha256=92c86ba00163a55b9bbccd7baade0f00735995c2ef01044e1c6d1c4d95d3f5ce
+# Imported paths that are byte-identical to their source, or differ only by the module-path
+# rewrite of their import declarations, and unchanged base paths (LICENSE) need no row; a row
+# nothing needs is a failure. Reasons cite the commit subject that made the change.
+.gitattributes	edit	stage 2a: syntax/testdata/fuzz/** -text (the codec's crashers, as message/testdata/fuzz/**); *.sh text eol=lf (ci: bash reads a CR as part of the command)	sha256=de95af388e476543f52e9d743a6d0b74d49058f987d5b862e44a2dd0eee9c5ee
+.github/scripts/siblings.sh	new	stage 2a (ci): clones a pinned sibling at its SHA with core.autocrlf=false; refuses an unpinned name, a non-SHA commit, a URL outside github.com/urnetwork	sha256=ccf8c89b1d7a3069fd1d69f1a332d2f7fe325a191166ab64465da4f32c654a46
+.github/siblings.txt	new	stage 2a (ci): sibling checkouts pinned by full SHA from urnetwork only	sha256=72e07c6efa486738080b365e0bfa1f163838c4440f8621d4ad4cf9567a1dcf9f
+.github/workflows/mls-syntax.yml	rename+edit-to:.github/workflows/syntax.yml	stage 2a (syntax: the codec's workflow and paths follow the codec): ./syntax, the main trigger, the artifact path; go 1.26.5 pinned, -race and every fuzz leg kept	sha256=7506ced7e57fc0a58d39026e18afcb74ffabb16b0a244cd26eca13786473bfe0
+.github/workflows/repository.yml	new	stage 1: repository-shape CI (module path; no Go source at the root; no connect or core SDK in go.mod; go mod verify); stage 2a: the sibling pins checked with siblings.sh --check, and three bad pins refused	sha256=68ed710ac86a05d78d72257ebc5b817544164506bd9b5ea3d63eca252fc05f04
+.github/workflows/test.yml	new	stage 2a (ci): linux, race, windows with a proven CRLF checkout, and the sdk-sibling record-gate job	sha256=e479c6b3efe5fe0f8ea292982a155afa41a0a15631a6b1614a2dc80042631373
+NOTICE	new	stage 1: the BringYour notices of connect and the core SDK; stage 2a: the third-party test-vector rows (mlswg, cfrg HPKE, X-Wing), held to the tree by internal/repository	sha256=97dbdf0bba2648e170a966384a2b585cc7d7c22c940a65c8871053aa6908e560
 README.md	new	stage 1: purpose, layout and status, boundary summary, build and test, contributing, history, pinned design documents	sha256=bc68ab69ab117a3f5e42342fe8c21f6925663c2d7a293e0e3e3363a9cdbe6ebd
 docs/BOUNDARY.md	new	stage 1: the normative dependency rules, each mapped to its check; root-module guardrail scope; schema init conflict; additive API sequence	sha256=78092ebe094ffecd1a1871b57796c02540843ae2340a76f59fefc87bc855ab9e
-docs/HISTORY.md	new	stage 1: provenance of the CODESTYLE.md import and how to re-run the verifier	sha256=9393ecf36b2c7a1600f7bcac461ad949a2b8a7803a2f28c7d742d700d7b67b4c
+docs/HISTORY.md	new	stage 1: provenance of the CODESTYLE.md import and how to re-run the verifier; each import adds its section	sha256=3e58189685c56b0607f820ca3e6612a77da8805f7203fbf9aab332cc717e7994
 docs/RELEASING.md	new	stage 1: annotated tags by a maintainer, none before the cutover; merge commits only; recovery from a squash or rebase merge without force	sha256=4b9f04873057756687252df78c3646be52a2be8c7c99ae0ee4a82d3a0028c50e
+docs/history/2a-scope.md	new	stage 2a: every scope the move could narrow, measured in connect e449f7d8 and here, the scope diff, and who keeps each non-moved half	sha256=6395947968fa0771f46c56eff57514502c57ae4d75260bb41f4afc38d18b4e8b
 docs/history/adaptations.tsv	manifest	this manifest; a digest of itself would be a fixed point, so the verifier compares its bytes with the --manifest file
 docs/history/connect-codestyle-commit-map.txt	new	stage 1: the git-filter-repo commit map of the CODESTYLE.md import, 24 rows, old new	sha256=48e6a16c692cbf4f9ccce303a782da82b3caa8c351d7bf2be6f130f0149393df
 docs/history/connect-codestyle-paths.txt	new	stage 1: the --paths-from-file input of the CODESTYLE.md import	sha256=bba6931e0e4380493cfcceb834467e0b2de2bf255dd5a841e3173b43cd338dc1
-docs/history/verified-tips.txt	new	stage 1: header only; each stage appends the tip it verified	sha256=ce6f933b5d242bb94a1f71c26795911f8f0eb0bbdace18fc371eb7ded6cdc688
+docs/history/connect-core-commit-map.txt	new	stage 2a: the git-filter-repo commit map of the foundational import, 465 rows, old new	sha256=c3cb61ca92f42aa2e8ba4786b626a25d3dcdb77cf71426b3a073e28ed0074f5b
+docs/history/connect-core-paths.txt	new	stage 2a: the --paths-from-file input of the foundational import (sha256 32c1e6d4...)	sha256=32c1e6d4779fc7cbd7c068fe8d6e22557c388ce91630ec39ad11c8a91cf358f2
+docs/history/rewritepaths.go.txt	new	stage 2a: the module-path rewrite tool the rewrite commit ran, kept as .txt so it is no package of this module	sha256=11f84fb07b1ba840213f6169b47607b06602f21917d2697040f38aa8c5ae702e
+docs/history/verified-tips.txt	new	stage 1: header; each stage appends the tip the verifier passed (split/1-scaffold 3d1d12b6 from stage 2a on)	sha256=72253c7112fb5ee259bd339bb4d05e4800a5e0fc0e5f78991366d6ad4b158ba4
 docs/history/verify_split.py	new	stage 1: the verifier, verify_split3.py revision 3	sha256=85fcadf4916099fcf33bda29070eb970e0dd22749f588809a2cbd238e351571e
-go.mod	new	stage 1: module github.com/urnetwork/message; go 1.26.3 and toolchain go1.26.5 as in connect; no requirements	sha256=0217aa73f03a4ec87d8266c51579a3ec257a8c360813f4115cd2483c76cbaebc
+go.mod	new	stage 1: module github.com/urnetwork/message, go 1.26.3, toolchain go1.26.5; stage 2a (go.mod: require golang.org/x/crypto): x/crypto v0.54.0 and x/sys v0.47.0 indirect, what go mod tidy writes	sha256=dfb1320f1e4094d63a2ee22af8cf29d30fbb02f0965174ad6bf991e36816fbdc
+go.sum	new	stage 2a (go.mod: require golang.org/x/crypto): the four lines go mod tidy writes	sha256=35d90f337f5d66adb44fa40fa561bad727d28cb8bcb4ba3e5195f9fdacfe8507
+internal/layering/layering_test.go	new	stage 2a (internal/layering): the dependency boundary over every Go file of the repository, both-ways rows, server-safe closure, stale literals, fixture controls	sha256=63281b655840ba714f81d68cc8c1908d493d8ecde282620614c2990a720cb086
+internal/repository/notice_test.go	new	stage 2a (NOTICE: the third-party test vectors): every file under testdata/vectors/ has a NOTICE row, every row a file; with its control	sha256=ace4c9918690372512752b9f05bf6a42bac01037b3d06ddfcd6e97fa381e2e10
+message/record_test.go	edit	stage 2a (message: the record gate reads the codec by name): syntaxRoot; URMESSAGE_REQUIRE_SDK_ROOT; the sibling sdk by the stage-3 rule, its complement printed and held to a property, a fixture firing both halves	sha256=5ef6e7aee82d7fce1f93cb0e5b8d90af9758250ca1e91d35384008a2d266fd84
+messagegroup/ephkey_test.go	literal	a comment: prose naming the record package; no gate reads it
+messagegroup/epoch_test.go	literal	a comment, and modulePrefix: it derives this package's sibling directories from its own first-party imports, which carry the new prefix; the derived set is the same packages (message, mls, syntax)
+messagegroup/imports_test.go	edit	stage 2a (rewrite): gofmt realigns the map after the rewrite shortened one key; the three keys are the same packages under their new paths	sha256=7a5fad7effb00b8b26db8537a81a109e45fde81cc444f2b0e6e295bccf2460d4
+messagegroup/m1w1repairs_test.go	literal	the import path this package's own source is type-checked as: its own path
+messagegroup/primitiveerase_test.go	literal	the import path of mls, whose one reviewed ECDH wrapper this gate requires; same package
+messagegroup/ratchetrepairs_test.go	literal	the import path this package's own source is type-checked as: its own path
+messagegroup/xwing_vectors_test.go	literal	this package's own import path, which the collector keys on
+mls/crossplatform_test.go	edit	stage 2a (mls: the cross-platform gate builds the whole module): ./... from the module root, and the expansion must reach message, messagegroup, mls, syntax	sha256=e5067bf12b159116bb603e0ba93d6ca0b302bbf989340cb37d0015ac3c4abc4a
+mls/crypto_forbidden_test.go	edit	stage 2a (mls: scan the promoted codec by name): codecScanRoots, urmessageScanRoots, the go-list floor, the derivation returns both lists, moduleSiblingOf's path boundary with control rows	sha256=dc67cb46c02873c8f0495ad888ed4c3f160e93ea25cdd60986c6341120a00e89
+mls/crypto_labels_test.go	literal	a comment; the renamed- and dot-import controls import the codec by its real path, or they stop modelling the tree
+mls/crypto_test.go	edit	stage 2a (mls): two recursive scans read urmessageScanRoots(); the expected-import table names the same three packages under their new paths (rewrite)	sha256=2d01b43bbe2ea1834162078deb494c7473d3ff0520bc9a7c1318110c4ece46d5
+mls/external_provenance_test.go	literal	mls's own import path for the type check and the shadow comparison
+mls/framing_group_seams_test.go	edit	stage 2a (mls): five recursive scans read urmessageScanRoots(); the two control fixtures import mls under its new path (rewrite)	sha256=e432608e0b0ba9e01ea28e2fde611a8ec67c0d8983ef8c3a05d73f9906b89f04
+mls/framing_guard_test.go	edit	stage 2a (mls): the whole-octet gate judges codecScanRoots by name	sha256=137d28cb6c19a232703c0b541c5a246ffabb13a32cf7a0d71bb1d7960f75aeeb
+mls/framing_test.go	literal	the codec's path as the type-checked import list reports it; same package
+mls/gates_index_test.go	edit	stage 2a (mls): the gates index walks urmessageScanRoots()	sha256=513c6535220ecc9e52f94e98ff0e3c6f77f106f4ef13931fb1a3e9253606520b
+mls/group_context_test.go	literal	mls's own import path for the type check
+mls/group_test.go	edit	stage 2a (mls): one recursive scan reads urmessageScanRoots()	sha256=2a7400b7213ac9ebd02d28dfb65f65870c8731b6d97ee4c7b8b75da565e970d4
+mls/key_schedule_deps_test.go	edit	stage 2a: the rewrite made firstPartyImportPrefix the bare github.com/urnetwork/message, which also matches message-server (MEANING CHANGES); isFirstPartyImport is a path prefix and the control fixture imports message-server/x; 890 a fixture import of the codec under its new path	sha256=0c412c652deb71eaea4161115c25c24eb8a0c6c94450b632e274376294002759
+mls/key_schedule_guard_test.go	edit	stage 2a (mls): the codec's directory (../syntax) and its import identifier (syntax), split	sha256=c39bf3adb4d67f7533f951095228ee78c030680f778597dcb09ea9bed57a3bc9
+mls/key_schedule_kat_test.go	literal	modulePrefix: as messagegroup/epoch_test.go's
+mls/leaf_validation_doors_test.go	literal	mls's own import path for the type check
+mls/scan_scope_test.go	new	stage 2a (mls: scan the promoted codec by name): every scan of this package is handed the whole scope, the control fixture, or a declared narrower root; with its fixture control	sha256=7a1bf721eb618d3c485ef496806a3ac5895ae173f55c94916ce13888c41e6d58
+mls/staged_erase_test.go	edit	stage 2a (mls): one recursive scan reads urmessageScanRoots()	sha256=280613ad5d31c8fa19c696679624e7635c434de852bcc0fd47e9cc8bc08f1011
+mls/tree_roundtrip_test.go	literal	the renamed- and dot-import controls import the codec by its real path
+syntax/fuzz_test.go	edit	stage 2a (syntax): the shared corpus path follows mls/testdata (it had no top-level seed before the move and has none after)	sha256=3f8e8c256008870469fd75cd986f89702b00df818b82a7cce6fcbc65a7d1dadf
+syntax/layering_test.go	edit	stage 2a (syntax): the workflow is ../.github/workflows/syntax.yml, read as structure (YAML subset reader, triggers, live steps), with 12 controls; selfImportPath is the codec's own new path (rewrite)	sha256=b09ef3482a8027da705b8d61a667bd5dbadb5f614e2f90dc428566e12ded4863
+syntax/vectors_test.go	edit	stage 2a (syntax): family 16 stays digest-pinned in mls/testdata/vectors; read from there	sha256=a78c577da51b38cdc466b05edf49e365ecf86746268647e2930e94330707476b
