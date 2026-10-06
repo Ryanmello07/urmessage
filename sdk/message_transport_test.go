@@ -74,8 +74,10 @@ import (
 	"go/types"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -796,6 +798,13 @@ func messageTransportReadCodePoints(t *testing.T) map[connectprotocol.MessageTyp
 	if decl == nil {
 		t.Fatal("package sdk declares no messageTransport.receive, so there is no receive path to read the class off")
 	}
+	// THE ENUM'S PACKAGE IS FOUND BY ITS IMPORT PATH, through the receive path's own file, and not
+	// by the local name it is imported under. In urnetwork/sdk that file imported connect's
+	// protocol package as plain `protocol` and this check matched the name; here it imports it as
+	// connectprotocol, beside message/protocol, and a check keyed on either name is a check on a
+	// spelling: the old one selected on nothing, and a new one would follow whatever package was
+	// next imported under that name.
+	enumPackage := messageTransportImportNames(t, gate, gate.declFile["messageTransport.receive"], messageTransportEnumImportPath)
 	read := map[connectprotocol.MessageType]bool{}
 	ast.Inspect(decl, func(node ast.Node) bool {
 		clause, ok := node.(*ast.CaseClause)
@@ -808,14 +817,14 @@ func messageTransportReadCodePoints(t *testing.T) map[connectprotocol.MessageTyp
 				continue
 			}
 			pkg, ok := selector.X.(*ast.Ident)
-			if !ok || pkg.Name != "protocol" || !strings.HasPrefix(selector.Sel.Name, "MessageType_") {
+			if !ok || !enumPackage[pkg.Name] || !strings.HasPrefix(selector.Sel.Name, "MessageType_") {
 				continue
 			}
 			spelled := strings.TrimPrefix(selector.Sel.Name, "MessageType_")
 			number, found := connectprotocol.MessageType_value[spelled]
 			if !found {
-				t.Fatalf("messageTransport.receive names protocol.%s, which is not a value of protocol's MessageType enum",
-					selector.Sel.Name)
+				t.Fatalf("messageTransport.receive names %s.%s, which is not a value of %s's MessageType enum",
+					pkg.Name, selector.Sel.Name, messageTransportEnumImportPath)
 			}
 			read[connectprotocol.MessageType(number)] = true
 		}
@@ -826,6 +835,44 @@ func messageTransportReadCodePoints(t *testing.T) map[connectprotocol.MessageTyp
 			"connect hands it, including every other binding's")
 	}
 	return read
+}
+
+// messageTransportEnumImportPath is the package whose MessageType enum names the code points
+// connect frames carry. The enum stayed in connect; message/protocol declares the messages.
+const messageTransportEnumImportPath = "github.com/urnetwork/connect/protocol"
+
+// messageTransportImportNames answers the local names a parsed production file binds an import
+// path to: the explicit name of each import of it, or, for an import that gives none, the last
+// element of the path, which is the package's own name for every package this module imports. A
+// blank or dot import binds no name a selector can be spelled with. A file that does not import
+// the path at all fails the test: no selector in it can name that package.
+func messageTransportImportNames(t *testing.T, gate *borrowGate, file string, importPath string) map[string]bool {
+	t.Helper()
+	parsed := gate.prodFiles[file]
+	if parsed == nil {
+		t.Fatalf("the borrow gate parsed no production file %q, so there is no import to resolve", file)
+	}
+	names := map[string]bool{}
+	for _, spec := range parsed.Imports {
+		imported, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			t.Fatalf("%s imports %s, which is not a quoted path: %v", file, spec.Path.Value, err)
+		}
+		if imported != importPath {
+			continue
+		}
+		switch {
+		case spec.Name == nil:
+			names[path.Base(imported)] = true
+		case spec.Name.Name == "_" || spec.Name.Name == ".":
+		default:
+			names[spec.Name.Name] = true
+		}
+	}
+	if len(names) == 0 {
+		t.Fatalf("%s binds no name to %s, so no selector in it can name that package's MessageType", file, importPath)
+	}
+	return names
 }
 
 func sortedCodePoints(set map[connectprotocol.MessageType]bool) []connectprotocol.MessageType {
@@ -948,7 +995,10 @@ func TestMessageTransportCancelledCallIsTypedAndLeavesNoMapEntry(t *testing.T) {
 //	C2 the receive-callback registrations in `package sdk` that are NOT this
 //	   binding's. Printed with its count and members. NOT failed on empty, and
 //	   the reason is stated rather than assumed: `sdk` is entitled to contain
-//	   exactly one registration, and today it contains two.
+//	   exactly one registration, and today it contains one, MessageClient's
+//	   forward. (In urnetwork/sdk it contained two; the other was the core
+//	   provider's control-frame handler, which stayed there.) The whole set is
+//	   held by TestSdkClientReceiveRegistrationsAreAudited.
 //	C3 the borrowed expressions the gate examined and CLEARED, each with the
 //	   reason it was cleared. Asserted non-empty — an empty clearance set means
 //	   the gate located the callback and then looked at nothing — and asserted
