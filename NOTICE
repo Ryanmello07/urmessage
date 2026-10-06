@@ -1,0 +1,12 @@
+URnetwork message
+https://github.com/urnetwork/message
+
+This repository is licensed under the Mozilla Public License, v. 2.0; see LICENSE.
+
+Files in this repository that were imported, with their history, from other
+URnetwork repositories keep the copyright notices of those repositories:
+
+    Copyright (c) 2023 BringYour, Inc.    github.com/urnetwork/connect
+    Copyright (c) 2024 BringYour, Inc.    github.com/urnetwork/sdk
+
+docs/HISTORY.md lists every import with its source repository and commit.

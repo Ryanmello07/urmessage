@@ -1,0 +1,4 @@
+# verified-tips.txt: every tip that docs/history/verify_split.py printed PASS for, oldest first.
+# Part D of the verifier requires each commit listed here to be an ancestor of the tip it
+# verifies, so a history rewritten after its verification fails.
+# One commit per line: <40-hex commit> <stage> <note>. Each stage appends the tip it verified.

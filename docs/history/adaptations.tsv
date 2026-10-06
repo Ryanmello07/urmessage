@@ -1,0 +1,17 @@
+# adaptations.tsv: what the tip holds beyond its imports and its base, for verify_split.py part E.
+# Columns (tab-separated): path, kind, reason, and sha256=<hex> for new, edit and rename+edit rows.
+# Kinds: new, edit, literal, delete, manifest, rename-to:<path>, rename+edit-to:<path>.
+# Imported paths that are byte-identical to their source (CODESTYLE.md) and unchanged base
+# paths (LICENSE) need no row; a row nothing needs is a failure.
+.github/workflows/repository.yml	new	stage 1: repository-shape CI (module path; no Go source at the root; no connect or core SDK in go.mod; go mod verify), the v1 draft	sha256=019232f1325b899ddf89956bdf73fcea5a8c45578d7a4faedac4449ca8a5abde
+NOTICE	new	stage 1: the BringYour notices of connect and the core SDK; third-party rows arrive with the files they describe	sha256=92c86ba00163a55b9bbccd7baade0f00735995c2ef01044e1c6d1c4d95d3f5ce
+README.md	new	stage 1: purpose, layout and status, boundary summary, build and test, contributing, history, pinned design documents	sha256=bc68ab69ab117a3f5e42342fe8c21f6925663c2d7a293e0e3e3363a9cdbe6ebd
+docs/BOUNDARY.md	new	stage 1: the normative dependency rules, each mapped to its check; root-module guardrail scope; schema init conflict; additive API sequence	sha256=78092ebe094ffecd1a1871b57796c02540843ae2340a76f59fefc87bc855ab9e
+docs/HISTORY.md	new	stage 1: provenance of the CODESTYLE.md import and how to re-run the verifier	sha256=9393ecf36b2c7a1600f7bcac461ad949a2b8a7803a2f28c7d742d700d7b67b4c
+docs/RELEASING.md	new	stage 1: annotated tags by a maintainer, none before the cutover; merge commits only; recovery from a squash or rebase merge without force	sha256=4b9f04873057756687252df78c3646be52a2be8c7c99ae0ee4a82d3a0028c50e
+docs/history/adaptations.tsv	manifest	this manifest; a digest of itself would be a fixed point, so the verifier compares its bytes with the --manifest file
+docs/history/connect-codestyle-commit-map.txt	new	stage 1: the git-filter-repo commit map of the CODESTYLE.md import, 24 rows, old new	sha256=48e6a16c692cbf4f9ccce303a782da82b3caa8c351d7bf2be6f130f0149393df
+docs/history/connect-codestyle-paths.txt	new	stage 1: the --paths-from-file input of the CODESTYLE.md import	sha256=bba6931e0e4380493cfcceb834467e0b2de2bf255dd5a841e3173b43cd338dc1
+docs/history/verified-tips.txt	new	stage 1: header only; each stage appends the tip it verified	sha256=ce6f933b5d242bb94a1f71c26795911f8f0eb0bbdace18fc371eb7ded6cdc688
+docs/history/verify_split.py	new	stage 1: the verifier, verify_split3.py revision 3	sha256=85fcadf4916099fcf33bda29070eb970e0dd22749f588809a2cbd238e351571e
+go.mod	new	stage 1: module github.com/urnetwork/message; go 1.26.3 and toolchain go1.26.5 as in connect; no requirements	sha256=0217aa73f03a4ec87d8266c51579a3ec257a8c360813f4115cd2483c76cbaebc
