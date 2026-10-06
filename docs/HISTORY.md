@@ -19,8 +19,7 @@ and message, and changes its id, so each import publishes a commit map: one
 | 1 | `CODESTYLE.md` | connect `e449f7d8` | `d3b3b26a` | 24 | 1 | `e52b05a1` |
 | 2a | `message/`, `messagegroup/`, `mls/`, `mls/syntax/` as `syntax/`, `.gitattributes`, the codec's workflow | connect `e449f7d8` | `fbbc842d` | 465 | 837 | `a456b1cd` |
 | 2b | `protocol/message*` | connect `e449f7d8` | `28a9c4f1` | 10 | 8 | `0ebd54f6` |
-
-Stage 3 (the messaging SDK) adds its row.
+| 3 | the core SDK's root `message*.go`, `urmessage/`, `cp3b/`, `livepeer/`, `liveprobe/` and its 11 messaging cgo files, under `sdk/` | sdk `6141b98d` | `e5223830` | 123 | 148 | `0417c59a` |
 
 ### Stage 1: CODESTYLE.md
 
@@ -97,6 +96,37 @@ Stage 3 (the messaging SDK) adds its row.
   none). Connect's remaining files hold none of them; the connect removal PR deletes the test
   there with the code it was about.
 
+### Stage 3: the messaging SDK
+
+- Source: P_sdk, `Ryanmello07/urnetwork-sdk` `6141b98d05bcac98d5ccae11c54c7748919017e6`,
+  the fork's `beta/message` after the sync that merged upstream `urnetwork/sdk`; the fork tags
+  it `split/source-sdk-3`. It differs from upstream `main` (`b8e0da26`) in five of the 148
+  files: the three tunnel files carry the fork's 1 s establish hold (the owner's ruling
+  "Build the 1 s hold", 2026-10-04), and the loopback modfiles' indirect requirements.
+- Filter: [sdk-paths.stage3.txt](history/sdk-paths.stage3.txt): the root `message*.go` files,
+  `urmessage/`, `cp3b/`, `livepeer/`, `liveprobe/` and the messaging cgo files, each renamed
+  under `sdk/`; `cgo/gen/manual_exports_test.go` stays in the core SDK. A second pass removes
+  `sdk/liveprobe/liveprobe.exe`, a 36 MB binary three commits added, changed and deleted.
+- Imported: `e522383045379792fec68bb81614fc6be24c6030`, 123 commits, 148 files. One sync merge,
+  `990e84ff`, has a single parent here: its upstream side held no messaging file yet.
+  Revision 4 of the verifier accepts that case only, and its controls refuse it for every
+  merge kept whole.
+- Commit map: [sdk-commit-map.txt](history/sdk-commit-map.txt), 123 rows.
+- Reproduced: three runs, two on Ubuntu 24.04 and one on Windows, produced one tip.
+- Merged by `0417c59a667d11799bbb858d10b3cb524e0e65dc`, whose message carries the verifier's
+  summary for that merge.
+- Adapted by the commits after the merge: the module-path rewrite (rewritepaths `-stage 3`);
+  the schema switch (the message types from `message/protocol`, `Frame` and the transport
+  types from `connect/protocol`); the module files (`sdk/go.mod` requires connect and this
+  repository, never the core SDK); `connect.NewOperatorClientSettings` in the tunnel;
+  explicit service urls in `MessageClientConfig`; the tunnel tests' packet helper and a
+  documentation address in place of a real one; every gate the move narrowed or changed the
+  subject of, rebuilt with its controls; the record gate over this repository's own `sdk/`;
+  the module walks stopping at a nested `go.mod`; the native composition (`sdk/cgo`);
+  the commands' tests; the single-registration test; CI. [3-scope.md](history/3-scope.md)
+  records every scope the move could have narrowed, measured here and at P_sdk, and who
+  keeps each gate's non-moved half.
+
 ## Re-running the verifier
 
 [verify_split.py](history/verify_split.py) proves, for every import the tip holds:
@@ -118,12 +148,15 @@ checkout:
     git init --bare ../connect-src.git
     git -C ../connect-src.git fetch https://github.com/Ryanmello07/connect.git e449f7d8126c0b5748f5083392a8855bac877b32:refs/heads/main
     git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git 7ca8e222e3496552146f2d97eb09237401662c99:refs/remotes/upstream/control
-    python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol --connect ../connect-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt --commit-map connect-core=docs/history/connect-core-commit-map.txt --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt --manifest docs/history/adaptations.tsv
+    git init --bare ../sdk-src.git
+    git -C ../sdk-src.git fetch https://github.com/Ryanmello07/urnetwork-sdk.git 6141b98d05bcac98d5ccae11c54c7748919017e6:refs/heads/main
+    python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol,sdk --connect ../connect-src.git --sdk ../sdk-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt --commit-map connect-core=docs/history/connect-core-commit-map.txt --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt --commit-map sdk=docs/history/sdk-commit-map.txt --manifest docs/history/adaptations.tsv
 
 It must end with `PASS`. `--controls` also runs negative controls that must fire:
 the source file one change earlier, and synthetic changes to the expected tree.
 `7ca8e222`, an earlier `urnetwork/connect` `main`, is the control for the stage 2a
-import; later stages add their sides to `--sides`.
+import; the sdk side's control is `d20d82c1`, the fork's `beta/message` before its sync, which
+the fetch of `6141b98d` brings with its history.
 
 ## Files in docs/history
 
@@ -140,7 +173,9 @@ import; later stages add their sides to `--sides`.
 - `connect-protocol-paths.txt`, `connect-protocol-commit-map.txt`: the same for stage 2b.
 - `rewritepaths.go.txt`: the module-path rewrite tool, as run by the stage 2a rewrite
   commit.
+- `sdk-paths.stage3.txt`, `sdk-commit-map.txt`: the same for stage 3.
 - `2a-scope.md`: stage 2a's scope record.
+- `3-scope.md`: stage 3's.
 - `adaptations.tsv`: every path of the tip that is neither imported unchanged nor
   part of the base, with its reason and, for a new or edited file, the sha256 of its
   bytes. It declares itself as `manifest`.

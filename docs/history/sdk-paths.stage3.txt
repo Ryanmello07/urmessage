@@ -1,0 +1,28 @@
+# git-filter-repo --paths-from-file, Ryanmello07/urnetwork-sdk fork main AFTER the SX-0 sync, STAGE 3.
+# v3: cgo/gen/manual_exports_test.go STAYS in core (it tests core's generator; red-team R2-F4).
+# DRAFT: re-count and pin (tip, commit count, per-rule file counts) from the first run over the
+# synced pin, then copy the numbers into verify_split2.py's "sdk" side before any push.
+# A second pass removes the 36 MB liveprobe.exe that two commits added and deleted:
+#   git filter-repo --invert-paths --path sdk/liveprobe/liveprobe.exe --preserve-commit-hashes
+# Selection lines first, rename lines after: a rename applies to the path every later line sees.
+regex:^message[^/]*\.go$
+urmessage/
+cgo/exports_message.go
+cgo/exports_message_test.go
+cgo/callbacks_message.h
+cgo/callbacks_message.c
+cgo/include/urnetwork_message.h
+cgo/ctest/
+cgo/loopback_test_world.go
+cgo/loopback.go.mod
+cgo/loopback.go.sum
+cgo/gen/text_limits_test.go
+cp3b/
+livepeer/
+liveprobe/
+regex:^(message[^/]*\.go)$==>sdk/\1
+urmessage/==>sdk/urmessage/
+cgo/==>sdk/cgo/
+cp3b/==>sdk/cp3b/
+livepeer/==>sdk/livepeer/
+liveprobe/==>sdk/liveprobe/

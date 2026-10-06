@@ -2,9 +2,10 @@
 
 `github.com/urnetwork/message` is URmessage, the URnetwork messaging application:
 message records, group sessions, MLS, the shared serialization codec, the messaging
-wire schema and, from stage 3, the messaging SDK. It runs on top of
-[connect](https://github.com/urnetwork/connect) and the
-[core SDK](https://github.com/urnetwork/sdk). Neither of those depends on it.
+wire schema and the messaging SDK. It runs on top of
+[connect](https://github.com/urnetwork/connect); the native library composes its C ABI with
+the [core SDK](https://github.com/urnetwork/sdk)'s. Neither connect nor the core SDK depends
+on it.
 
 The code moves here from connect and the core SDK with its history, in the stages
 of the maintainers' design,
@@ -12,8 +13,9 @@ of the maintainers' design,
 
 ## Layout and status
 
-Status: stage 1. The repository holds its module, documentation and CI, and
-`CODESTYLE.md` with its history. The other rows are planned.
+Status: stages 1, 2a, 2b and 3 are imported, with their history. The connect and core SDK
+pull requests that remove the moved code from those repositories merge first; see
+[docs/HISTORY.md](docs/HISTORY.md).
 
 | Path | Contents | Comes from | Stage |
 |---|---|---|---|
@@ -24,11 +26,13 @@ Status: stage 1. The repository holds its module, documentation and CI, and
 | `mls/` | the MLS implementation | `connect/mls`, without `syntax` | 2a |
 | `syntax/` | the shared serialization codec | `connect/mls/syntax`, promoted to a peer | 2a |
 | `protocol/` | the messaging protobuf schema | `connect/protocol/message*` | 2b |
-| `sdk/` | messaging transports, routes, durable stream store; its own module | the core SDK's `message*.go` | 3 |
+| `sdk/` | messaging transports, routes, durable stream store, tunnel; its own module, `github.com/urnetwork/message/sdk` | the core SDK's `message*.go` | 3 |
 | `sdk/urmessage/` | device and group orchestration, durable MLS state | the core SDK's `urmessage/` | 3 |
+| `sdk/cgo/` | the messaging C ABI, and the native composition that lays it into the core SDK's library; its own module | the core SDK's messaging `cgo/` files | 3 |
+| `sdk/livepeer/`, `sdk/liveprobe/` | the live probes, each its own module | the core SDK's `livepeer/`, `liveprobe/` | 3 |
+| `sdk/cp3b/` | the cross-process acceptance suite, against a real message server; its own module, not yet in CI | the core SDK's `cp3b/` | 3 |
 
-Stage 4 moves messaging onto a connect subprotocol and removes the remaining
-messaging code from connect and the core SDK.
+Stage 4 moves messaging onto a connect subprotocol.
 
 The root holds module metadata, documentation and CI only: no Go package, and no
 facade over the directories beneath it.
@@ -45,6 +49,8 @@ facade over the directories beneath it.
   only. Consumers allow these packages by exact path, never the whole
   `github.com/urnetwork/message` tree.
 - A package never imports its own descendants (see [CODESTYLE.md](CODESTYLE.md)).
+- `message/sdk` imports connect and this repository's packages, and never the core SDK.
+  The native composition (`sdk/cgo`) is the one module that links both SDKs.
 
 [docs/BOUNDARY.md](docs/BOUNDARY.md) maps each rule to the check that holds it.
 
@@ -59,13 +65,15 @@ Go 1.26.5, the `toolchain` in `go.mod`.
 - On Windows, clone with `core.autocrlf=false`. Several checks read source files
   byte for byte, and a CRLF working tree can make such a check fail, or pass
   without testing anything.
-- Name the directory `message`. From stage 2a, integration checks find their
-  sibling checkouts (`../sdk`, `../connect`) by relative path, and consumers'
-  local `replace` directives point at `../message`.
-- Until stage 2a there is no Go package here, so `./...` matches nothing. The
-  repository checks in
-  [.github/workflows/repository.yml](.github/workflows/repository.yml) run on every
-  pull request to `main`.
+- Name the directory `message`. The root module needs nothing beside it. The SDK
+  modules find their siblings by relative path: `../connect`, `../glog` and `../gvisor`, at
+  the commits [.github/siblings.txt](.github/siblings.txt) pins (`bash .github/scripts/siblings.sh connect glog gvisor`
+  checks them out). Consumers' local `replace` directives point at `../message`.
+- The SDK: `go -C sdk test ./...`. The native library also needs the core SDK and
+  goidenticons beside the checkout (`../sdk`, `../goidenticons`), then
+  `bash sdk/cgo/compose.sh` and, in `sdk/cgo`, `go build -buildmode=c-shared -o URnetworkSdk.dll .`
+  with a C compiler; `bash sdk/cgo/compose.sh --clean` removes what the compose added.
+  [native.yml](.github/workflows/native.yml) is the reference.
 
 ## Contributing
 
