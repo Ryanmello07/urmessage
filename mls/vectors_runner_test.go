@@ -58,7 +58,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // errVectorTagTail is the refusal splitTrailingOpaqueTag makes. A sentinel rather than a

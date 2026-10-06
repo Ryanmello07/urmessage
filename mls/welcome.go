@@ -52,7 +52,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // groupInfoSignatureLabel is the RFC 9420 section 12.4.3 label, written once for the reason

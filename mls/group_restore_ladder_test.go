@@ -19,7 +19,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // TestARestoredMemberProcessesTheNextCommitFromTheFarSideOfTheTree is the defect, run as a test.

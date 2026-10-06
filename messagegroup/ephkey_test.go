@@ -30,7 +30,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // ---------------------------------------------------------------------------
@@ -838,7 +838,7 @@ func TestTheWindowArithmeticIsThreeAnswersOverTheLaddersThree(t *testing.T) {
 // DERIVATION, and where it sits is the whole repair.
 //
 // WHAT STOOD HERE BEFORE AND HOW IT WAS EVADED, LIVE. This was a boolean table keyed on IMPORT
-// PATH, one row per package this package names, and "github.com/urnetwork/connect/message" had
+// PATH, one row per package this package names, and "github.com/urnetwork/message/message" had
 // false beside it. A row like that is a claim about ANOTHER PACKAGE'S CONTENTS asserted in this
 // file, and nothing checked it. A reviewer added a SenderClockMs to connect/message that answers
 // time.Now().UnixMilli(), made EphKey overwrite its window argument from it, and this gate stayed

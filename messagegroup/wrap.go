@@ -78,7 +78,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // EnvKeyBytes is the width MASTER section 8.2 exports env_key at.

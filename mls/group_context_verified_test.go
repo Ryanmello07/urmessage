@@ -68,7 +68,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The two names this file's derivation is written against, checked against the compiler's reading

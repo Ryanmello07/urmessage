@@ -160,7 +160,7 @@ package mls
 import (
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // VerifiedGroupContext is a group context whose authority has been established, and it is the only

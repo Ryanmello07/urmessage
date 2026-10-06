@@ -49,7 +49,7 @@ package messagegroup
 import (
 	"fmt"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // The three retention class labels, raw ascii, expanded from the storage root at thirty two

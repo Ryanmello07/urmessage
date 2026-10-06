@@ -34,7 +34,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // DerivePathSecrets is the ladder of RFC 9420 section 7.4: path_secret[0] is the initial secret

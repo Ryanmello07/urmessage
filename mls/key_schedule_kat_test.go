@@ -70,7 +70,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The family, and the accounting that makes its runner unable to pass having compared
@@ -1445,7 +1445,7 @@ func productionFunctionNames(t *testing.T) map[string]bool {
 // and p6 add packages under this module and a list would exempt every one of them.
 func siblingPackageQualifiers(t *testing.T) map[string]bool {
 	t.Helper()
-	const modulePrefix = `"github.com/urnetwork/connect/`
+	const modulePrefix = `"github.com/urnetwork/message/`
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read the package directory: %v", err)

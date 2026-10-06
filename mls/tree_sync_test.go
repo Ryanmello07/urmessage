@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The clock every key_package sourced leaf in this file is judged against, and it is a REAL

@@ -20,7 +20,7 @@ import (
 	"testing"
 )
 
-const selfImportPath = "github.com/urnetwork/connect/mls/syntax"
+const selfImportPath = "github.com/urnetwork/message/syntax"
 
 // The per commit gate lives here, relative to the package directory the tests run in.
 const workflowPath = "../../.github/workflows/mls-syntax.yml"

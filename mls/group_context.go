@@ -15,7 +15,7 @@ package mls
 import (
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // GroupContext binds a set of epoch secrets to one group, epoch, tree and

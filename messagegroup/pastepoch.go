@@ -55,8 +55,8 @@ import (
 	"crypto/subtle"
 	"fmt"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/mls"
 )
 
 // PastEpochWindow is how many epochs back a session will open a record from: the same bound

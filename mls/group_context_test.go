@@ -39,7 +39,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // groupContextHex decodes a hex literal, with a malformed one fatal rather than a
@@ -766,7 +766,7 @@ func typeCheckedPackage(t *testing.T) *types.Package {
 	t.Helper()
 	packageTypeCheckOnce.Do(func() {
 		packageTypeChecked, packageTypeCheckFiles, packageTypeCheckErr =
-			checkPackageSource(".", "github.com/urnetwork/connect/mls")
+			checkPackageSource(".", "github.com/urnetwork/message/mls")
 	})
 	if packageTypeCheckErr != nil {
 		t.Fatalf("type check this package's production source: %v", packageTypeCheckErr)

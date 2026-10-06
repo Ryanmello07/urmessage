@@ -93,7 +93,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The two domain separation labels, raw ascii and never length prefixed.

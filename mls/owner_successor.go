@@ -43,7 +43,7 @@ package mls
 import (
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // SuccessionFloorMinMs is ninety days, MASTER section 11 and spec A section 3.4.

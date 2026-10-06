@@ -9,7 +9,7 @@ package mls
 import (
 	"errors"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // errProfileCredentialType is ErrProfileCredentialType in the validation plan's catalogue, and

@@ -19,7 +19,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // epochSwappingStore answers ONE named epoch's request with ANOTHER epoch's stored blob, and is

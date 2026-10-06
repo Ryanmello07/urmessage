@@ -17,7 +17,7 @@
 package mls
 
 import (
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // Commit is the message that ends an epoch: the proposals it applies, and the path that

@@ -25,7 +25,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // restartOpener is a device coming back after a stop: a session built over a handle LOADED FROM

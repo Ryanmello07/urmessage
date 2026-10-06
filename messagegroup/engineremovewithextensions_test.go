@@ -17,8 +17,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/syntax"
 )
 
 // stagedContextOf stages one commit of the caller's own by-value vector on a handle and answers

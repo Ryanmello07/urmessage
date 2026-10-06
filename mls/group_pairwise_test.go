@@ -61,7 +61,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // pairwiseTestLabel is the label the URmessage read receipt tag derives under. It is used here so

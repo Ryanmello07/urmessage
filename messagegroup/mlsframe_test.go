@@ -23,9 +23,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/syntax"
 )
 
 // ---------------------------------------------------------------------------

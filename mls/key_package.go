@@ -42,7 +42,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // KeyPackage is one joiner's advertised init key and leaf node, signed as a unit.

@@ -20,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The label RFC 9420 section 6.1 signs a FramedContentTBS under, written once because a label

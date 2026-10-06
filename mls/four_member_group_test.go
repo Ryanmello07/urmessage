@@ -68,7 +68,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // testGroupMember is one member of a sized fixture: the group it holds, the CONFIG that built it,

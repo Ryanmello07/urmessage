@@ -16,7 +16,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // TestRoleOfAnUnnamedMemberIsMemberAndNotNamed is ledger item 242's ruling 8 as a property: the

@@ -48,7 +48,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The two p8 target names. The folder is named for the TARGET rather than for the structure

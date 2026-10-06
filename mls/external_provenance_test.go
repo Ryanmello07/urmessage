@@ -58,8 +58,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The group an attacker names when it gets to choose, and the epoch it chooses. Written down once
@@ -427,7 +427,7 @@ func externalDoorsOntoAVerifiedGroupContext(t *testing.T) (map[string]string, in
 		Importer: importer.ForCompiler(fileSet, "source", nil),
 		Error:    func(err error) { refused = append(refused, err.Error()) },
 	}
-	checked, err := config.Check("github.com/urnetwork/connect/mls", fileSet, files, nil)
+	checked, err := config.Check("github.com/urnetwork/message/mls", fileSet, files, nil)
 	if err != nil || len(refused) != 0 {
 		t.Fatalf("type check package mls from outside it: %v %s", err, strings.Join(refused, "; "))
 	}
@@ -584,7 +584,7 @@ const (
 	// the package under test, as the synthetic source imports it and as the importer resolves
 	// it. One spelling, so the source this gate compiles and the type it compares that source's
 	// shadow against cannot become two different packages.
-	externalMlsImportPath = "github.com/urnetwork/connect/mls"
+	externalMlsImportPath = "github.com/urnetwork/message/mls"
 	// the words the compiler opens a refused CONVERSION with, spelled once because the gate reads
 	// them two ways: they are among the words each conversion spelling is held to, and they are
 	// how a row says of itself that its refusal is the conversion one.

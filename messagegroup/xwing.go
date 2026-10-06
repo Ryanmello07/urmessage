@@ -44,7 +44,7 @@ import (
 	"crypto/sha3"
 	"io"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // The sizes draft-connolly-cfrg-xwing-kem section 5.1 gives, each named for the thing it

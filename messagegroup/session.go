@@ -56,7 +56,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // sessionCommand is one unit of work for the loop goroutine.

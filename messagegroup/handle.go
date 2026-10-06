@@ -52,7 +52,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The three labels, raw ascii and never length prefixed, and three constants rather than one

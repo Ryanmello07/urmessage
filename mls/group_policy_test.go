@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // the file whose refusals the derived sweep at the bottom of this file reads. A CONSTANT and not

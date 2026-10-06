@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // rotatedTestPqSecret is pq_secret at the epoch a rotation opens: thirty two octets that are not

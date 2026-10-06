@@ -61,7 +61,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The alg_id every vector here is built under: 0x0021, XChaCha20-Poly1305 in master

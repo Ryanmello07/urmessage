@@ -30,7 +30,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // ---------------------------------------------------------------------------

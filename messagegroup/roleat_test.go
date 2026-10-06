@@ -18,7 +18,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // commitPolicyToOpener has the FOUNDER commit a policy naming one identity, the opener follow it,

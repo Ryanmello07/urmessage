@@ -780,7 +780,7 @@ func TestNoProductionTypeOfThisPackageSatisfiesTheReserver(t *testing.T) {
 		t.Fatal("no production file was read, so this gate type checked nothing")
 	}
 	config := types.Config{Importer: importer.ForCompiler(fileSet, "source", nil)}
-	checked, err := config.Check("github.com/urnetwork/connect/messagegroup", fileSet, files, nil)
+	checked, err := config.Check("github.com/urnetwork/message/messagegroup", fileSet, files, nil)
 	if err != nil {
 		t.Fatalf("type check this package's production source: %v", err)
 	}

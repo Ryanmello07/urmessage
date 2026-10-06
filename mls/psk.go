@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The three refusals this file makes are ValSem401, ValSem402 and ValSem403 in the

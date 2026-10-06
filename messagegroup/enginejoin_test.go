@@ -35,8 +35,8 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/mls"
 )
 
 // The exporter label and length the whole claim rests on. It is MASTER section 7's mls_secret:

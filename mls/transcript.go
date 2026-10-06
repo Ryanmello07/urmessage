@@ -28,7 +28,7 @@ package mls
 import (
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // TranscriptHashes is the pair a group carries across epochs. Confirmed is what the

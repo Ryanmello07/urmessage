@@ -79,7 +79,7 @@ package message
 import (
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The one format version this package writes and the only one it reads. It is first on

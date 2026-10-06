@@ -21,7 +21,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // confirmedTranscriptHashInput is RFC 9420 section 8.2's structure of that name:

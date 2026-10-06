@@ -10,7 +10,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // ---------------------------------------------------------------------------

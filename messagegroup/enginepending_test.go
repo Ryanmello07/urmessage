@@ -16,7 +16,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // pendingFacts is what a committer reads off its staged commit to announce the epoch it opens:

@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/syntax"
 )
 
 // commitAddChain is a founder and a joiner already in one group at epoch 1, built through the

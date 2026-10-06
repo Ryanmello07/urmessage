@@ -77,7 +77,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // The default bounds on a receiver's retained keys, taken from connect/mls rather than written

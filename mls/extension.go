@@ -27,7 +27,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // ProtocolVersion is a code point from the RFC 9420 section 17.1 protocol version

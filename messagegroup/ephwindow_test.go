@@ -37,7 +37,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // Where eph_window's octets begin in record_bytes, written as the sum of the fields in front

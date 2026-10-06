@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // pskTestCrypto returns the ciphersuite 0x0003 provider the psk tests are pinned

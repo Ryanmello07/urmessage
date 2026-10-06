@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 

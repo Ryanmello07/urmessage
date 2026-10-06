@@ -32,7 +32,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // The type expression an entropy source is written as in this package's source.

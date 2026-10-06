@@ -72,7 +72,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // One vector as the draft's reference implementation publishes it. Every field is hex.
@@ -111,7 +111,7 @@ const (
 // walk has to start somewhere; everything it FINDS is derived, and a rename of either one fails
 // the reading with "declares no ..." rather than quietly reading nothing.
 const (
-	xwingPackageImportPath = "github.com/urnetwork/connect/messagegroup"
+	xwingPackageImportPath = "github.com/urnetwork/message/messagegroup"
 	xwingCollectorName     = "xwingHoldAgainstTheDraft"
 	xwingAnswerTypeName    = "xwingPublishedAnswer"
 )

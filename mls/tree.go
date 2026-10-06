@@ -31,7 +31,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // RFC 9420 section 7. Leaf nodes sit at even node indices, parent nodes at odd ones, and the

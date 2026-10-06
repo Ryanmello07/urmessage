@@ -8,7 +8,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // The public key of one x25519 scalar, through the one ECDH wrapper this tree has. It is the

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // handDerivedBasicCredentialGolden is RFC 9420 section 5.3 written out by hand for the one

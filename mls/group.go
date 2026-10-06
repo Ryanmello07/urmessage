@@ -33,7 +33,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The refusals group creation makes that are nobody else's.

@@ -85,7 +85,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // treeVectorRun is one family's whole run: the four counts assertRun holds that family's

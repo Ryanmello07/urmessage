@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // testTwoMemberGroup returns a committer and a joiner already in the same group at the same epoch.

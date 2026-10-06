@@ -25,7 +25,7 @@
 // call -- so the exemption cannot outlive the thing it was written for.
 package mls
 
-import "github.com/urnetwork/connect/mls/syntax"
+import "github.com/urnetwork/message/syntax"
 
 // marshalPairwiseContext is the BOUNDED door onto the encoder below, and the bound is the class
 // marshalPskLabel and marshalBoundedComposition belong to rather than a precaution.

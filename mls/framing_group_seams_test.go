@@ -1449,7 +1449,7 @@ func forgesThroughTheEncodeMethod(auth *FramedContentAuthData) ([]byte, error) {
 // selector and the identifier this matcher reads is that selector's tail.
 const constructionBypassSeamInTheOtherRootControl = `package message
 
-import "github.com/urnetwork/connect/mls"
+import "github.com/urnetwork/message/mls"
 
 func forgesFromAnotherPackage(auth *mls.FramedContentAuthData) ([]byte, error) {
 	return mls.MarshalMLSMessage(&mls.MLSMessage{})
@@ -1463,7 +1463,7 @@ func forgesFromAnotherPackage(auth *mls.FramedContentAuthData) ([]byte, error) {
 // a parameter handed the authenticators.
 const constructionBypassSeamCarrierInTheOtherRootControl = `package message
 
-import "github.com/urnetwork/connect/mls"
+import "github.com/urnetwork/message/mls"
 
 func forgesOverACarrierFromAnotherPackage(authContent *mls.AuthenticatedContent) ([]byte, error) {
 	return mls.MarshalMLSMessage(&mls.MLSMessage{})

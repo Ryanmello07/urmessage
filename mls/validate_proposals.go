@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // ProposalValidationInput is the pre-commit state a proposal list is judged against.

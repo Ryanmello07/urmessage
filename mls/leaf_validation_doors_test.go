@@ -67,7 +67,7 @@ func typeCheckedPackageWithBodies(t *testing.T) checkedSource {
 	t.Helper()
 	checkedSourceOnce.Do(func() {
 		checkedSourceCached, checkedSourceErr = checkPackageSourceWithBodies(".",
-			"github.com/urnetwork/connect/mls")
+			"github.com/urnetwork/message/mls")
 	})
 	if checkedSourceErr != nil {
 		t.Fatalf("type check this package's production source with its bodies: %v", checkedSourceErr)

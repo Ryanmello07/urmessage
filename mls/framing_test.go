@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // ---------------------------------------------------------------------------
@@ -3161,7 +3161,7 @@ func framingPins(t *testing.T) []framingPin {
 func syntaxCodecInterface(t *testing.T) *types.Interface {
 	t.Helper()
 	for _, imported := range typeCheckedPackage(t).Imports() {
-		if imported.Path() != "github.com/urnetwork/connect/mls/syntax" {
+		if imported.Path() != "github.com/urnetwork/message/syntax" {
 			continue
 		}
 		declared, isType := imported.Scope().Lookup("Codec").(*types.TypeName)

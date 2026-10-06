@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // testStore is an in-memory StateStore for the lifecycle tests.

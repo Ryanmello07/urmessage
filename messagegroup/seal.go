@@ -103,8 +103,8 @@ import (
 
 	"fmt"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/syntax"
 )
 
 // SealRecord builds one record: the attachment, the body, its hash, the head, and the mac, in

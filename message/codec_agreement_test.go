@@ -59,7 +59,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // ── the record space, computed from the parser ──────────────────────────────────────

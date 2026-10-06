@@ -34,7 +34,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // errDuplicateSignatureKey and errDuplicateEncryptionKey are ValSem101 and ValSem103 in the

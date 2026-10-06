@@ -23,7 +23,7 @@ package mls
 import (
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // Add carries the key package of the member being added, by value.

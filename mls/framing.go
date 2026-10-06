@@ -29,7 +29,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // WireFormat selects which of the five MLSMessage arms a message carries. It is a code point

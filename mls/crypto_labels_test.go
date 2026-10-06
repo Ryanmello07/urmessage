@@ -76,7 +76,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // One crypto-basics entry, reduced to the six constructions this file owns, which is now
@@ -1124,7 +1124,7 @@ func TestEverySyntaxEncoderInThisPackageUsesTheDefaultLimit(t *testing.T) {
 	// rather than as no call at all.
 	//
 	// Measured, not supposed: the matcher used to key on the literal identifier `syntax`, and
-	// adding `sx "github.com/urnetwork/connect/mls/syntax"` beside the plain import in
+	// adding `sx "github.com/urnetwork/message/syntax"` beside the plain import in
 	// welcome_wire.go together with an sx.UnmarshalLimit(data, welcome, sx.MaxRatchetTreeLength)
 	// entry point left this gate PASSING -- a brand new decode at the raised limit, invisible to
 	// the one gate whose whole subject is which limit this package enters the codec at, while
@@ -1166,8 +1166,8 @@ func mlsKdfLabel(label string, context []byte, length int) []byte {
 const renamedSyntaxImportControl = `package mls
 
 import (
-	"github.com/urnetwork/connect/mls/syntax"
-	sx "github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
+	sx "github.com/urnetwork/message/syntax"
 )
 
 func decodeAtTheRaisedBound(data []byte, value *Welcome) error {
@@ -1181,7 +1181,7 @@ func decodeAtTheRaisedBound(data []byte, value *Welcome) error {
 const dottedSyntaxImportControl = `package mls
 
 import (
-	. "github.com/urnetwork/connect/mls/syntax"
+	. "github.com/urnetwork/message/syntax"
 )
 
 func decodeAtTheRaisedBound(data []byte, value *Welcome) error {

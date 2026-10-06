@@ -35,8 +35,8 @@ package messagegroup
 import (
 	"fmt"
 
-	"github.com/urnetwork/connect/mls"
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/mls"
+	"github.com/urnetwork/message/syntax"
 )
 
 // GroupEngine is the factory half of section 6: everything a caller needs in order to obtain a

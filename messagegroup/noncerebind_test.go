@@ -40,7 +40,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // A second nonce, distinct from testServerNonce() in both its octets and its length, so a case

@@ -210,7 +210,7 @@ func epochIdentsReachedFrom(scan epochScan, reachable map[string]bool) map[strin
 
 // The directories this package's production source can reach at all, derived off its own imports.
 //
-// The SCOPE question (R3a), answered without a list. Every github.com/urnetwork/connect/* import
+// The SCOPE question (R3a), answered without a list. Every github.com/urnetwork/message/* import
 // this package holds names a sibling directory of the module, so the set of packages a function
 // here can call into is read off the import specs rather than written down -- and a third urnetwork
 // package imported next week is in scope on the commit that adds it. A gate that derives its class
@@ -225,7 +225,7 @@ func epochReachableRoots(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("read this package's directory: %v", err)
 	}
-	const modulePrefix = `"github.com/urnetwork/connect/`
+	const modulePrefix = `"github.com/urnetwork/message/`
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {

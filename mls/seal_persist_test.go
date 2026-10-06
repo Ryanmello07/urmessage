@@ -32,7 +32,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // sealSiteCallers is every declaration of this package's non test source that calls

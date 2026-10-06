@@ -7,7 +7,7 @@
 // rather than at each of the couple of dozen call sites the tasks after this one add.
 package mls
 
-import "github.com/urnetwork/connect/mls/syntax"
+import "github.com/urnetwork/message/syntax"
 
 // marshalBytes runs an encoder against a fresh Writer and yields its bytes, surfacing the
 // Writer's sticky error.

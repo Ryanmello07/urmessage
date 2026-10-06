@@ -60,7 +60,7 @@ func primitiveImportIsCryptographic(path string) bool {
 
 // The import path of the package whose ONE reviewed ECDH wrapper this package's x25519 half goes
 // through. mls may not import this package, so the edge is read from this side.
-const primitiveMlsImportPath = "github.com/urnetwork/connect/mls"
+const primitiveMlsImportPath = "github.com/urnetwork/message/mls"
 
 // primitiveMlsFunctionNames is every free function connect/mls declares in a production source
 // file that itself imports a cryptographic package.

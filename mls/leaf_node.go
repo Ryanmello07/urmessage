@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // LeafNodeSource is RFC 9420 section 7.2: which of the three ways this leaf entered the tree,

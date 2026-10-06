@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // treeAdaptFile is the file whose declarations this file is answerable for.

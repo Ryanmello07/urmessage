@@ -26,7 +26,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // Role is a member's authority in a group. MASTER section 11.

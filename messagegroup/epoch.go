@@ -59,7 +59,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // PqSecretBytes is the width MASTER section 7 fixes for pq_secret[n].

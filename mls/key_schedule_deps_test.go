@@ -47,7 +47,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // Pinned free functions from the crypto plan and the syntax plan, the two that have
@@ -874,7 +874,7 @@ func TestNoPinBlockShrinksWithoutFailing(t *testing.T) {
 // an import under it crosses a plan boundary inside this slice, which is the class this
 // file exists to pin. Anything from the standard library or a third party module is pinned
 // by pins_test.go instead.
-const firstPartyImportPrefix = "github.com/urnetwork/connect"
+const firstPartyImportPrefix = "github.com/urnetwork/message"
 
 // firstPartyConsumptionControl names one first party symbol in a comment, one through a
 // value and one through a call, and one standard library symbol. A collector that had
@@ -887,7 +887,7 @@ var firstPartyConsumptionControl = strings.Join([]string{
 	"import (",
 	"\t\"strings\"",
 	"",
-	"\t\"github.com/urnetwork/connect/mls/syntax\"",
+	"\t\"github.com/urnetwork/message/syntax\"",
 	")",
 	"",
 	"// syntax.NamedOnlyInAComment is prose and not a consumer.",

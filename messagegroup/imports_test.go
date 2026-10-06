@@ -45,10 +45,10 @@ var messagegroupProductionImports = map[string]string{
 	`"fmt"`:                                  "fmt.Errorf(\"%w: ...\", sentinel, detail) only: the sentinel stays the matchable identity and the wrap carries the octet counts a caller needs",
 	`"io"`:                                   "the io.Reader an entropy taking function is handed, which entropy_test.go's derived class is keyed on",
 	`"sync"`:                                 "the two ratchets' state locks and the receiver table's, which are what stop two concurrent senders consuming one stream index",
-	`"github.com/urnetwork/connect/message"`: "the record types, the two aad builders, the write_auth mac and the size ladder. The edge is ONE WAY: connect/message must never import this package, and connect/layering_test.go holds that",
-	`"github.com/urnetwork/connect/mls"`:     "the crypto provider every derivation runs on, the four X25519 wrappers, the group this package's one adapter wraps, and the two window bounds the receiver's defaults are read off",
-	`"github.com/urnetwork/connect/mls/syntax"`: "the tree's one length prefix implementation, WriteOpaqueLP, and the writer every info preimage is assembled through",
-	`"golang.org/x/crypto/chacha20poly1305"`:    "XChaCha20-Poly1305, the record aead MASTER section 7.1 registers as 0x0021",
+	`"github.com/urnetwork/message/message"`: "the record types, the two aad builders, the write_auth mac and the size ladder. The edge is ONE WAY: connect/message must never import this package, and connect/layering_test.go holds that",
+	`"github.com/urnetwork/message/mls"`:     "the crypto provider every derivation runs on, the four X25519 wrappers, the group this package's one adapter wraps, and the two window bounds the receiver's defaults are read off",
+	`"github.com/urnetwork/message/syntax"`:  "the tree's one length prefix implementation, WriteOpaqueLP, and the writer every info preimage is assembled through",
+	`"golang.org/x/crypto/chacha20poly1305"`: "XChaCha20-Poly1305, the record aead MASTER section 7.1 registers as 0x0021",
 }
 
 // The packages this gate exists to keep OUT, named so the failure a reader sees carries the

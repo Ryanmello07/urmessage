@@ -31,7 +31,7 @@
 package mls
 
 import (
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // GroupInfo is the group's state at one epoch, signed by a member, and the structure a joiner

@@ -25,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // The width MASTER section 8.3 gives write_key and read_key on the wire, transcribed rather than

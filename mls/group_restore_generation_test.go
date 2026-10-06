@@ -34,7 +34,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // testConsumedAt is how many generations one leaf's ratchet of one kind has handed out, read off

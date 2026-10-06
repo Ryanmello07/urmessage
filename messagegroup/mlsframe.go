@@ -88,8 +88,8 @@ import (
 	"crypto/subtle"
 	"fmt"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The domain separation label of the inner frame's aad. Raw ascii, never length prefixed, which

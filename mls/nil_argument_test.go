@@ -34,7 +34,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The one sentinel this class excludes, named rather than filtered out by shape.

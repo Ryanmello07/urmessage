@@ -79,7 +79,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // The two target names. p8's own matrix in the compose findings already lists both, which is where
@@ -978,7 +978,7 @@ func TestEveryRatchetTreeCodecCallInThisPackageRunsAtTheRaisedBound(t *testing.T
 const renamedRatchetTreeBoundControl = `package mls
 
 import (
-	sx "github.com/urnetwork/connect/mls/syntax"
+	sx "github.com/urnetwork/message/syntax"
 )
 
 func checkRaised(bs []byte) error {
@@ -990,7 +990,7 @@ func checkRaised(bs []byte) error {
 const dottedRatchetTreeBoundControl = `package mls
 
 import (
-	. "github.com/urnetwork/connect/mls/syntax"
+	. "github.com/urnetwork/message/syntax"
 )
 
 func checkRaised(bs []byte) error {

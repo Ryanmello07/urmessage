@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/mls"
 )
 
 // The vectors, computed outside this tree with python's hmac and hashlib and checked here

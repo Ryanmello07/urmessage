@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
+	"github.com/urnetwork/message/message"
 )
 
 // ---------------------------------------------------------------------------
@@ -1314,7 +1314,7 @@ func repairTypeCheckProduction(t *testing.T) (*types.Info, []messagegroupSource)
 	}
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
 	config := types.Config{Importer: importer.ForCompiler(fileSet, "source", nil)}
-	if _, err := config.Check("github.com/urnetwork/connect/messagegroup", fileSet, files, info); err != nil {
+	if _, err := config.Check("github.com/urnetwork/message/messagegroup", fileSet, files, info); err != nil {
 		t.Fatalf("type check this package's production source: %v", err)
 	}
 	// the SOURCES ARE THE ONES THAT WERE CHECKED, handed back rather than re-parsed, because the

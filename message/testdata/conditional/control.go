@@ -23,7 +23,7 @@
 // judged, not to be copied.
 package conditional
 
-import "github.com/urnetwork/connect/mls/syntax"
+import "github.com/urnetwork/message/syntax"
 
 // The POSITIVE control, and it is the defect master section 8 forbids written down: a field
 // whose presence depends on the class it is qualifying. The gate must name this function and

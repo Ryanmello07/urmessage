@@ -652,7 +652,7 @@ const packageAliasMarker = " IS DOT IMPORTED, so its entry points are bare ident
 // name. A renamed import spells the SAME entry point under a different first identifier,
 // and a matcher keyed on the literal name reports it as no call at all -- which for a gate
 // holding an exact list is a new entry point that joins nothing. Measured: adding
-// `sx "github.com/urnetwork/connect/mls/syntax"` beside the plain import in welcome_wire.go
+// `sx "github.com/urnetwork/message/syntax"` beside the plain import in welcome_wire.go
 // together with an sx.UnmarshalLimit(data, welcome, sx.MaxRatchetTreeLength) entry point
 // left TestEverySyntaxEncoderInThisPackageUsesTheDefaultLimit passing -- a brand new decode
 // at the RAISED limit, unrecorded by the gate whose whole subject is which limit this
@@ -8231,9 +8231,9 @@ var cryptoImportPaths = []string{
 	// builders and the write_auth mac the sealer runs over. The direction is one way and it is
 	// the ruling -- connect/message never imports connect/messagegroup -- so this row is the
 	// client half reaching the shared half and never the reverse.
-	`"github.com/urnetwork/connect/message"`,
-	`"github.com/urnetwork/connect/mls"`,
-	`"github.com/urnetwork/connect/mls/syntax"`,
+	`"github.com/urnetwork/message/message"`,
+	`"github.com/urnetwork/message/mls"`,
+	`"github.com/urnetwork/message/syntax"`,
 	`"golang.org/x/crypto/chacha20poly1305"`,
 	`"io"`,
 	`"math"`,

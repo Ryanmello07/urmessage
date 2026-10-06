@@ -25,7 +25,7 @@ retention class left by four and adding the eph bucket to it, or multiplying the
 and masking off what is left.
 */
 
-import "github.com/urnetwork/connect/message"
+import "github.com/urnetwork/message/message"
 
 // The legal way to do it, which is to call the one function allowed to join, so that the
 // controls are comparing "allowed" against "reported" rather than "absent" against

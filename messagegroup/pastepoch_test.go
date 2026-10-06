@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/mls"
 )
 
 // pastEpochPair is a testPair whose OPENER has moved on by itself: the sender is still at the

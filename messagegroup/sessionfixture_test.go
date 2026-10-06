@@ -43,8 +43,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/urnetwork/connect/message"
-	"github.com/urnetwork/connect/mls"
+	"github.com/urnetwork/message/message"
+	"github.com/urnetwork/message/mls"
 )
 
 // memoryStateStore is mls.StateStore in a map. It persists nothing and it is not meant to: what

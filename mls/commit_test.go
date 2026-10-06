@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urnetwork/connect/mls/syntax"
+	"github.com/urnetwork/message/syntax"
 )
 
 // TestCommitPathRequiredRules is the plan's four cases, plus the two the plan's four cannot see.
