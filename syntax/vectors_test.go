@@ -13,7 +13,7 @@ import (
 // deserializationVectorFile is the path, relative to this package, to the vendored
 // family 16 corpus. p8 task 6 vendors and digest-pins the file itself; this package
 // only reads it.
-const deserializationVectorFile = "../testdata/vectors/deserialization.json"
+const deserializationVectorFile = "../mls/testdata/vectors/deserialization.json"
 
 // TestVectorDeserialization loads the vendored family 16 corpus and runs every
 // vector through VerifyDeserializationVector. It also asserts a minimum vector

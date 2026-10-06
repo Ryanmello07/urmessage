@@ -82,6 +82,12 @@ mls/testdata/corpus/** -text
 # It rewrites no git object -- all of them are LF in the index already.
 message/testdata/fuzz/** -text
 
+# syntax/testdata/fuzz/** is where go writes a crasher for the codec's fuzz targets, and where
+# .github/workflows/syntax.yml uploads it from; a committed one is go's corpus format, the shape
+# the two paragraphs above say a CRLF checkout corrupts. The codec sat under mls/ until its
+# promotion to a peer package, and no rule above names its new place.
+syntax/testdata/fuzz/** -text
+
 # messagegroup/testdata/eph-window-kat.txt is ONE HALF OF A PAIR. msgrepo carries the same 57
 # answers, byte for byte, at its own module root, and each repository drives its own copy of
 # MASTER section 8's sender formula over them. That is the only fastening available: Spec B

@@ -1,0 +1,77 @@
+# The per commit gate for github.com/urnetwork/message/syntax, the shared presentation-language
+# codec. It moved here from connect's mls-syntax.yml with the package itself, when the codec was
+# promoted from connect/mls/syntax to a peer of mls (MESSAGEREVIEW.md, "Repository layout").
+#
+# Slice A1 is done when family 16 passes and fuzz properties 1 and 2 are clean for 60 seconds on
+# each of the three targets (spec A section 13), so this job runs exactly that and blocks the
+# commit when it does not hold. The differential property against OpenMLS is property 3; it has
+# no runner yet (mls/interop/PINS.md pins the oracle), and nothing here builds or links Rust.
+#
+# No step here may be marked to continue past its own failure. A step that reports its failure
+# and lets the job pass anyway is a note, not a gate, and syntax/layering_test.go fails on the
+# spelling of that marker anywhere in this file, comments included. The rest of the file is
+# likewise asserted there, so renaming a target or unpinning the toolchain fails the suite
+# rather than quietly weakening the gate.
+name: Test — syntax
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    name: go test ./syntax
+    runs-on: ubuntu-latest
+    # roughly four minutes of work: three 60 second fuzz legs plus the race suite
+    # and the toolchain setup. the ceiling is slack for a slow runner, not a budget.
+    timeout-minutes: 20
+    steps:
+      - name: Check out message
+        uses: actions/checkout@v4
+
+      # pinned rather than read from go.mod: this package asserts canonical encodings byte for
+      # byte, so a silent toolchain bump changes what the gate means. syntax/layering_test.go
+      # holds this line.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+
+      # ./syntax imports the standard library only (spec A section 2.3).
+      - name: Vet
+        run: go vet ./syntax/...
+
+      # -count=1 defeats the test result cache so a green run always means the tests
+      # actually ran. this leg is family 16, the layering gate and every unit and
+      # property test in the package.
+      - name: Unit and vector tests
+        run: go test ./syntax/... -count=1 -race -timeout 10m
+
+      # the three legs are separate steps rather than one, so a failure names the
+      # property that broke without reading the log. -run=NONE keeps each leg to its
+      # fuzzing, since the suite above already ran the seeds.
+      - name: Fuzz the varint
+        run: go test ./syntax -run=NONE -fuzz=FuzzVarint -fuzztime=60s
+
+      - name: Fuzz the length prefixed forms
+        run: go test ./syntax -run=NONE -fuzz=FuzzOpaque -fuzztime=60s
+
+      - name: Fuzz the nested structure
+        run: go test ./syntax -run=NONE -fuzz=FuzzSyntaxStruct -fuzztime=60s
+
+      # a crasher is written under testdata/fuzz and is otherwise lost with the
+      # runner, and it is the only artifact that makes the failure reproducible.
+      - name: Upload fuzz reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: syntax-fuzz-reproducers
+          path: syntax/testdata/fuzz/**

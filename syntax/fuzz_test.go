@@ -46,7 +46,7 @@ import (
 // the corpus the validation and interop plan's seed generator fills, shared by
 // every fuzz target in connect/mls so that a case one target found is replayed by
 // all of them
-const sharedCorpusDir = "../testdata/corpus"
+const sharedCorpusDir = "../mls/testdata/corpus"
 
 // filler is what every seed body is made of. A repeated non zero octet rather than
 // zeros, so that a length prefix bug which reads a body byte as part of the prefix
