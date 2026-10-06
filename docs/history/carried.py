@@ -15,8 +15,9 @@ and U, T this repository's tip, and m() the mechanical import-path rewrite of th
   1. every path D the removal deletes (B..H, status D) projects onto a path M of the tip, and T holds
      M (or the tip's manifest declares M deleted), unless ported.tsv declares D not-carried;
   2. every imported path at U (deleted by the removal, or kept in the core repository like
-     CODESTYLE.md) has every change upstream made to it since MB IN THE TIP: a three-way merge of
-     T:M (ours), m(MB:D) (base) and m(U:D) (theirs) is clean and is T:M byte for byte;
+     CODESTYLE.md, or added by upstream under a directory an import took whole) has every change
+     upstream made to it since MB IN THE TIP: a three-way merge of T:M (ours), m(MB:D) (base) and
+     m(U:D) (theirs) is clean and is T:M byte for byte;
   3. upstream's changes are declared: when m(U:D) differs from m(MB:D), ported.tsv has a port row
      for D naming exactly the upstream commits that changed it (MB..U) and the tip commit that
      ported them, an ancestor of the tip;
@@ -28,6 +29,15 @@ and U, T this repository's tip, and m() the mechanical import-path rewrite of th
   6. every ported.tsv row is needed, unless its commits are not in U at all: such a row is AHEAD of
      the upstream measured, it is printed, and it is checked the day U contains it.
 
+An imported path is one an import spec selects (docs/history/*-paths*.txt, the git-filter-repo
+inputs). verify_split.py's projectors, which this imports, answer that path by path, and for one
+directory line, the sdk's cgo/ctest/, they answer it with the two files the directory held at the
+import's source: the same set at the source, which is what verify_split.py checks. Upstream adds
+files later, under that directory too (urnetwork/sdk a7b5db77 adds cgo/ctest/loopback-overlay.json
+and cgo/ctest/testdata/loopback_test_world.go), so this script also projects that line as a
+directory, and holds every projection to the specs before it measures anything: each selection line
+projects a path under it to where the spec's renames put it.
+
 The complement is printed: what the removal's head still holds under the imported paths, and what it
 changes rather than deletes. Read-only on every repository, like verify_split.py, whose projections,
 mechanical rewrite and git helpers this imports.
@@ -38,10 +48,13 @@ mechanical rewrite and git helpers this imports.
 --controls runs the same checks against the tip this branch had before the ports (f3f8f2bd, the tip
 the review measured), where they must fail for exactly the paths the port and port-delete rows
 in U name; then with a row dropped, which must be reported, and with a row planted, which must be
-needed by nothing.
+needed by nothing; then with a file planted in upstream's tree under cgo/ctest/ (in memory), which
+must be reported, and again with that directory projected file by file, as verify_split.py does,
+where the planted file goes unmeasured and the spec check must report the directory.
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -65,6 +78,20 @@ SIDES = {
 PRE_PORT_TIP = "f3f8f2bdd95cf6440935d1c29986c4510c64a534"
 KINDS = ("port", "port-delete", "fork-only", "not-carried")
 MANIFEST = "docs/history/adaptations.tsv"
+# each side's import specs, read at the tip
+SPECS = {
+    "connect": ["docs/history/connect-codestyle-paths.txt", "docs/history/connect-core-paths.txt",
+                "docs/history/connect-protocol-paths.txt"],
+    "sdk": ["docs/history/sdk-paths.stage3.txt"],
+}
+# the directory lines the projectors answer file by file: (directory, where it lands, stage)
+DIRECTORIES = {"sdk": [("cgo/ctest/", "sdk/cgo/ctest/", "3")]}
+# a name inside each regex selection line, for the spec check
+REGEX_PROBES = {
+    r"regex:^message[^/]*\.go$": "message_carried_probe.go",
+    r"regex:^protocol/message[^/]*$": "protocol/message_carried_probe",
+}
+PROBE = "carried_probe"
 
 
 def project(side, path):
@@ -72,7 +99,65 @@ def project(side, path):
         hit = projector(path)
         if hit:
             return hit[1], stage
+    for directory, to, stage in DIRECTORIES.get(side, ()):
+        if path.startswith(directory):
+            return to + path[len(directory):], stage
     return None, None
+
+
+def spec_lines(dst, tip, spec):
+    """A spec's selection lines, and its renames as (old, new), in order."""
+    text = vs.git(dst, "cat-file", "blob", "%s:%s" % (tip, spec)).decode("utf-8")
+    selections, renames = [], []
+    for line in text.splitlines():
+        line = line.rstrip("\r")
+        if not line.strip() or line.startswith("#"):
+            continue
+        if "==>" in line:
+            renames.append(tuple(line.split("==>", 1)))
+        else:
+            selections.append(line)
+    return selections, renames
+
+
+def renamed(path, renames):
+    """Where a spec's renames put a selected path, applied in order, as git-filter-repo does."""
+    for old, new in renames:
+        if old.startswith("regex:"):
+            path = re.sub(old[len("regex:"):], new, path)
+        elif path.startswith(old):
+            path = new + path[len(old):]
+    return path
+
+
+def spec_problems(dst, tip):
+    """The projections held to the specs, both ways: every selection line projects a path under it
+    (the line itself, a probe inside a directory line, a probe matching a regex line) to where the
+    spec's renames put it, and every DIRECTORIES entry is a directory line of its side's specs."""
+    problems = []
+    for side, specs in sorted(SPECS.items()):
+        directory_lines = set()
+        for spec in specs:
+            selections, renames = spec_lines(dst, tip, spec)
+            for line in selections:
+                if line.startswith("regex:"):
+                    probe = REGEX_PROBES.get(line)
+                    if probe is None or not re.search(line[len("regex:"):], probe):
+                        problems.append("%s: no probe in REGEX_PROBES matches %r" % (spec, line))
+                        continue
+                elif line.endswith("/"):
+                    directory_lines.add(line)
+                    probe = line + PROBE
+                else:
+                    probe = line
+                want, got = renamed(probe, renames), project(side, probe)[0]
+                if got != want:
+                    problems.append("%s: %s projects to %s, and the spec puts it at %s: what upstream changes or adds there goes unmeasured"
+                                    % (spec, probe, got, want))
+        for directory, _, _ in DIRECTORIES.get(side, ()):
+            if directory not in directory_lines:
+                problems.append("DIRECTORIES names %s for %s, which no spec of that side selects as a directory" % (directory, side))
+    return problems
 
 
 def read_ported(path):
@@ -330,6 +415,25 @@ def unneeded(rows, used, removals):
     return fails, ahead
 
 
+def planted_upstream_file(side, removal, dst, tip, rows, directory):
+    """check_side with one file planted in upstream's tree under directory, in memory (the cached
+    tree and blob, restored after): the failures that name the planted file."""
+    repo, base, _, upstream = removal
+    at = vs.rev(repo, upstream or base)
+    path, oid = directory + PROBE, "0" * 40
+    saved = tree_of(repo, at)
+    planted = dict(saved)
+    planted[path] = ("100644", "blob", oid)
+    _trees[(repo, at)] = planted
+    _blobs[(repo, oid)] = b"planted by carried.py's control\n"
+    try:
+        got = check_side(side, removal, dst, tip, rows, set(), verbose=False)
+    finally:
+        _trees[(repo, at)] = saved
+        del _blobs[(repo, oid)]
+    return [msg for p, msg in got if p == path]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dst", required=True)
@@ -352,8 +456,9 @@ def main():
     if set(removals) != set(SIDES):
         sys.exit("FATAL: --removal must name every side: %s" % sorted(SIDES))
     print("tip %s" % tip)
+    failures = ["spec: %s" % p for p in spec_problems(a.dst, tip)]
+    print("the projections against the import specs: %s" % ("%d problem(s)" % len(failures) if failures else "every selection line projects where its spec puts it"))
     used = set()
-    failures = []
     for side in sorted(removals):
         failures += ["%s: %s" % (side, msg) for _, msg in check_side(side, removals[side], a.dst, tip, rows, used)]
     stale, ahead = unneeded(rows, used, removals)
@@ -397,6 +502,27 @@ def main():
               % ("needed by nothing, reported" if ok else "MISSED"))
         if not ok:
             failures.append("control: the planted port row was not reported")
+        for side in sorted(DIRECTORIES):
+            for directory, _, _ in list(DIRECTORIES[side]):
+                found = planted_upstream_file(side, removals[side], a.dst, tip, rows, directory)
+                print("  control: a file planted under %s in upstream's tree -> %s"
+                      % (directory, "reported: %s" % found[0] if found else "MISSED"))
+                if not found:
+                    failures.append("control: a file planted under %s upstream went unreported" % directory)
+                # the rejected design: the directory projected only through the files it held at the source
+                saved = DIRECTORIES[side]
+                DIRECTORIES[side] = [d for d in saved if d[0] != directory]
+                try:
+                    missed = planted_upstream_file(side, removals[side], a.dst, tip, rows, directory)
+                    spec = [p for p in spec_problems(a.dst, tip) if directory + PROBE in p]
+                finally:
+                    DIRECTORIES[side] = saved
+                ok = not missed and len(spec) == 1
+                print("  control: %s projected file by file, as verify_split.py does -> the planted file %s, and the spec check %s"
+                      % (directory, "goes unmeasured" if not missed else "IS STILL MEASURED",
+                         "reports it: %s" % spec[0] if len(spec) == 1 else "MISSED IT (%d lines)" % len(spec)))
+                if not ok:
+                    failures.append("control: with %s projected file by file, the spec check did not report it alone" % directory)
     print()
     if failures:
         print("FAIL (%d)" % len(failures))

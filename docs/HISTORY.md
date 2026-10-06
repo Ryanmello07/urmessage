@@ -173,7 +173,10 @@ the manifest), the tip contains every upstream change to it since the merge base
 import's source and the removal's base (a three-way merge that changes nothing), and every
 upstream change and fork-only change is declared in ported.tsv, both ways. Its control is the
 tip the review measured, `f3f8f2bd`, before the ports, where it fails for exactly the ten
-ported paths.
+ported paths. An imported path is one the import specs (the `*-paths*.txt` files) select, and a
+file upstream adds later under a directory an import took whole is one too: carried.py holds its
+projections to the specs, so a directory that verify_split.py projects through the files it held
+at the source (the sdk's `cgo/ctest/`) still has what upstream adds there measured.
 
 ## Re-running the verifier
 
@@ -218,8 +221,11 @@ It must end with `PASS`. A suffix `@<commit>` on a removal measures the content 
 upstream commit instead of the removal's base, the newest `main` say, so a change upstream made
 after the removal's base is caught before the removal merges it; a ported.tsv row whose commits
 that upstream does not yet hold is printed as ahead of it. Measured on 2026-10-06: connect
-`ca2562ba..41076bc4` (848 deletions), sdk `364fcb2d..1945759a` (148 deletions), each at its base
-and again at the newest `main` (connect `3b509479`, sdk `db52c42e`).
+`ca2562ba..41076bc4` (848 deletions) and sdk `364fcb2d..1945759a` (148 deletions) pass at their
+bases, and connect passes again at the newest `main`, `42552157`. At the newest sdk `main`,
+`a7b5db77`, it fails for that commit alone: made after the sdk removal's base, it moves the
+loopback harness to `cgo/ctest/testdata/` behind an overlay, and neither the sdk removal nor this
+repository carries it yet.
 
 ## Files in docs/history
 
