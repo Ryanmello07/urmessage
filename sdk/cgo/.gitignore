@@ -1,0 +1,3 @@
+# what sdk/cgo/compose.sh lays here and records, and what a library build writes
+/.composed
+/build/

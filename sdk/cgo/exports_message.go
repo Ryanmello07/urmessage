@@ -33,15 +33,20 @@ import (
 // and would reflow every one of the 620 existing declarations in the same commit. That is a
 // separate, larger job. So this file is the messaging surface written by hand, in the
 // generator's own style, ALONGSIDE the generated file rather than inside it -- the same reason
-// exports_manual.go gives for the byte-buffer exports, and it is not repeated there.
+// exports_manual.go gives for the byte-buffer exports, and it is not repeated there. Since the
+// SDK split, exports_gen.go, exports_manual.go and gen/gen.go are the core SDK's (urnetwork/sdk
+// cgo/), and this file is laid beside them for the build by compose.sh: the library is one
+// package main, the core's, with the messaging half in it.
 //
 // TWO CONSEQUENCES OF BEING HAND-WRITTEN, NAMED RATHER THAN LEFT TO BE DISCOVERED:
 //   - include/urnetwork_message.h is the header for this file and is hand-written too. The
 //     generated include/urnetwork_sdk.h does not declare these; the two headers are independent
 //     and both ship. The cgo-generated header emitted next to the library declares both.
-//   - include/urnetwork_sdk.def names every export in this file because gen.go's manualExports()
-//     picks them up. It used to be STALE -- 0 of 34 names, so an MSVC consumer linking through the
-//     import library found none of the messaging surface -- and it is now held by
+//   - include/urnetwork_sdk.def names every export in this file. Since the split it is THIS
+//     directory's: gen (`go run ./gen`) writes it from the core SDK's own generated .def and this
+//     file's //export lines, where before the split the core generator's manualExports() picked
+//     them up. It used to be STALE -- 0 of 34 names, so an MSVC consumer linking through the
+//     import library found none of the messaging surface -- and it is held by
 //     gen.TestTheDefNamesEveryHandWrittenExportThatShips rather than by this sentence.
 //
 // ── WHAT IS EXPOSED IS WHAT IS PROVEN, AND THE SILENCES ARE DELIBERATE ───────────────────────
