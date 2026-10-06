@@ -75,13 +75,18 @@ import (
 // sibling's own suite going red on the deletion.
 //
 // AND THE ARGUMENT IS STRICTLY STRONGER FOR msgrepo THAN FOR connect, which is worth saying now that
-// an entry names it. `go.mod` replaces connect to ../connect, so connect's source is already a
+// an entry names it. `go.mod` replaces connect to ../../connect, so connect's source is already a
 // requirement of this module's build and the godoc gate below walks it for that reason. msgrepo
 // appears in this module's go.mod nowhere at all -- it is the SERVER -- so a walk of it would add a
 // checkout this build does not need for any other purpose.
+//
+// SIX ENTRIES LEFT THIS TABLE WHEN THE PACKAGE MOVED, AND THE GATE SAID SO ITSELF. In urnetwork/sdk
+// it held seven: one in msgrepo and six in connect (messagegroup, message and mls). Those three
+// packages are this repository's root module now, so the six cases they declare are declared HERE,
+// and the both-ways check below failed on each entry as "excusing a name the plain rule would
+// pass". They were deleted, and the plain rule holds them. The declaration walk is the repository
+// for that reason; see citationScan.
 var citationDeclaredElsewhere = map[string]string{
-	"TestABodyNoRungCouldHoldCostsNeitherAnIndexNorAGeneration": "connect/messagegroup/mlsframe_test.go -- " +
-		"the frame-size ladder is connect's and the cost it prices is read from this side",
 	// THE FIRST msgrepo ENTRY IN THIS TABLE, and it is read rather than named: that case walks a
 	// member holding read_key[1] from epoch 1 to epoch 3, asserts THREE round trips for three
 	// epochs ("one per epoch"), that every page comes back Complete, and that the walk arrives
@@ -91,17 +96,6 @@ var citationDeclaredElsewhere = map[string]string{
 	"TestAMemberSeveralEpochsBehindWalksForwardOneEpochPerRoundTrip": "msgrepo/api/epochceiling_test.go -- " +
 		"item 246's F0 ceiling paced end to end at the server: one epoch per round trip, every page " +
 		"Complete, and the walk arrives at the present rather than short of it",
-	"TestARemovalWhoseLeafIsRefilledInTheSameCommitIsStillNamedByTheStagedCommit": "connect/messagegroup/" +
-		"engineremovewithextensions_test.go -- ledger ruling 51's derivation held one layer down, " +
-		"on the seam's own PendingEpoch.RemovedLeaves",
-	"TestAnyMemberCanStillSquatAnotherLeafsStreamIndex": "connect/messagegroup/m1w1repairs_test.go -- " +
-		"the squat is a property of the server's index space, which connect owns",
-	"TestClassBucketJoinIsConfinedToRecordGo": "connect/message/record_test.go -- the class bucket's " +
-		"join is connect's, and this repository is the caller it is confined against",
-	"TestTheCommittersOwnPathCanSwapItsLeafIdentityAndOnlyThePreCommitTreeStillNamesIt": "connect/mls/" +
-		"staged_after_test.go -- the staged tree's own behaviour, below the seam",
-	"TestTheSizeLadderCostOfTheInnerFrameIsMeasuredHere": "connect/messagegroup/mlsframe_test.go -- " +
-		"the same ladder as the first entry, measured rather than reasoned",
 }
 
 // citationIsNotACase is a name the language reserves, cited as a mechanism rather than as a case.
@@ -111,10 +105,12 @@ var citationDeclaredElsewhere = map[string]string{
 // sibling module may have its own, and a comment that says "TestMain installs X" is naming the
 // hook and not a property somebody holds. It is carved out BY NAME and held both ways like the
 // table above, so the day nothing cites it this entry reports rather than sitting here.
-var citationIsNotACase = map[string]string{
-	"TestMain": "go's own per-package entry point, named as a mechanism rather than as a case; " +
-		"a repository has one per package and the count is meaningless",
-}
+//
+// EMPTY HERE, BECAUSE THAT DAY CAME WITH THE MOVE. The production comments that named TestMain
+// were the core SDK's own (device_rpc.go, extender_provide.go and network_space.go), which stayed in
+// urnetwork/sdk, and the both-ways check below reported the entry as excusing nothing. The table
+// stays, so a carve-out has somewhere to be written and held the day one is needed.
+var citationIsNotACase = map[string]string{}
 
 // citationCorpus is every `Test...` function this repository declares and every citation of one in
 // its production prose, read ONCE and answered to by the rule above.
@@ -139,8 +135,12 @@ type citationCorpus struct {
 	declared map[string][]string
 	// cited is every Test... spelling a production comment names, to the sites naming it.
 	cited map[string][]string
-	// total and production are the .go files the walk saw and how many of them are not tests.
-	total, production int
+	// citedOutside is the same reading of the production prose OUTSIDE the subject, kept only to be
+	// printed as the complement of the subject: nothing is asserted over it.
+	citedOutside map[string][]string
+	// total is the .go files the walk saw, production how many of the subject's are not tests, and
+	// outside how many lie outside the subject and were read for their declarations only.
+	total, production, outside int
 }
 
 // citationHolding is which disposition of the rule below holds one spelling, or none of them.
@@ -181,15 +181,28 @@ func (self *citationCorpus) holding(name string) citationHolding {
 // -- is how two nets come to disagree about which names anything holds.
 var citationNet = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
-func citationScan(t *testing.T, root string) *citationCorpus {
+// citationScan reads every Test... declaration in the REPOSITORY and every citation in the SUBJECT's
+// production prose, where the subject is this module and sits inside the repository.
+//
+// TWO ROOTS, AND WHY. The rule is "a cited case is declared in this repository exactly once", and
+// this repository is urnetwork/message: the cases the SDK's prose cites live in this module and in
+// the root module beside it. The SUBJECT is what it was in urnetwork/sdk, this module's own prose,
+// nested directories included. Paths are reported relative to the repository root.
+func citationScan(t *testing.T, repository string, subject string) *citationCorpus {
+	subjectRel, relErr := filepath.Rel(repository, subject)
+	if relErr != nil || subjectRel == "." || strings.HasPrefix(filepath.ToSlash(subjectRel), "../") {
+		t.Fatalf("the citation subject %s is not a directory inside the repository %s (%v)", subject, repository, relErr)
+	}
+	subjectPrefix := filepath.ToSlash(subjectRel) + "/"
 	// a Go test function's declaration, which has to name the same spelling citationNet finds.
 	declaration := regexp.MustCompile(`(?m)^func\s+(Test[A-Z][A-Za-z0-9_]*)\s*\(`)
 	citation := citationNet
 
 	declared := map[string][]string{}
 	cited := map[string][]string{}
-	production, total := 0, 0
-	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+	citedOutside := map[string][]string{}
+	production, total, outside := 0, 0, 0
+	err := filepath.Walk(repository, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -208,16 +221,25 @@ func citationScan(t *testing.T, root string) *citationCorpus {
 		}
 		total += 1
 		rel := filepath.ToSlash(func() string {
-			at, _ := filepath.Rel(root, path)
+			at, _ := filepath.Rel(repository, path)
 			return at
 		}())
 		for _, one := range declaration.FindAllStringSubmatch(string(source), -1) {
 			declared[one[1]] = append(declared[one[1]], rel)
 		}
 		if strings.HasSuffix(path, "_test.go") {
+			if !strings.HasPrefix(rel, subjectPrefix) {
+				outside += 1
+			}
 			return nil
 		}
-		production += 1
+		into := cited
+		if strings.HasPrefix(rel, subjectPrefix) {
+			production += 1
+		} else {
+			outside += 1
+			into = citedOutside
+		}
 		// THE CITATION IS IN A COMMENT AND NOWHERE ELSE. A production file cannot call a test, so
 		// a Test... spelling outside a comment would be a different finding; reading only the
 		// comment half keeps this gate's subject the PROSE, which is what rots.
@@ -227,20 +249,19 @@ func citationScan(t *testing.T, root string) *citationCorpus {
 				continue
 			}
 			for _, name := range citation.FindAllString(line[cut:], -1) {
-				cited[name] = append(cited[name], fmt.Sprintf("%s:%d", rel, at+1))
+				into[name] = append(into[name], fmt.Sprintf("%s:%d", rel, at+1))
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walking %s: %v", root, err)
+		t.Fatalf("walking %s: %v", repository, err)
 	}
-	return &citationCorpus{declared: declared, cited: cited, total: total, production: production}
+	return &citationCorpus{declared: declared, cited: cited, citedOutside: citedOutside, total: total, production: production, outside: outside}
 }
 
 func TestEveryTestNameCitedInThisRepositorysProductionProseResolvesToOneDeclaration(t *testing.T) {
-	root := moduleRoot(t)
-	scan := citationScan(t, root)
+	scan := citationScan(t, repositoryRoot(t), moduleRoot(t))
 	declared, cited := scan.declared, scan.cited
 	total, production := scan.total, scan.production
 
@@ -259,6 +280,24 @@ func TestEveryTestNameCitedInThisRepositorysProductionProseResolvesToOneDeclarat
 	if production == 0 || total == production {
 		t.Fatalf("CONTROL FAILED: the walk saw %d .go files of which %d are production; a run with "+
 			"no production files or no test files is measuring nothing", total, production)
+	}
+	// THE DECLARATION WALK LEAVES THE SUBJECT, and this is the control that says it does: the case
+	// below is declared in the root module's messagegroup package, outside this module, and is cited
+	// from this module's prose. While this package lived in urnetwork/sdk it was carved out to
+	// connect. A walk confined to this module answers zero for it, and the six deleted carve-outs
+	// would then be red as names nothing declares.
+	const outsideSubject = "TestABodyNoRungCouldHoldCostsNeitherAnIndexNorAGeneration"
+	if found := declared[outsideSubject]; len(found) != 1 || !strings.HasPrefix(found[0], "messagegroup/") {
+		t.Fatalf("CONTROL FAILED: %s resolves to %v, want exactly one declaration under messagegroup/. "+
+			"Without it the declaration walk is this module alone, and a case the root module declares "+
+			"reads as declared nowhere", outsideSubject, found)
+	}
+	if len(cited[outsideSubject]) == 0 {
+		t.Fatalf("CONTROL FAILED: %s is no longer cited from this module's prose, so the control above "+
+			"holds nothing; pick another case the root module declares and this module cites", outsideSubject)
+	}
+	if scan.outside == 0 {
+		t.Fatalf("CONTROL FAILED: the walk read no file outside the subject, so the repository is this module")
 	}
 
 	// ── THE DISPOSITIONS, HELD BOTH WAYS ───────────────────────────────────────────────────────
@@ -323,14 +362,61 @@ func TestEveryTestNameCitedInThisRepositorysProductionProseResolvesToOneDeclarat
 	}
 
 	// ── THE COMPLEMENT, PRINTED BESIDE WHAT WAS ASSERTED ───────────────────────────────────────
-	t.Logf("%d .go files walked, %d of them production; %d distinct Test... names declared here",
-		total, production, len(declared))
+	t.Logf("%d .go files walked in this repository, %d of them outside this module and read for their "+
+		"declarations only; %d production files of this module are the subject; %d distinct Test... names "+
+		"declared in the repository", total, scan.outside, production, len(declared))
 	t.Logf("%d distinct names cited in production prose: %d declared here exactly once, %d carved "+
 		"out to a sibling repository, %d carved out as not-a-case", len(names), here, elsewhere, exempt)
 	if here == 0 {
 		t.Errorf("no cited name resolves inside this repository at all, so the rule above is " +
 			"vacuous and only the carve-outs are being exercised")
 	}
+
+	// ── THE COMPLEMENT OF THE SUBJECT, PRINTED AND NOT ASSERTED ──────────────────────────────────
+	//
+	// The subject is this module's prose, as it was in urnetwork/sdk. The root module's prose is
+	// outside it: in connect no gate read it, and making it this gate's subject is a change of
+	// subject to be decided rather than one a move makes silently. So it is printed here, every
+	// cited name that does not resolve to exactly one declaration listed with where it is cited,
+	// so that what the narrowing leaves out is on the page beside what it holds.
+	outsideNames := []string{}
+	unresolvedOutside := []string{}
+	for name := range scan.citedOutside {
+		outsideNames = append(outsideNames, name)
+	}
+	sort.Strings(outsideNames)
+	for _, name := range outsideNames {
+		if len(declared[name]) != 1 {
+			unresolvedOutside = append(unresolvedOutside, fmt.Sprintf("%s (declared %d time(s), cited at %s)",
+				name, len(declared[name]), strings.Join(scan.citedOutside[name], ", ")))
+		}
+	}
+	t.Logf("COMPLEMENT of the subject: the production prose outside this module cites %d distinct "+
+		"name(s); %d of them resolve to no single declaration, and are NOT asserted here: %v",
+		len(outsideNames), len(unresolvedOutside), unresolvedOutside)
+}
+
+// repositoryRoot is the root of urnetwork/message: the directory above this module whose go.mod
+// declares github.com/urnetwork/message. It is derived from moduleRoot and then CHECKED, so a
+// checkout laid out any other way fails here rather than walking the wrong tree.
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Dir(moduleRoot(t))
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatalf("the directory above this module, %s, has no go.mod, so it is not this repository's root: %v", root, err)
+	}
+	module := ""
+	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			module = strings.Trim(strings.TrimSpace(rest), "\"")
+			break
+		}
+	}
+	if module != "github.com/urnetwork/message" {
+		t.Fatalf("%s declares module %q, want github.com/urnetwork/message: it is not this repository's root", root, module)
+	}
+	return root
 }
 
 // citationNearest is the declared name that shares the longest prefix with a dangling one, as a
@@ -457,7 +543,7 @@ func citationNearest(name string, declared map[string][]string) string {
 // that resolved nothing on either of the two new roads, would satisfy every count below with zero.
 
 // godocLinkQuoted is every bracketed spelling URmessage's production comments carry ONLY inside a
-// quoted or backticked span ([urmessageOwns] is the scope). A quotation is quoted text and not prose
+// quoted or backticked span (every production file is the scope). A quotation is quoted text and not prose
 // naming a declaration, so the net blanks quoted spans before it reads a comment, and this table is
 // that narrowing written down. Five entries for log tags and a wire sketch in upstream's files
 // (device_rpc.go, device_local.go and two more) went when the rule's scope became URmessage's own
@@ -799,25 +885,6 @@ func godocBlankQuoted(line string) string {
 	})
 }
 
-// urmessageOwns is the SUBJECT of the doc-link rule below: the production files URmessage wrote.
-//
-// IT IS NARROWER THAN THE REPOSITORY SINCE THIS BRANCH MERGED UPSTREAM sdk (msgrepo ledger 277), and
-// the reason is the rule's subject rather than its convenience. Upstream writes brackets as plain
-// prose -- `[contract]`, `[multi]` in device_local.go and sdk.go -- and this house rule is ours to
-// keep, not one to impose on files we did not write. DECLARATIONS are still read from every
-// production file, so a link from URmessage's prose into upstream's code resolves exactly as it
-// did; only the prose that is CHECKED is ours. The test prints both counts, so what the narrowing
-// removed is on the page beside what it kept.
-func urmessageOwns(rel string) bool {
-	for _, dir := range []string{"urmessage/", "cp3b/", "livepeer/", "liveprobe/"} {
-		if strings.HasPrefix(rel, dir) {
-			return true
-		}
-	}
-	base := rel[strings.LastIndex(rel, "/")+1:]
-	return strings.HasPrefix(base, "message") || strings.Contains(base, "_message")
-}
-
 func TestEveryGodocLinkInThisRepositorysProductionProseNamesADeclaration(t *testing.T) {
 	root := moduleRoot(t)
 	packages := map[string]*godocPackage{}
@@ -997,10 +1064,13 @@ func TestEveryGodocLinkInThisRepositorysProductionProseNamesADeclaration(t *test
 		dirs = append(dirs, dir)
 	}
 	sort.Strings(dirs)
-	checkedFiles, upstreamFiles := 0, 0
+	// EVERY PRODUCTION FILE IS IN THE SUBJECT. In urnetwork/sdk this rule read only the files URmessage
+	// wrote (urmessageOwns: four directories and the message* names), because upstream's files shared
+	// the package and write brackets as plain prose. Every file here is URmessage's, so there is
+	// nothing to narrow; the one file the old narrowing missed, cgo/loopback_test_world.go, is read.
+	checkedFiles := 0
 	defer func() {
-		t.Logf("the doc-link rule read %d production file(s) of URmessage's and skipped %d of upstream's "+
-			"(declarations were read from all of them)", checkedFiles, upstreamFiles)
+		t.Logf("the doc-link rule read all %d production file(s)", checkedFiles)
 	}()
 	for _, dir := range dirs {
 		one := packages[dir]
@@ -1009,10 +1079,6 @@ func TestEveryGodocLinkInThisRepositorysProductionProseNamesADeclaration(t *test
 				at, _ := filepath.Rel(root, path)
 				return at
 			}())
-			if !urmessageOwns(rel) {
-				upstreamFiles += 1
-				continue
-			}
 			checkedFiles += 1
 			source, readErr := os.ReadFile(path)
 			if readErr != nil {
