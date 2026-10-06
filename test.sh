@@ -360,8 +360,12 @@ native() {
   hidden=""
   run "sdk/cgo: go mod tidy -diff -modfile=loopback.go.mod" go -C "$dir" mod tidy -modfile=loopback.go.mod -diff &&
     receipt sdk/cgo/loopback.go.mod tidy
+  # gen rewrites the tracked .def with LF line endings. When its content is the committed one, it is
+  # checked out again, so a CRLF checkout is not left with a file git status calls modified; when it
+  # is not, the regenerated file stays for the developer to read and commit
   run "sdk/cgo: the .def gen writes is the committed one" \
-    bash -c 'cd sdk/cgo && go run ./gen && git diff --exit-code -- include/urnetwork_sdk.def' && receipt "$mod" def-current
+    bash -c 'cd sdk/cgo && go run ./gen && git diff --exit-code -- include/urnetwork_sdk.def && git checkout -- include/urnetwork_sdk.def' &&
+    receipt "$mod" def-current
   if [ "$cc_ok" = 1 ]; then
     case "$goos" in
       windows) library=build/library/URnetworkSdk.dll ;;
