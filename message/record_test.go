@@ -28,6 +28,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -702,7 +703,8 @@ func joinSdkRoot(t *testing.T) string {
 	return ""
 }
 
-// The scan roots: the record layer's three trees, the codec, and the whole of sdk/.
+// The scan roots: the record layer's three trees, the codec, the whole of sdk/, and the core SDK
+// checked out beside this repository when it is there.
 //
 // THE STAGE-3 SUBSET RULE IS RETIRED HERE. In the sibling checkout, URmessage's code sat beside the
 // core SDK's VPN data path, which the gate cannot judge (an IP header's version nibble is
@@ -710,13 +712,82 @@ func joinSdkRoot(t *testing.T) string {
 // it left out was held to a property of its own. In this repository every file under sdk/ is
 // URmessage code, so the directory is one root, and TestNoSdkCodeIsLeftOutOfTheGate holds that the
 // scan read every .go file under it.
+//
+// THE CORE SDK STAYS UNDER THE GATE. Upstream answered the same data path differently, in
+// urnetwork/connect 54b5b106 (ported here): the whole sibling sdk stays scanned, and the six
+// reviewed TCP/IP and pool-accounting operations are matched by their complete AST in
+// joinReviewedSDKContexts, so a changed body or a new expression still faces every rule. After the
+// split connect has no record gate, so this repository is where that coverage lives: the core SDK
+// beside the checkout, at the commit scripts/siblings.txt pins, is a root (joinCoreSdkRoot), and
+// test.sh requires it. Whether the core SDK should stay under this gate at all is the maintainer's
+// call (O18); this is the stronger default, and dropping it is a recorded loss, not a silent one.
 func joinScanRoots(t *testing.T) []string {
 	t.Helper()
 	sdkRoot := joinSdkRoot(t)
 	if entry, err := os.Stat(sdkRoot); err != nil || !entry.IsDir() {
 		t.Fatalf("%s is not a directory of this checkout: the SDK's URmessage code is part of this repository and the gate requires it (%v)", sdkRoot, err)
 	}
-	return []string{messageRoot, mlsRoot, messagegroupRoot, syntaxRoot, sdkRoot}
+	roots := []string{messageRoot, mlsRoot, messagegroupRoot, syntaxRoot, sdkRoot}
+	coreRoot, present, err := joinCoreSdkRootState(messageRoot, os.Getenv(joinCoreSdkRequiredEnv) != "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if present {
+		return append(roots, coreRoot)
+	}
+	t.Logf("%s, the core SDK, is not checked out beside this repository, so the gate covers %v and NOT the core SDK; test.sh checks it out at its pin and sets %s=1, which makes its absence a failure",
+		coreRoot, roots, joinCoreSdkRequiredEnv)
+	return roots
+}
+
+// Set by test.sh, so the core SDK's absence fails the gate instead of narrowing it.
+const joinCoreSdkRequiredEnv = "URMESSAGE_REQUIRE_CORE_SDK_ROOT"
+
+// Where the core SDK sits: beside the repository, derived from where the root module ends rather
+// than written down, which is exactly where it sat beside connect, so 54b5b106's reviewed paths
+// ("../../sdk/<file>") name the same files here. It is a sibling checkout, so it may be absent:
+// absent and required is an error, absent and not required is answered as not present; present
+// means a directory whose go.mod declares github.com/urnetwork/sdk, outside this repository.
+func joinCoreSdkRootState(start string, required bool) (string, bool, error) {
+	moduleRoot := start
+	found := false
+	for range 8 {
+		if _, err := os.Stat(filepath.Join(moduleRoot, "go.mod")); err == nil {
+			found = true
+			break
+		}
+		moduleRoot = filepath.Join(moduleRoot, "..")
+	}
+	if !found {
+		return "", false, fmt.Errorf("no go.mod above %s, so the core sdk root cannot be derived", start)
+	}
+	coreRoot := filepath.ToSlash(filepath.Join(moduleRoot, "..", "sdk"))
+	entry, err := os.Stat(coreRoot)
+	if err != nil || !entry.IsDir() {
+		if required {
+			return coreRoot, false, fmt.Errorf("%s is not checked out beside this repository and %s is set: the core SDK's code is under this gate (urnetwork/connect 54b5b106), so its absence is a narrowing, not a pass", coreRoot, joinCoreSdkRequiredEnv)
+		}
+		return coreRoot, false, nil
+	}
+	repositoryRoot, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		return coreRoot, false, err
+	}
+	coreAbsolute, err := filepath.Abs(coreRoot)
+	if err != nil {
+		return coreRoot, false, err
+	}
+	if rel, err := filepath.Rel(repositoryRoot, coreAbsolute); err != nil || !strings.HasPrefix(rel, "..") {
+		return coreRoot, false, fmt.Errorf("the core sdk root %s resolves inside this repository (%s): it must be the sibling checkout", coreAbsolute, repositoryRoot)
+	}
+	goMod, err := os.ReadFile(filepath.Join(coreRoot, "go.mod"))
+	if err != nil {
+		return coreRoot, false, fmt.Errorf("%s has no go.mod, so it is not the core sdk: %v", coreAbsolute, err)
+	}
+	if !slices.Contains(strings.Split(strings.ReplaceAll(string(goMod), "\r\n", "\n"), "\n"), "module github.com/urnetwork/sdk") {
+		return coreRoot, false, fmt.Errorf("%s/go.mod does not declare module github.com/urnetwork/sdk, so it is not the core sdk", coreAbsolute)
+	}
+	return coreRoot, true, nil
 }
 
 // The .go files under sdkRoot that a scan did not read, by an enumeration that does not share the
@@ -1684,6 +1755,110 @@ func TestNoSdkCodeIsLeftOutOfTheGate(t *testing.T) {
 	t.Logf("%d .go files under %s read by the scan; skipped by design (testdata, interop): %d %v", read, sdkRoot, len(skipped), skipped)
 	for _, path := range missed {
 		t.Errorf("%s is under %s and the scan did not read it: the gate is reading less than the code it exists for", path, sdkRoot)
+	}
+}
+
+// The core SDK beside this repository, when the gate scans it: every .go file under it, enumerated
+// independently of the scan, is one the scan read, apart from the directories the scan skips by
+// design, which are printed; and every reviewed context of joinReviewedSDKContexts names a file the
+// scan read and matched exactly its expressions there. A reviewed entry that no longer matches
+// would leave its expressions reported, which fails the gate; an entry whose file is gone matches
+// nothing and reports nothing, which is the silent half this holds. The two directions together are
+// the disposition map held both ways.
+func TestNoCoreSdkCodeIsLeftOutOfTheGateAndEveryReviewedContextIsLive(t *testing.T) {
+	coreRoot, present, err := joinCoreSdkRootState(messageRoot, os.Getenv(joinCoreSdkRequiredEnv) != "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present {
+		t.Skipf("%s is not checked out beside this repository; test.sh requires it (%s=1)", coreRoot, joinCoreSdkRequiredEnv)
+	}
+	roots := joinScanRoots(t)
+	if !slices.Contains(roots, coreRoot) {
+		t.Fatalf("the core sdk %s is present and the gate's roots %v do not include it", coreRoot, roots)
+	}
+	scan := mustScanJoinSources(t, roots)
+	skipped, missed, err := joinSdkComplement(coreRoot, scan.syntax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := 0
+	for _, root := range scan.rootOf {
+		if root == coreRoot {
+			read++
+		}
+	}
+	if read == 0 {
+		t.Fatalf("the scan read no file under %s, so the complement was asked of nothing", coreRoot)
+	}
+	t.Logf("%d .go files under %s read by the scan; skipped by design (testdata, interop): %d %v", read, coreRoot, len(skipped), skipped)
+	for _, path := range missed {
+		t.Errorf("%s is under %s and the scan did not read it", path, coreRoot)
+	}
+	for _, path := range slices.Sorted(maps.Keys(joinReviewedSDKContexts)) {
+		if !strings.HasPrefix(path, coreRoot+"/") {
+			t.Errorf("the reviewed context %s is not under the core sdk root %s: it can never match", path, coreRoot)
+			continue
+		}
+		if _, scanned := scan.syntax[path]; !scanned {
+			t.Errorf("the reviewed context %s names a file the scan did not read (gone from the core sdk?): the review entry is stale", path)
+			continue
+		}
+		reviewed, err := joinReviewedSDKExpressions(scan, path)
+		if err != nil {
+			t.Errorf("the reviewed context %s: %v", path, err)
+			continue
+		}
+		if len(reviewed) != joinReviewedSDKContexts[path].expressions {
+			t.Errorf("the reviewed context %s matched %d expressions in the core sdk, want %d: the reviewed code changed, so it is under every rule again", path, len(reviewed), joinReviewedSDKContexts[path].expressions)
+			continue
+		}
+		t.Logf("reviewed context %s: %d expression(s) matched by their whole AST", path, len(reviewed))
+	}
+}
+
+// joinCoreSdkRootState on fixture layouts: absent and not required is answered as absent; absent and
+// required is refused; a sibling whose go.mod is not the core sdk's is refused; the core sdk beside
+// the module is present.
+func TestTheCoreSdkRootIsTheCheckoutBesideTheRepository(t *testing.T) {
+	parent := t.TempDir()
+	repository := filepath.Join(parent, "message")
+	start := filepath.Join(repository, "message")
+	if err := os.MkdirAll(start, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/urnetwork/message\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, present, err := joinCoreSdkRootState(start, false); err != nil || present {
+		t.Errorf("no sibling, not required: present %v, error %v; want absent and no error", present, err)
+	}
+	if _, _, err := joinCoreSdkRootState(start, true); err == nil || !strings.Contains(err.Error(), joinCoreSdkRequiredEnv) {
+		t.Errorf("no sibling, required: error %v; want a refusal naming %s", err, joinCoreSdkRequiredEnv)
+	}
+	sibling := filepath.Join(parent, "sdk")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sibling, "go.mod"), []byte("module github.com/urnetwork/message/sdk\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := joinCoreSdkRootState(start, false); err == nil || !strings.Contains(err.Error(), "not the core sdk") {
+		t.Errorf("a sibling sdk/ that is not the core sdk: error %v; want a refusal", err)
+	}
+	if err := os.WriteFile(filepath.Join(sibling, "go.mod"), []byte("module github.com/urnetwork/sdk\r\n\r\ngo 1.26.5\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, present, err := joinCoreSdkRootState(start, true)
+	if err != nil || !present {
+		t.Fatalf("the core sdk beside the repository: present %v, error %v", present, err)
+	}
+	if abs, _ := filepath.Abs(root); abs != sibling {
+		t.Errorf("the core sdk root resolves to %s, want %s", abs, sibling)
+	}
+	// and from this package, the derivation names the same relative path the reviewed contexts use
+	if root, _, _ := joinCoreSdkRootState(messageRoot, false); root != "../../sdk" {
+		t.Errorf("from this package the core sdk root is %q, want \"../../sdk\", the path joinReviewedSDKContexts keys", root)
 	}
 }
 
