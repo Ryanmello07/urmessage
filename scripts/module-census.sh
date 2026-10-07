@@ -25,8 +25,8 @@ set -euo pipefail
 declare -A wiring=(
   [go.mod]="root"
   [sdk/go.mod]="sdk"
-  [sdk/livepeer/go.mod]="go"
-  [sdk/liveprobe/go.mod]="go"
+  [sdk/livepeer/go.mod]="command"
+  [sdk/liveprobe/go.mod]="command"
   [sdk/cp3b/go.mod]="go"
   [protocol/testdata/wiregolden/go.mod]="wiregolden"
   [sdk/cgo/go.mod]="composed"
@@ -36,12 +36,17 @@ declare -A wiring=(
 # module passing (the root module's darwin, windows and js/wasm, the SDK's darwin and windows);
 # "fuzz" is every fuzz target the codec declares, run for its time; "loopback-library" is the
 # loopback library built, exporting its harness while the shipping library's header has none of it.
+# "toolchain" is what a build wrote answering the pinned toolchain when asked which one built it
+# (scripts/toolchain.sh --artefact): the binaries of a "command" module, the live probes that are
+# staged on real hosts, and the native library. A go.mod toolchain line never lowers the compiler,
+# so the receipt is what says the pin held on the host that ran.
 declare -A steps=(
   [go]="verify tidy build vet mains test protobuf"
+  [command]="verify tidy build toolchain vet mains test protobuf"
   [root]="verify tidy build vet mains test protobuf platforms fuzz"
   [sdk]="verify tidy build vet mains test protobuf platforms"
   [wiregolden]="verify test:orig test:new base-pinned cmp-connect-golden cross-decode:new cross-decode:orig"
-  [composed]="compose verify tidy def-current library exports vet test protobuf"
+  [composed]="compose verify tidy def-current library toolchain exports vet test protobuf"
   [loopback]="tidy loopback-library"
 )
 # What a wiring owes on one kind of host only. The loopback library's C consumer,
@@ -201,6 +206,11 @@ self_test() {
   expect fail "the codec's fuzz targets not run" "FAIL: go.mod has no 'fuzz' receipt" check_receipts "$tmp/no-fuzz"
   awk -F'\t' '!($1 == "sdk/go.mod" && $2 == "platforms")' "$tmp/complete" > "$tmp/no-platforms"
   expect fail "the SDK's platform builds not run" "FAIL: sdk/go.mod has no 'platforms' receipt" check_receipts "$tmp/no-platforms"
+  awk -F'\t' '!($1 == "sdk/cgo/go.mod" && $2 == "toolchain")' "$tmp/complete" > "$tmp/no-library-toolchain"
+  expect fail "the native library not asked which toolchain built it" "FAIL: sdk/cgo/go.mod has no 'toolchain' receipt" check_receipts "$tmp/no-library-toolchain"
+  awk -F'\t' '!($1 == "sdk/liveprobe/go.mod" && $2 == "toolchain")' "$tmp/complete" > "$tmp/no-probe-toolchain"
+  expect fail "the live probe's binary not asked which toolchain built it" "FAIL: sdk/liveprobe/go.mod has no 'toolchain' receipt" check_receipts "$tmp/no-probe-toolchain"
+  if grep -q "$(printf 'sdk/cp3b/go.mod\ttoolchain')" "$tmp/complete"; then echo "  CONTROL BROKEN: the acceptance suite, which builds no binary, owes a toolchain receipt"; fail=1; fi
   sed "s#$tmp/library.so#$tmp/gone.so#" "$tmp/complete" > "$tmp/gone-library"
   expect fail "a library receipt naming a file that is not there" "gone.so, which is not there" check_receipts "$tmp/gone-library"
   awk -F'\t' 'BEGIN {OFS = "\t"} $1 == "sdk/go.mod" && $2 == "protobuf" {$3 = "v1.36.10"} {print}' "$tmp/complete" > "$tmp/two-protobufs"

@@ -322,9 +322,16 @@ most likely to be picked up and run by mistake. It also went stale the moment `m
 
 ```sh
 cd sdk/liveprobe
+export GOTOOLCHAIN=$(bash ../../scripts/toolchain.sh)
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o liveprobe .
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o liveprobe-arm64 .
+bash ../../scripts/toolchain.sh --artefact liveprobe liveprobe-arm64
 ```
 
 `CGO_ENABLED=0` is what makes the result a static binary an operator can copy onto a host that has
 no toolchain on it.
+
+`GOTOOLCHAIN` is the pinned compiler, read from the repository's `go.mod`. The probe links this
+repository's cryptography, which is reviewed under that one release, and a `go.mod` toolchain line
+does not lower a newer go command, so the build forces it. The last line asks each binary which
+toolchain built it, and fails on any other answer.

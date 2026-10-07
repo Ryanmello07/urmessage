@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# compose.sh: lay the core SDK's cgo package main under this directory's messaging half, so that
-# `go build -buildmode=c-shared .` here builds the one native library both halves ship in.
+# compose.sh: lay the core SDK's cgo package main under this directory's messaging half, so that a
+# c-shared build here builds the one native library both halves ship in. sdk/cgo/build.sh is that
+# build: the core SDK's release recipe, under the pinned toolchain.
 #
 #   bash sdk/cgo/compose.sh [core-sdk-root]   compose (default core root: ../sdk beside this repository)
 #   bash sdk/cgo/compose.sh --clean           remove what a compose added, and nothing else
@@ -26,7 +27,11 @@
 #   - a core directory that is not there;
 #   - a core whose files are not exactly the list in sdk/cgo/.gitignore, between "# composed-begin"
 #     and "# composed-end": that list is what keeps a composed tree's `git add -A` from committing
-#     the core's package main, so it is held to what is laid down, both ways, before anything is.
+#     the core's package main, so it is held to what is laid down, both ways, before anything is;
+#   - a host whose go command cannot run the pinned toolchain (scripts/toolchain.sh --check, which
+#     names the fix). A compose is made for a build, and every build of this library is the pin's:
+#     a go.mod toolchain line never lowers the compiler, so build.sh forces it, and a host that
+#     cannot have it learns so here, before anything is laid down.
 # The list of what it copied is .composed (gitignored), with the core commit when the core is a git
 # checkout; --clean reads it back and removes exactly those paths.
 set -euo pipefail
@@ -103,6 +108,10 @@ if [ -z "$listed" ] || [ "$listed" != "$laying" ]; then
   echo "compose: update the list between '# composed-begin' and '# composed-end' in sdk/cgo/.gitignore" >&2
   exit 1
 fi
+# the build this compose is for runs under the pinned toolchain, or not at all
+toolchain="$here/../../scripts/toolchain.sh"
+pinned=$(bash "$toolchain")
+bash "$toolchain" --check > /dev/null
 
 commit=$(git -C "$core" rev-parse HEAD 2>/dev/null || echo "not a git checkout")
 {
@@ -115,3 +124,4 @@ for name in "${files[@]}"; do
   cp -- "$core/cgo/$name" "$here/$name"
 done
 echo "compose: ${#files[@]} core file(s) laid under sdk/cgo from commit $commit"
+echo "compose: build the library with WARP_VERSION=<version> bash sdk/cgo/build.sh <output file>, which runs under $pinned whatever go command this host has"

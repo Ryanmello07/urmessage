@@ -29,7 +29,7 @@ there" mean "the file is fresh".
 ## Running it
 
 ```
-go build -o livepeer.exe .
+GOTOOLCHAIN=$(bash ../../scripts/toolchain.sh) go build -o livepeer.exe .
 
 ./livepeer.exe \
   -jwt        %LOCALAPPDATA%\URmessage\dev\user2.jwt \

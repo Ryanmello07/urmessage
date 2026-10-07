@@ -58,9 +58,8 @@ facade over the directories beneath it.
 
 ## Build and test
 
-Go 1.26.5, the `toolchain` in `go.mod`. There is no CI service: like connect and the
-core SDK, this repository is built and tested on the maintainers' own hardware, and
-[test.sh](test.sh) is the whole run.
+There is no CI service: like connect and the core SDK, this repository is built and
+tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run.
 
     git clone -c core.autocrlf=false https://github.com/urnetwork/message.git message
     cd message
@@ -72,12 +71,17 @@ core SDK, this repository is built and tested on the maintainers' own hardware, 
 - `./test.sh` runs everything else too, and requires the siblings at the commits
   [scripts/siblings.txt](scripts/siblings.txt) pins, cloning a missing one beside the
   checkout: connect, the core SDK, message-server, connect from before the removal, glog,
-  gvisor and goidenticons. It runs every module (the SDK, the commands, the acceptance
-  suite against message-server, the native library and its C consumer) with the race
-  detector, the wire corpus against the pinned connect, the schema's regeneration, the
-  codec's fuzz targets, and the module census over what ran. The full run is two runs, a
-  linux host with gcc and a Windows clone made with `core.autocrlf=true` (below), and each
-  prints what it did not run.
+  gvisor and goidenticons. Three of those pins are the heads of the pull requests this
+  repository arrives with (the removals from connect and the core SDK, and
+  message-server's switch to these packages). Until each has merged, its commit is
+  fetched from the fork it was pushed to, and the verdict names it; siblings.txt says
+  which urnetwork URL replaces the fork afterwards.
+- It runs every module (the SDK, the commands, the acceptance suite against
+  message-server, the native library and its C consumer) with the race detector, the
+  wire corpus against the pinned connect, the schema's regeneration, the codec's fuzz
+  targets, and the module census over what ran. The full run is two runs, a linux host
+  with gcc and a Windows clone made with `core.autocrlf=true` (below), and each prints
+  what it did not run.
 - Name the directory `message`. The modules find their siblings by relative path
   (`../connect`, `../sdk`, ...), and consumers' local `replace` directives point at
   `../message`.
@@ -85,16 +89,39 @@ core SDK, this repository is built and tested on the maintainers' own hardware, 
   The line-ending gates are also written for a CRLF checkout, since the Windows machines
   this project is built on run `core.autocrlf=true`, so run `./test.sh` on Windows from a
   clone made with `-c core.autocrlf=true` as well.
-- The native library is the core SDK's cgo package main with `sdk/cgo` laid beside it:
-  `bash sdk/cgo/compose.sh`, then, in `sdk/cgo` and with a C compiler, the core SDK's
-  release recipe (its `cgo/Makefile`):
+- The native library is the core SDK's cgo package main with `sdk/cgo` laid beside it.
+  With a C compiler on the host:
 
-      CGO_ENABLED=1 GOEXPERIMENT=greenteagc go build -trimpath -buildmode=c-shared \
-        -ldflags "-s -w -X github.com/urnetwork/sdk.Version=$WARP_VERSION -buildid=" \
-        -o URnetworkSdk.dll .
+      bash sdk/cgo/compose.sh
+      WARP_VERSION=<version> bash sdk/cgo/build.sh <output>/URnetworkSdk.dll
+      bash sdk/cgo/compose.sh --clean
 
-  Without the `-X`, the library reports an empty SDK version. `bash sdk/cgo/compose.sh --clean`
-  removes what the compose added; `test.sh`'s native step is the reference.
+  [sdk/cgo/build.sh](sdk/cgo/build.sh) is the one place the recipe is written: the core
+  SDK's release recipe (its `cgo/Makefile`: c-shared, `-trimpath`, `greenteagc`, stripped,
+  no build id, the version by `-X`), under the pinned toolchain, with the library then
+  asked which toolchain built it. It refuses to build without `WARP_VERSION`, because a
+  library built without the `-X` reports an empty SDK version. `test.sh` builds the
+  library through the same script, so the recipe a consumer runs is the one that is
+  tested. `compose.sh --clean` removes what the compose added.
+
+**The toolchain is pinned, and the pin is forced.** The cryptographic code is reviewed, and
+its vectors, known answers and guardrails are run, under one compiler: Go 1.26.5, the
+`toolchain` line of `go.mod`, which `mls/pins_test.go` holds every test binary to. That
+line is a minimum. A newer go command builds with itself and says nothing, and connect's
+own toolchain line has moved to go1.27.1 while every module's `go` line is still 1.26. So
+nothing here relies on the line:
+
+- `./test.sh` reads the pin with [scripts/toolchain.sh](scripts/toolchain.sh), sets
+  `GOTOOLCHAIN` to it for the whole run, and stops with the fix named when the host
+  cannot have that release. It then asks the live probes' binaries and the native
+  library which toolchain built them.
+- A build by hand sets it the same way: `export GOTOOLCHAIN=$(bash scripts/toolchain.sh)`.
+  `bash scripts/toolchain.sh --artefact <file>...` asks a built file, and fails on any
+  other answer.
+- Moving the pin is a reviewed change of its own: `go.mod`'s line and
+  `mls/pins_test.go`'s literal together, with the vector, known-answer and guardrail
+  suites run again under the new compiler. It is never a side effect of the go command
+  a host happens to have.
 
 ## Contributing
 

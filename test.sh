@@ -11,7 +11,8 @@
 #   1. the siblings beside the repository at the commits scripts/siblings.txt pins (a missing one is
 #      cloned; a pin fetched from a fork, a pull request head, is named in the verdict), the pin
 #      script's own controls, and the checkout's line endings;
-#   2. the module census's own controls, and its rows against the tree;
+#   2. the module census's own controls and its rows against the tree, and the toolchain check's
+#      own controls;
 #   3. formatting: gofmt over every tracked Go file that is source (fixtures under testdata are not;
 #      the loopback harness, which a build overlay compiles from under one, is);
 #   4. every module scripts/module-census.sh has a row for, by its wiring:
@@ -21,14 +22,25 @@
 #        wiregolden  the corpus's pinned base lines against connect from before the removal, byte
 #                    for byte, and each emission decoded into the other build's types;
 #        composed    the native library: the core SDK's cgo package main composed under sdk/cgo, the
-#                    .def regenerated and unchanged, a c-shared build with the core's release flags,
-#                    its exports against the .def both ways, the composed module's tests;
+#                    .def regenerated and unchanged, the library built by sdk/cgo/build.sh (c-shared,
+#                    the core's release flags), the toolchain it records, its exports against the
+#                    .def both ways, the composed module's tests;
+#        command     as go, and the binaries the build wrote record the pinned toolchain (the live
+#                    probes, which are staged on real hosts);
 #        loopback    the loopback library, built with its harness, on every host; on Windows also its
 #                    C consumer (sdk/cgo/ctest/run.sh), which is a Windows program;
 #      and the platform builds of the root module (darwin, windows, js/wasm) and the SDK;
 #   5. protocol/message.pb.go regenerated with the pinned protoc 35.1 and protoc-gen-go v1.36.11;
 #   6. the codec's fuzz targets, 60 s each (a done-when of spec A section 13);
 #   7. the census over what ran: every row's receipts that this host owes.
+#
+# THE WHOLE RUN IS UNDER THE PINNED TOOLCHAIN, whatever go command the host has. The cryptographic
+# code is reviewed under one compiler, the `toolchain` line of go.mod (mls/pins_test.go holds every
+# test binary to it), and that line is a minimum: a newer go command builds with itself and says
+# nothing. So this script reads the pin (scripts/toolchain.sh), exports GOTOOLCHAIN for every go
+# command it starts and every one those start, stops with the fix named when the pin cannot be had,
+# and asks what it built which toolchain built it: the live probes' binaries, the native library and
+# the loopback library. The check's own controls run in step 2.
 #
 # Every step runs and is reported; the exit status is 0 only if none failed. A step this host cannot
 # run is SKIPPED or named as narrower, with its reason, and a module that therefore lacks a receipt
@@ -52,6 +64,19 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 cd "$here"
 export GOWORK=off
+
+# The pin, forced before the first go command. A host that cannot have that toolchain stops here:
+# nothing after this line would be testing what ships.
+if ! pinned_toolchain=$(bash scripts/toolchain.sh); then
+  echo "VERDICT: FAIL (go.mod names no toolchain to pin; nothing was run)"
+  exit 1
+fi
+export GOTOOLCHAIN="$pinned_toolchain"
+if ! bash scripts/toolchain.sh --check; then
+  echo
+  echo "VERDICT: FAIL (this host cannot run the pinned toolchain $pinned_toolchain, above; nothing was run)"
+  exit 1
+fi
 
 work=$(mktemp -d)
 receipts="$work/receipts.tsv"
@@ -153,6 +178,13 @@ fi
 # ---------------------------------------------------------------- 2. the census's controls and rows
 run "module census: its own controls" bash scripts/module-census.sh --self-test
 run "module census: the rows against the tree" bash scripts/module-census.sh --rows
+# the toolchain check, on programs built for it: one under the pin is accepted; its copy with the
+# recorded version rewritten, and the same program built under another toolchain, are refused
+toolchain_controls() { bash scripts/toolchain.sh --self-test "$work/toolchain" 2>&1 | tee "$work/toolchain.log"; return "${PIPESTATUS[0]}"; }
+run "toolchain: the check's own controls" toolchain_controls
+if grep -q 'TOOLCHAIN CONTROL NOT RUN' "$work/toolchain.log" 2> /dev/null; then
+  narrowings+=("the toolchain check's control of a build under ANOTHER toolchain did not run: this host's go command is $pinned_toolchain itself and no other release could be had; the rewritten copy is the control that ran")
+fi
 
 # ---------------------------------------------------------------- 3. gofmt
 # A directory named testdata holds fixtures, some misformatted on purpose, and they are not held.
@@ -198,7 +230,12 @@ go_module() {
     mkdir -p "$bin"
     # -o into a directory of its own: a pattern matching exactly one main package would otherwise
     # write that command's binary into the checkout
-    run "$dir: go build ./..." go -C "$dir" build -o "$bin" ./... && receipt "$mod" build
+    if run "$dir: go build ./..." go -C "$dir" build -o "$bin" ./...; then
+      receipt "$mod" build
+      # what the build wrote, asked which toolchain built it: these are the binaries that are staged
+      # on real hosts
+      run "$dir: its binaries record $pinned_toolchain" bash scripts/toolchain.sh --artefact "$bin"* && receipt "$mod" toolchain
+    fi
   else
     run "$dir: go build ./..." go -C "$dir" build ./... && receipt "$mod" build
   fi
@@ -401,13 +438,12 @@ native() {
       *) library=build/library/libURnetworkSdk.so ;;
     esac
     header="${library%.*}.h"
-    mkdir -p "$dir/build/library"
-    rm -f "$dir/$library" "$dir/$header"
-    # the core SDK's release recipe (its cgo/Makefile): -trimpath, greenteagc, and the version
-    if run "sdk/cgo: build URnetworkSdk, c-shared, the core's release flags (Version=$version)" \
-      env CGO_ENABLED=1 GOEXPERIMENT=greenteagc go -C "$dir" build -trimpath -buildmode=c-shared \
-      -ldflags "-s -w -X github.com/urnetwork/sdk.Version=$version -buildid=" -o "$library" .; then
+    # through sdk/cgo/build.sh, the one place the recipe is written (c-shared, the core SDK's release
+    # flags, the pinned toolchain), so the build a consumer runs is the build that is tested here
+    if run "sdk/cgo: build URnetworkSdk with sdk/cgo/build.sh (Version=$version)" \
+      env WARP_VERSION="$version" bash sdk/cgo/build.sh "$dir/$library"; then
       receipt "$mod" library "$dir/$library $(wc -c < "$dir/$library" | tr -d ' ')"
+      run "sdk/cgo: the library records $pinned_toolchain" bash scripts/toolchain.sh --artefact "$dir/$library" && receipt "$mod" toolchain
       exports_out=$(bash scripts/native-exports.sh "$dir" "$dir/$header" "$dir/$library")
       local exports_status=$?
       echo "$exports_out"
@@ -432,6 +468,7 @@ native() {
       rm -rf "$dir/build/loopback"
       mkdir -p "$dir/build/loopback"
       CGO_ENABLED=1 go -C "$dir" build -overlay=ctest/loopback-overlay.json -modfile=loopback.go.mod -tags urnet_message_loopback -buildmode=c-shared -o "$out" . || return 1
+      bash scripts/toolchain.sh --artefact "$dir/$out" || return 1
       if [ ! -f "$dir/$header" ]; then echo "the shipping library's header $dir/$header is not there"; return 1; fi
       exported=$(grep -cE '^extern .*\burnet_message_loopback_' "$dir/${out%.*}.h" || true)
       shipped=$(grep -cE 'urnet_message_loopback' "$dir/$header" || true)
