@@ -173,13 +173,15 @@ tags are what keep this proof reproducible; neither fork is protected by a rules
 |---|---|---|
 | `1f97ebb2` | connect | the absorb of connect#216, which kept the fork's `beta/message` trigger and needle; `e8611390` removed both, so nothing of it remains |
 | `e449f7d8` | connect | the source tip itself; it changes no imported path |
-| `c71bb73b` | sdk | per-peer encryption OPPORTUNISTIC, not REQUIRED (the owner's ruling of 2026-10-04): `message_route.go`, `message_tunnel.go`, `message_tunnel_test.go` |
+| `c71bb73b` | sdk | per-peer encryption OPPORTUNISTIC, not REQUIRED (the owner's ruling of 2026-10-04): `message_route.go`, `message_tunnel.go`, `message_tunnel_test.go`. It is the fork's commit, not the fork's change: upstream sdk holds the same patch as `98e444e`, merged by urnetwork/sdk#156 |
 | `d20d82c1` | sdk | the 1 s establish hold on every window client (the owner's second ruling of 2026-10-04): the same three files |
 | `f370a732` | sdk | the SX-0 sync merge of upstream `0c6462f2` |
 | `2dc9bf77` | sdk | the loopback modfile's indirect requirements for upstream connect's uTLS dial: `cgo/loopback.go.mod`, `cgo/loopback.go.sum`. Upstream made the same change afterwards, in `a7b5db77` |
 
-The tunnel's hold and OPPORTUNISTIC were never reviewed upstream; the message pull request
-names them at its top.
+Of these, the tunnel's 1 s hold is the one change in behaviour upstream has not reviewed: with
+it the three tunnel files differ from sdk `main`, and without it (`d20d82c1`'s parent) they are
+sdk `main`'s byte for byte. The message pull request names it at its top. An earlier version of
+this file listed OPPORTUNISTIC beside it; that change is upstream's too.
 
 **The proof.** [carried.py](history/carried.py) reads each removal pull request's deletions,
 from its base, and holds this tip to them: every deleted path is here (or declared deleted in
