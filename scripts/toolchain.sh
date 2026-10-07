@@ -26,6 +26,8 @@
 # into it, and fails on any other answer, a file that is not a Go build among them.
 #
 # --self-test is the controls, and each must go its own way for its own reason:
+#   - --check accepts a go command that writes to stderr before it answers the pin (the first run on
+#     a host that fetches it), and refuses one that answers another release, by that answer;
 #   - a program built under the pin is accepted;
 #   - a copy of it with the recorded version rewritten in place is refused, by that version;
 #   - the same program built under ANOTHER toolchain is refused, by that toolchain's version. The
@@ -43,18 +45,26 @@ if [ "$(printf '%s\n' "$pinned" | grep -c .)" != 1 ]; then
 fi
 
 # The go command, forced to the pin, must be the pin.
+#
+# ITS ANSWER IS WHAT IT WRITES TO STDOUT, AND NOTHING ELSE. The first time a host's go command has to
+# fetch the pin it says so on stderr ("go: downloading go1.26.5 (linux/amd64)") and then answers.
+# This check read both streams as the answer until a runner whose go was 1.27.1 showed it: two lines
+# are not the pin, so a host that HAD just fetched the pin was refused, with the fetch's own line
+# quoted as the reason. stderr is kept for the failure message, where it is the diagnosis.
 check() {
-  local running status=0
-  running=$(GOTOOLCHAIN="$pinned" go env GOVERSION 2>&1) || status=$?
+  local running status=0 said
+  said=$(mktemp)
+  running=$(GOTOOLCHAIN="$pinned" go env GOVERSION 2> "$said" | tr -d '\r') || status=$?
   if [ "$status" = 0 ] && [ "$running" = "$pinned" ]; then
+    rm -f "$said"
     return 0
   fi
   cat >&2 <<EOF
 toolchain: this repository builds and tests under $pinned and under nothing else (go.mod's toolchain
 line, which mls/pins_test.go holds every test binary to), and the go command on this host could not
-run it. GOTOOLCHAIN=$pinned go env GOVERSION answered:
+run it. GOTOOLCHAIN=$pinned go env GOVERSION answered '$running' (exit status $status), and said:
 
-$(printf '%s\n' "$running" | sed 's/^/    /')
+$(sed 's/^/    /' "$said")
 
 A go.mod toolchain line never lowers the toolchain, so the pin is forced with GOTOOLCHAIN, and the go
 command then needs that exact release. Either of these fixes it:
@@ -63,13 +73,15 @@ command then needs that exact release. Either of these fixes it:
   - or install $pinned from https://go.dev/dl/ and put its bin directory first on PATH (a binary
     named $pinned on PATH also serves).
 EOF
+  rm -f "$said"
   return 1
 }
 
-# The toolchain a built file records, or the go command's own words when it records none.
+# The toolchain a built file records: what `go version <file>` writes to stdout, after the last
+# ": ". Empty when the go command reads no build information from the file.
 recorded() {
   local answer
-  answer=$(GOTOOLCHAIN="$pinned" go version "$1" 2>&1 | head -n 1 | tr -d '\r') || true
+  answer=$(GOTOOLCHAIN="$pinned" go version "$1" 2> /dev/null | head -n 1 | tr -d '\r') || true
   printf '%s\n' "${answer##*: }"
 }
 
@@ -153,6 +165,38 @@ EOF
       failed=1
     fi
   }
+  # a release that is not the pin, to plant: the pin with its last digit changed
+  local planted="${pinned%?}"
+  case "$pinned" in *9) planted="${planted}8" ;; *) planted="${planted}9" ;; esac
+
+  # --check itself, against a go command planted first on PATH. One that writes to stderr before it
+  # answers the pin is accepted: that is the first run on a host that has to fetch the pin, which
+  # this check refused until stderr stopped being read as the answer. One that answers another
+  # release is refused, by that answer.
+  local real_go
+  real_go=$(command -v go)
+  mkdir -p "$dir/chatty" "$dir/wrong"
+  printf '%s\n' '#!/usr/bin/env bash' "echo 'go: downloading $pinned (a line on stderr, planted by the control)' >&2" "exec '$real_go' \"\$@\"" > "$dir/chatty/go"
+  printf '%s\n' '#!/usr/bin/env bash' "if [ \"\${1:-} \${2:-}\" = 'env GOVERSION' ]; then echo $planted; exit 0; fi" "exec '$real_go' \"\$@\"" > "$dir/wrong/go"
+  chmod +x "$dir/chatty/go" "$dir/wrong/go"
+  if out=$(PATH="$dir/chatty:$PATH" bash "$0" --check 2>&1); then
+    echo "  control: a go command that writes to stderr before it answers $pinned -> accepted, as it must"
+  else
+    echo "  CONTROL BROKEN: a go command that writes to stderr before it answers $pinned was refused"
+    printf '%s\n' "$out" | sed 's/^/    /'
+    failed=1
+  fi
+  if out=$(PATH="$dir/wrong:$PATH" bash "$0" --check 2>&1); then
+    echo "  CONTROL BROKEN: a go command that answers $planted was accepted"
+    failed=1
+  elif printf '%s\n' "$out" | grep -qF "answered '$planted'"; then
+    echo "  control: a go command that answers $planted -> refused, as it must: $(printf '%s\n' "$out" | grep -F "answered '$planted'" | head -n 1)"
+  else
+    echo "  CONTROL BROKEN: a go command that answers $planted was refused without that answer being named"
+    printf '%s\n' "$out" | sed 's/^/    /'
+    failed=1
+  fi
+
   if ! (cd "$dir/program" && GOWORK=off GOFLAGS= GOTOOLCHAIN="$pinned" go build -o "$dir/pinned$exe" .); then
     echo "  CONTROL BROKEN: the control program does not build under $pinned"
     return 1
@@ -160,8 +204,6 @@ EOF
   expect accepted "a program built under $pinned" - "$dir/pinned$exe"
 
   # the same bytes with another version written where the linker recorded this one
-  local planted="${pinned%?}"
-  case "$pinned" in *9) planted="${planted}8" ;; *) planted="${planted}9" ;; esac
   if ! (cd "$dir/rewrite" && GOWORK=off GOFLAGS= GOTOOLCHAIN="$pinned" go run . "$dir/pinned$exe" "$dir/planted$exe" "$pinned" "$planted"); then
     echo "  CONTROL BROKEN: the recorded toolchain could not be rewritten in a copy of the control program"
     return 1
