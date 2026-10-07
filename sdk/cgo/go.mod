@@ -5,9 +5,10 @@
 // both SDKs, and it is the one place they are linked together. Its own go.mod keeps that out of
 // the github.com/urnetwork/message/sdk module, which does not depend on the core SDK.
 //
-// Tidied over the composed tree without the loopback harness: loopback_test_world.go is behind
-// `//go:build urnet_message_loopback` and is built with its own modfile, loopback.go.mod, which
-// adds the message server it runs in process.
+// Tidied over the composed tree. The loopback harness is not in it: it sits under ctest/testdata/,
+// which go mod tidy does not read, and the test library is built with
+// -overlay=ctest/loopback-overlay.json, the urnet_message_loopback tag and its own modfile,
+// loopback.go.mod, which adds the message server the harness runs in process.
 module github.com/urnetwork/message/sdk/cgo
 
 go 1.26.5
@@ -99,7 +100,6 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	src.agwa.name/tlshacks v0.0.4 // indirect
