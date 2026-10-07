@@ -265,9 +265,11 @@ given there: the owner's fork until the pull request has merged, the urnetwork r
 It must end with `PASS`. The suffix `@<commit>` on a removal measures the content against that
 upstream commit instead of the removal's base, the newest `main` here, so a change upstream made
 after the removal's base is caught before the removal merges it; a ported.tsv row whose commits
-that upstream does not yet hold is printed as ahead of it. Measured on 2026-10-06, with the
-controls: connect `6df2fa87..0f2ff669` (848 deletions) against `main` at `511ee2cf`, and sdk
-`06f33802..0f03e27e` (150 deletions) against `main` at `06f33802`, both `PASS`.
+that upstream does not yet hold is printed as ahead of it. Measured on 2026-10-06 at `a8c84e3c`,
+with the controls: connect `6df2fa87..0f2ff669` (848 deletions) against `main` at `6edbaa6f`, and
+sdk `06f33802..0f03e27e` (150 deletions) against `main` at `06f33802`, both `PASS`. connect's
+`main` takes an automated data commit about every 45 minutes, so the commit named here is soon
+not the newest; the command above measures whichever is.
 
 ## Files in docs/history
 
