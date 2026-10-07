@@ -148,11 +148,15 @@ here as one commit with its original author, author date and message, followed b
 | connect `e8611390` Bitprecipice, 2026-10-06, "Remove the GitHub workflows" | `mls/hpke_fuzz_test.go`, `syntax/fuzz_test.go`, `syntax/layering_test.go` (its two workflow tests), and the codec's workflow, deleted | `4be82ed6` |
 | connect `f5e1aa1f` Bitprecipice, 2026-10-06, "Require deterministic root cause tests for every bug fix" | `CODESTYLE.md`, which connect keeps too: the two copies are kept in step | `d749b68d` |
 | connect `03d82b4e`, `bbe2d568`, `48405dff`, `a3bb8775` Bitprecipice, 2026-10-06: the section "Packet flow and durable state", added and then rewritten three times | `CODESTYLE.md` | `3849bdef`, `fb6ecbc1`, `2a193955`, `de8d5c5e`, one for one |
+| connect `5f5a205d` Bitprecipice, 2026-10-07, "Document Redis-only contract packet authorization": the same section, its first four rules rewritten as five and its last rule changed | `CODESTYLE.md` | `cc2b4882` |
 | sdk `a7b5db77` Product Builder, 2026-10-06, "Isolate C ABI loopback dependencies from release modules" | the loopback harness, moved to `sdk/cgo/ctest/testdata/`; `sdk/cgo/ctest/loopback-overlay.json`, which lays it back into the package for the test library; `sdk/cgo/ctest/run.sh`; `sdk/cgo/gen/loopback_module_test.go` | `966b77f2` |
 
 The merge of connect#216 (`94453d74`) changed no imported path beyond what `e8611390` then
 removed: the codec workflow's trigger and its needle. The merge `89f66cda` brought `f5e1aa1f`
 and `03d82b4e` together in connect, and changes `CODESTYLE.md` against each of its parents.
+connect `main` took `5f5a205d` by the merge `60f3bd61`, which changes the file against one
+parent only. The connect removal's head merges `main` before that, so it holds the file as
+it was; the removal does not change the file, so its merge leaves `main`'s copy as it is.
 
 Two upstream changes needed no commit here, and ported.tsv says why each one stands:
 
@@ -268,9 +272,11 @@ after the removal's base is caught before the removal merges it; a ported.tsv ro
 that upstream does not yet hold is printed as ahead of it. Measured on 2026-10-06 at `a8c84e3c`
 and again on 2026-10-07 at `2406135e`, with the controls: connect `6df2fa87..0f2ff669` (848
 deletions) against `main` at `6edbaa6f`, and sdk `06f33802..0f03e27e` (150 deletions) against
-`main` at `06f33802`, both `PASS`. connect's `main` takes an automated data commit about once an
-hour (ten on 2026-10-06, 31 to 163 minutes apart), so the commit named here is soon not the
-newest; the command above measures whichever is.
+`main` at `06f33802`, both `PASS`. connect `main` then took `5f5a205d`: against `main` at
+`60f3bd61` the command fails for `CODESTYLE.md` without the port and passes with it. connect's
+`main` also takes an automated data commit about once an hour (ten on 2026-10-06, 31 to 163
+minutes apart), so the commit named here is soon not the newest; the command above measures
+whichever is.
 
 ## Files in docs/history
 
@@ -304,7 +310,7 @@ newest; the command above measures whichever is.
 ## Changes in connect and the core SDK until the removals merge
 
 An earlier version of this file said the source copies were frozen once imported. Nothing held
-that, and upstream has changed imported paths in nine commits since the imports' sources (the
+that, and upstream has changed imported paths in ten commits since the imports' sources (the
 tables above). The
 copies change until the removal pull requests merge, and changes made there have to arrive here:
 carried.py is the check, and ported.tsv the record. After the removals merge, the paths exist
