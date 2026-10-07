@@ -2891,13 +2891,33 @@ func TestEveryPackageBuiltOnThisOneIsUnderTheConstantTimeGate(t *testing.T) {
 		}
 		covered[filepath.Clean(resolved)] = true
 	}
-	walk, err := authImportersOf(root, self)
+	walk, err := authImportersOf(root, self, authOverlaidSources)
 	if err != nil {
 		t.Fatalf("walking %s for the packages built on this one: %v", root, err)
 	}
 	if walk.directories == 0 {
 		t.Fatalf("the walk of %s entered no directory, so it would clear every package in the module having read nothing", root)
 	}
+	// the testdata directory that holds source was read: with no row at all the walk is the one this
+	// replaced, which skips every testdata directory and the harness with them; and a row whose
+	// directory is gone, or holds no production file, is the harness having moved again with this
+	// walk left behind
+	if len(walk.overlaid) == 0 {
+		t.Errorf("the walk read no source under a directory named testdata (authOverlaidSources %v): the loopback harness, which a build overlay compiles, is not under this gate",
+			slices.Sorted(maps.Keys(authOverlaidSources)))
+	}
+	for _, directory := range slices.Sorted(maps.Keys(authOverlaidSources)) {
+		read := 0
+		for _, file := range walk.overlaid {
+			if strings.HasPrefix(file, directory+"/") {
+				read++
+			}
+		}
+		if read == 0 {
+			t.Errorf("authOverlaidSources names %s and the walk read no production file there: the source a build overlay compiles is not under this gate", directory)
+		}
+	}
+	t.Logf("source under testdata that a build overlay compiles, read as the package it is laid into: %v", walk.overlaid)
 	for _, directory := range walk.importers {
 		if covered[directory] {
 			continue
@@ -2985,6 +3005,21 @@ type authImportWalk struct {
 	// nestedImporters is the production package directories inside those modules importing the
 	// package: the complement of the module boundary, read so it can be printed.
 	nestedImporters []string
+	// overlaid is every production file read under a directory of authOverlaidSources, relative to
+	// the root and slash separated, importer or not.
+	overlaid []string
+}
+
+// authOverlaidSources is the source that sits under a directory named testdata although a build
+// compiles it: the directory, relative to the module root, to the package directory a build overlay
+// lays its files into. The loopback harness is the one. urnetwork/sdk a7b5db77 moved it out of the
+// cgo package's directory so that go mod tidy would not read it, and
+// sdk/cgo/ctest/loopback-overlay.json lays it into sdk/cgo's package main for the test library.
+// Without the row the walk's testdata skip stops reading the harness, and an import of this package
+// added to it would be an importer nobody lists. internal/layering holds the directory to what the
+// overlay lays down, both ways.
+var authOverlaidSources = map[string]string{
+	"sdk/cgo/ctest/testdata": "sdk/cgo",
 }
 
 // authImportersOf walks the module rooted at root for the production packages importing self.
@@ -2995,12 +3030,22 @@ type authImportWalk struct {
 // nestedModules and not walked as this module; its importers of self are read separately, into
 // nestedImporters, so the boundary's complement is a list and not a silence. testdata holds
 // fixtures that are deliberately not buildable, and .git is not source at all, so both are
-// skipped in either half.
-func authImportersOf(root string, self string) (authImportWalk, error) {
+// skipped in either half -- except a testdata directory that overlaid names, whose files a build
+// overlay compiles: they are read, and an importer among them is the package directory the overlay
+// lays it into.
+func authImportersOf(root string, self string, overlaid map[string]string) (authImportWalk, error) {
 	walk := authImportWalk{}
 	fileSet := token.NewFileSet()
 	importerSeen := map[string]bool{}
 	nestedSeen := map[string]bool{}
+	// a path below root, relative to it and slash separated, as overlaid keys it
+	within := func(path string) string {
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return ""
+		}
+		return filepath.ToSlash(relative)
+	}
 	var visit func(base string, nested bool) error
 	visit = func(base string, nested bool) error {
 		return filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
@@ -3008,7 +3053,13 @@ func authImportersOf(root string, self string) (authImportWalk, error) {
 				return err
 			}
 			if entry.IsDir() {
-				if entry.Name() == "testdata" || entry.Name() == ".git" {
+				if entry.Name() == ".git" {
+					return filepath.SkipDir
+				}
+				if entry.Name() == "testdata" {
+					if _, compiled := overlaid[within(path)]; compiled {
+						return nil
+					}
 					return filepath.SkipDir
 				}
 				if !nested && path != base {
@@ -3032,6 +3083,13 @@ func authImportersOf(root string, self string) (authImportWalk, error) {
 			if err != nil {
 				return fmt.Errorf("parse %s: %w", path, err)
 			}
+			// the package the file belongs to: its directory, or, for source a build overlay
+			// compiles, the directory the overlay lays it into
+			directory := filepath.Clean(filepath.Dir(path))
+			if into, compiled := overlaid[within(directory)]; compiled {
+				walk.overlaid = append(walk.overlaid, within(path))
+				directory = filepath.Join(root, filepath.FromSlash(into))
+			}
 			for _, spec := range parsed.Imports {
 				imported, err := strconv.Unquote(spec.Path.Value)
 				if err != nil {
@@ -3040,7 +3098,6 @@ func authImportersOf(root string, self string) (authImportWalk, error) {
 				if imported != self {
 					continue
 				}
-				directory := filepath.Clean(filepath.Dir(path))
 				if nested {
 					if !nestedSeen[directory] {
 						nestedSeen[directory] = true
@@ -3062,13 +3119,17 @@ func authImportersOf(root string, self string) (authImportWalk, error) {
 	slices.Sort(walk.importers)
 	slices.Sort(walk.nestedModules)
 	slices.Sort(walk.nestedImporters)
+	slices.Sort(walk.overlaid)
 	return walk, nil
 }
 
 // The importer walk holds the module boundary both ways, on a fixture: a production package of
 // the walked module that imports the package is an importer, wherever it sits; one inside a
 // nested module is not, and is listed in the complement instead, with the module; a test file's
-// import and a testdata file's import are neither.
+// import and a testdata file's import are neither. And source a build overlay compiles, which sits
+// under testdata: with its directory named it is read, and its import belongs to the package it is
+// laid into; with testdata skipped whole, the rule before the loopback harness moved there, it is
+// not read at all.
 func TestTheConstantTimeImporterWalkStopsAtANestedModule(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel string, body string) {
@@ -3089,7 +3150,7 @@ func TestTheConstantTimeImporterWalkStopsAtANestedModule(t *testing.T) {
 	write("elsewhere/testdata/fixture.go", importing)
 	write("nested/go.mod", "module example.com/m/nested\n")
 	write("nested/inner/uses.go", importing)
-	walk, err := authImportersOf(root, self)
+	walk, err := authImportersOf(root, self, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3104,5 +3165,35 @@ func TestTheConstantTimeImporterWalkStopsAtANestedModule(t *testing.T) {
 	}
 	if walk.directories != 3 {
 		t.Errorf("walked %d directories of the module, want 3 (the root, message, elsewhere)", walk.directories)
+	}
+
+	// source a build overlay compiles: under testdata in the nested module, laid into nested/cgo
+	write("nested/cgo/own.go", "package p\n")
+	write("nested/cgo/ctest/testdata/harness.go", importing)
+	write("nested/cgo/ctest/testdata/quiet.go", "package p\n")
+	overlaid := map[string]string{"nested/cgo/ctest/testdata": "nested/cgo"}
+	skipped, err := authImportersOf(root, self, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped.overlaid) != 0 || slices.Contains(skipped.nestedImporters, filepath.Join(root, "nested", "cgo")) {
+		t.Errorf("with no directory named, a file under testdata must not be read: read %v, nested importers %v", skipped.overlaid, skipped.nestedImporters)
+	}
+	read, err := authImportersOf(root, self, overlaid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"nested/cgo/ctest/testdata/harness.go", "nested/cgo/ctest/testdata/quiet.go"}; !slices.Equal(read.overlaid, want) {
+		t.Errorf("overlaid source read %v, want %v: every production file of the named directory, importer or not", read.overlaid, want)
+	}
+	if want := []string{filepath.Join(root, "nested", "cgo"), filepath.Join(root, "nested", "inner")}; !slices.Equal(read.nestedImporters, want) {
+		t.Errorf("nested importers %v, want %v: the harness's import belongs to the package the overlay lays it into", read.nestedImporters, want)
+	}
+	if !slices.Equal(read.importers, walk.importers) || read.directories != walk.directories {
+		t.Errorf("naming an overlaid directory changed the root module's half: importers %v, directories %d", read.importers, read.directories)
+	}
+	// the fixture beside the root module's package stays unread: only the named directory is source
+	if slices.Contains(read.overlaid, "elsewhere/testdata/fixture.go") {
+		t.Errorf("a testdata directory no row names was read: %v", read.overlaid)
 	}
 }

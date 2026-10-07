@@ -3719,13 +3719,13 @@ func TestNoProductionCommentClaimsADarkGroupRepairsItself(t *testing.T) {
 	}
 
 	root := moduleRoot(t)
-	scanned, hits := 0, []string{}
+	scanned, overlaid, hits := 0, 0, []string{}
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if info.IsDir() {
-			if name := info.Name(); name == ".git" || name == "testdata" || name == "vendor" {
+			if skipsDirectory(root, path, ".git", "testdata", "vendor") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -3738,6 +3738,9 @@ func TestNoProductionCommentClaimsADarkGroupRepairsItself(t *testing.T) {
 			return readErr
 		}
 		scanned += 1
+		if inOverlaidSourceDir(root, path) {
+			overlaid += 1
+		}
 		rel, _ := filepath.Rel(root, path)
 		lines := strings.Split(string(source), "\n")
 		for at := 0; at < len(lines); at += 1 {
@@ -3770,6 +3773,10 @@ func TestNoProductionCommentClaimsADarkGroupRepairsItself(t *testing.T) {
 		t.Fatalf("CONTROL FAILED: this gate scanned %d production file(s) under %s, which is not "+
 			"this module; an empty result would mean the walk is wrong and not that the prose is clean",
 			scanned, root)
+	}
+	if overlaid == 0 {
+		t.Fatalf("CONTROL FAILED: this gate scanned no production file in %s, the one directory named "+
+			"testdata that holds source: the loopback harness's comments are not in its subject", overlaidSourceDir)
 	}
 	for _, mustScan := range []string{"urmessage/pqepoch.go", "urmessage/errors.go", "cgo/exports_message.go"} {
 		if _, statErr := os.Stat(filepath.Join(root, mustScan)); statErr != nil {
@@ -4083,12 +4090,13 @@ func TestTheRemovalRuleIsDocumentedAsAReceiverPropertyAndNeverAsAGroupOne(t *tes
 	held, waived := 0, 0
 	waivedRows, unattributedRows := []string{}, []string{}
 	hits := []string{}
+	overlaid := 0
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if info.IsDir() {
-			if name := info.Name(); name == ".git" || name == "testdata" || name == "vendor" {
+			if skipsDirectory(root, path, ".git", "testdata", "vendor") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -4101,6 +4109,9 @@ func TestTheRemovalRuleIsDocumentedAsAReceiverPropertyAndNeverAsAGroupOne(t *tes
 			return readErr
 		}
 		scanned += 1
+		if inOverlaidSourceDir(root, path) {
+			overlaid += 1
+		}
 		rel, _ := filepath.Rel(root, path)
 		name := filepath.ToSlash(rel)
 
@@ -4228,6 +4239,10 @@ func TestTheRemovalRuleIsDocumentedAsAReceiverPropertyAndNeverAsAGroupOne(t *tes
 	if scanned < 20 {
 		t.Fatalf("CONTROL FAILED: this gate scanned %d production file(s) under %s, which is not "+
 			"this module", scanned, root)
+	}
+	if overlaid == 0 {
+		t.Fatalf("CONTROL FAILED: this gate scanned no production file in %s, the one directory named "+
+			"testdata that holds source: the loopback harness is not in its subject", overlaidSourceDir)
 	}
 	if blocks < 5 || literals < 2 {
 		t.Fatalf("CONTROL FAILED: the subject is %d comment block(s) and %d string literal(s). "+

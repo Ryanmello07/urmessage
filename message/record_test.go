@@ -703,8 +703,20 @@ func joinSdkRoot(t *testing.T) string {
 	return ""
 }
 
-// The scan roots: the record layer's three trees, the codec, the whole of sdk/, and the core SDK
-// checked out beside this repository when it is there.
+// The loopback harness's directory, a root of its own. urnetwork/sdk a7b5db77 moved the harness from
+// the cgo package's directory to ctest/testdata/, where go mod tidy does not read it, and a build
+// overlay (sdk/cgo/ctest/loopback-overlay.json) compiles it into the test library. The scan skips
+// every directory named testdata unless a root names it outright, so without this root the move
+// would have taken the harness out from under the gate with no test changing colour: it is source,
+// not a fixture. internal/layering holds this directory to what the overlay lays down, both ways.
+func joinOverlaidSourceRoot(t *testing.T) string {
+	t.Helper()
+	return joinSdkRoot(t) + "/cgo/ctest/testdata"
+}
+
+// The scan roots: the record layer's three trees, the codec, the whole of sdk/ with the loopback
+// harness's directory beneath it, and the core SDK checked out beside this repository when it is
+// there.
 //
 // THE STAGE-3 SUBSET RULE IS RETIRED HERE. In the sibling checkout, URmessage's code sat beside the
 // core SDK's VPN data path, which the gate cannot judge (an IP header's version nibble is
@@ -727,7 +739,7 @@ func joinScanRoots(t *testing.T) []string {
 	if entry, err := os.Stat(sdkRoot); err != nil || !entry.IsDir() {
 		t.Fatalf("%s is not a directory of this checkout: the SDK's URmessage code is part of this repository and the gate requires it (%v)", sdkRoot, err)
 	}
-	roots := []string{messageRoot, mlsRoot, messagegroupRoot, syntaxRoot, sdkRoot}
+	roots := []string{messageRoot, mlsRoot, messagegroupRoot, syntaxRoot, sdkRoot, joinOverlaidSourceRoot(t)}
 	coreRoot, present, err := joinCoreSdkRootState(messageRoot, os.Getenv(joinCoreSdkRequiredEnv) != "")
 	if err != nil {
 		t.Fatal(err)
@@ -1736,23 +1748,41 @@ func TestTheSdkRootIsThisRepositorysOwnSdkModule(t *testing.T) {
 // layer. Here nothing is the core's, so the complement must be EMPTY: every .go file under sdk/,
 // enumerated independently of the scan, is one the scan read, apart from the directories the scan
 // skips by design, which are printed.
+//
+// The loopback harness is the case that tests "by design". It sits under a directory named testdata
+// (joinOverlaidSourceRoot), and it is source: the complement must not answer it as skipped, and the
+// root that names its directory must have contributed it.
 func TestNoSdkCodeIsLeftOutOfTheGate(t *testing.T) {
 	sdkRoot := joinSdkRoot(t)
+	overlaidRoot := joinOverlaidSourceRoot(t)
 	scan := mustScanJoinSources(t, joinScanRoots(t))
 	skipped, missed, err := joinSdkComplement(sdkRoot, scan.syntax)
 	if err != nil {
 		t.Fatal(err)
 	}
-	read := 0
-	for _, root := range scan.rootOf {
+	read, overlaid := 0, []string{}
+	for path, root := range scan.rootOf {
 		if root == sdkRoot {
 			read += 1
 		}
+		if root == overlaidRoot {
+			overlaid = append(overlaid, path)
+		}
 	}
+	slices.Sort(overlaid)
 	if read == 0 {
 		t.Fatalf("the scan read no file under %s, so the complement was asked of nothing", sdkRoot)
 	}
-	t.Logf("%d .go files under %s read by the scan; skipped by design (testdata, interop): %d %v", read, sdkRoot, len(skipped), skipped)
+	if len(overlaid) == 0 {
+		t.Errorf("the scan read no file under %s: the loopback harness, which a build overlay compiles, is no longer under the gate", overlaidRoot)
+	}
+	t.Logf("%d .go files under %s read by the scan, and %d under %s, the source a build overlay compiles: %v; skipped by design (testdata, interop): %d %v",
+		read, sdkRoot, len(overlaid), overlaidRoot, overlaid, len(skipped), skipped)
+	for _, path := range skipped {
+		if strings.HasPrefix(path, overlaidRoot+"/") {
+			t.Errorf("%s is source a build overlay compiles into the test library, and the scan skipped it as a fixture", path)
+		}
+	}
 	for _, path := range missed {
 		t.Errorf("%s is under %s and the scan did not read it: the gate is reading less than the code it exists for", path, sdkRoot)
 	}
@@ -1920,17 +1950,61 @@ func TestTheSdkRootAndItsComplementFireOnAFixture(t *testing.T) {
 	if _, missed, _ := joinSdkComplement(sdkRoot, partial); !slices.Equal(missed, []string{sdkRoot + "/socket.go"}) {
 		t.Errorf("the complement of a scan that did not read socket.go is %v, want exactly that file", missed)
 	}
+
+	// THE LOOPBACK HARNESS'S CASE. Source that a build overlay compiles sits under a directory named
+	// testdata. To the walk of sdk/ alone it is a fixture: unread, and answered as skipped by design,
+	// which is how the harness's move would have left the gate. A root naming its directory outright
+	// reads it, attributes it to that root and judges it.
+	overlaidRoot := sdkRoot + "/cgo/ctest/testdata"
+	harness := overlaidRoot + "/harness.go"
+	write("cgo/ctest/testdata/harness.go", fixture)
+	without := mustScanJoinSources(t, []string{sdkRoot})
+	if _, read := without.syntax[harness]; read {
+		t.Errorf("the walk of %s read %s with no root naming its directory", sdkRoot, harness)
+	}
+	if skipped, _, _ := joinSdkComplement(sdkRoot, without.syntax); !slices.Contains(skipped, harness) {
+		t.Errorf("with no root naming its directory, %s must be answered as skipped by design: %v", harness, skipped)
+	}
+	with := mustScanJoinSources(t, []string{sdkRoot, overlaidRoot})
+	if with.rootOf[harness] != overlaidRoot {
+		t.Errorf("%s was contributed by %q, want the root that names its directory", harness, with.rootOf[harness])
+	}
+	judged := false
+	for _, shape := range classBucketJoinShapes {
+		if _, found := joinViolations(with, joinScannedPaths(with.syntax), shape, joinAllowedPaths)[harness]; found {
+			judged = true
+		}
+	}
+	if !judged {
+		t.Errorf("the banned shapes in %s were not reported once a root named its directory", harness)
+	}
+	if skipped, missed, _ := joinSdkComplement(sdkRoot, with.syntax); slices.Contains(skipped, harness) || len(missed) != 0 {
+		t.Errorf("read through its own root, %s is neither skipped nor missed: skipped %v, missed %v", harness, skipped, missed)
+	}
 }
 
 // The fixture is a file full of real joins and splits, so the gate must be unable to see
 // it. If a directory named testdata ever stopped being skipped, the gate would fail on
 // the control instead of on the code, which is loud but misleading; this names the
 // reason.
+//
+// One directory named testdata is read, because a root names it outright: the loopback harness's
+// (joinOverlaidSourceRoot), which holds source and no fixture. It must have been read, so this is
+// held both ways.
 func TestJoinScanSkipsTestdata(t *testing.T) {
 	scan := mustScanJoinSources(t, joinScanRoots(t))
+	overlaidRoot := joinOverlaidSourceRoot(t)
+	overlaid := 0
 	for _, path := range joinScannedPaths(scan.syntax) {
+		if strings.HasPrefix(path, overlaidRoot+"/") {
+			overlaid += 1
+			continue
+		}
 		if strings.HasPrefix(path, "testdata/") || strings.Contains(path, "/testdata/") {
 			t.Errorf("the gate read %s; the control fixture and vendored corpora must stay out of scope", path)
 		}
+	}
+	if overlaid == 0 {
+		t.Errorf("the gate read nothing under %s, the one testdata directory that holds source", overlaidRoot)
 	}
 }

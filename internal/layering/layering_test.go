@@ -34,10 +34,12 @@
 package layering
 
 import (
+	"encoding/json"
 	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -105,7 +107,7 @@ var layeringRules = map[string]layeringRule{
 	"sdk/cgo": {
 		module:   []string{"messagegroup", "protocol", "sdk", "sdk/urmessage"},
 		external: []string{"github.com/urnetwork/connect", "github.com/urnetwork/message-server"},
-		reason:   "the messaging half of the native C ABI, built laid over the core SDK's cgo package main by the composition build; the loopback harness (loopback_test_world.go, its own modfile) runs a message server in-process",
+		reason:   "the messaging half of the native C ABI, built laid over the core SDK's cgo package main by the composition build; the loopback harness (ctest/testdata/loopback_test_world.go, laid into this package by a build overlay, with its own modfile) runs a message server in-process",
 	},
 	"sdk/cgo/gen": {
 		module:   []string{"sdk", "sdk/urmessage"},
@@ -150,6 +152,38 @@ var (
 	}
 )
 
+// THE BUILD OVERLAYS: each file the go command is handed with -overlay, and the directory the command
+// runs in when it is (an overlay's paths are relative to that directory). An overlay lays a file
+// into a package for one build without the file being in the package's directory. There is one: the
+// loopback harness. urnetwork/sdk a7b5db77 moved it from the cgo package's directory to
+// ctest/testdata/, where go mod tidy does not read it, and the test library is built with
+// -overlay=ctest/loopback-overlay.json, which compiles it into sdk/cgo's package main.
+//
+// A testdata directory holds fixtures: no build compiles them and no row judges them. A file an
+// overlay lays into a package is the exception. It is that package's source, so it is judged by
+// that package's row, as the harness was while it sat in sdk/cgo. The map is held both ways: an
+// overlay named here is in the tree and lays at least one Go file, each of them a file under a
+// testdata directory; and a JSON file anywhere in the tree that is a build overlay (a top-level
+// "Replace" object) and is not named here fails, so a second overlay cannot put source into a
+// package unjudged.
+var buildOverlays = map[string]string{
+	"sdk/cgo/ctest/loopback-overlay.json": "sdk/cgo",
+}
+
+// The testdata directories that hold overlaid source, held to what the overlays lay down, both
+// ways. THE OTHER GATES THAT SKIP testdata READ THESE DIRECTORIES BY NAME, since a walk that skips
+// every testdata directory stops reading the harness the day it moves into one: the record gate and
+// the constant-time importer walk (message), the attestation walk (protocol), the SDK's crypto-scope
+// map (sdk), the citation, doc-link and dark-group gates (sdk/urmessage), the .def's harness test
+// (sdk/cgo/gen) and test.sh's gofmt step. A source laid from anywhere else fails here until this
+// list, and each of them, says where it is.
+var overlaidSourceDirectories = []string{"sdk/cgo/ctest/testdata"}
+
+// The go command's overlay file: the path a build sees, to the file on disk that stands in for it.
+type buildOverlay struct {
+	Replace map[string]string
+}
+
 type importRecord struct {
 	file string // repository-relative, slash separated
 	path string // the import path
@@ -161,6 +195,64 @@ type repositoryScan struct {
 	modules  map[string]string         // directory holding a go.mod -> its module path
 	sources  map[string][]byte         // every .go file, testdata included -> its bytes
 	composed []string                  // the core SDK's files sdk/cgo/compose.sh laid in, not read
+	// a file under testdata that a build overlay lays into a package -> that package's directory
+	overlaid map[string]string
+	// what is wrong with the overlays themselves: a declared one that is gone or lays nothing, a
+	// source that is not a Go file under testdata, an overlay in the tree that is not declared
+	overlayProblems []string
+	// the .go files under testdata that no overlay lays anywhere: fixtures, judged by no row
+	fixtures int
+}
+
+// The sources the declared overlays lay into packages, and what is wrong with the declarations.
+func readBuildOverlays(root string, declared map[string]string) (map[string]string, []string) {
+	overlaid := map[string]string{}
+	problems := []string{}
+	for _, overlayPath := range sortedKeys(declared) {
+		base := declared[overlayPath]
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(overlayPath)))
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("the build overlay %s is declared and cannot be read (%v): a row nothing uses", overlayPath, err))
+			continue
+		}
+		overlay := buildOverlay{}
+		if err := json.Unmarshal(body, &overlay); err != nil {
+			problems = append(problems, fmt.Sprintf("the build overlay %s is not an overlay file: %v", overlayPath, err))
+			continue
+		}
+		laid := 0
+		for _, target := range sortedKeys(overlay.Replace) {
+			source := overlay.Replace[target]
+			if source == "" || path.IsAbs(source) || path.IsAbs(target) || strings.ContainsAny(source+target, `\:`) {
+				problems = append(problems, fmt.Sprintf("the build overlay %s maps %q to %q: only a relative, slash-separated path to another is read here", overlayPath, target, source))
+				continue
+			}
+			from := path.Join(base, source)
+			into := path.Dir(path.Join(base, target))
+			if !strings.HasSuffix(from, ".go") || !underTestdata(from) {
+				problems = append(problems, fmt.Sprintf("the build overlay %s lays %s into %s: an overlaid source is a .go file under a testdata directory, where no package reads it a second time", overlayPath, from, into))
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(from))); err != nil {
+				problems = append(problems, fmt.Sprintf("the build overlay %s lays %s, which is not in the tree (%v)", overlayPath, from, err))
+				continue
+			}
+			if earlier, twice := overlaid[from]; twice {
+				problems = append(problems, fmt.Sprintf("%s is laid into both %s and %s", from, earlier, into))
+				continue
+			}
+			overlaid[from] = into
+			laid++
+		}
+		if laid == 0 {
+			problems = append(problems, fmt.Sprintf("the build overlay %s lays no Go source into any package: a row nothing uses", overlayPath))
+		}
+	}
+	return overlaid, problems
+}
+
+func underTestdata(relative string) bool {
+	return relative == "testdata" || strings.HasPrefix(relative, "testdata/") || strings.Contains(relative, "/testdata/")
 }
 
 // The record sdk/cgo/compose.sh writes while the core SDK's cgo package main is laid under sdk/cgo:
@@ -224,12 +316,15 @@ func modulePathOf(goMod []byte) string {
 }
 
 // Every Go file under root. Directories named testdata hold fixtures, not packages: their
-// files are read for the stale-literal rule and judged by no row. Hidden directories and
-// those starting with an underscore are skipped, as the go tool skips them, and so are the core
-// SDK's files a compose laid under sdk/cgo (composedRecord), which scan.composed names.
-func scanRepository(t *testing.T, root string) repositoryScan {
+// files are read for the stale-literal rule and judged by no row, except a file a build overlay
+// lays into a package (overlays, as buildOverlays declares them), which is judged by that package's
+// row. Hidden directories and those starting with an underscore are skipped, as the go tool skips
+// them, and so are the core SDK's files a compose laid under sdk/cgo (composedRecord), which
+// scan.composed names.
+func scanRepository(t *testing.T, root string, overlays map[string]string) repositoryScan {
 	t.Helper()
 	scan := repositoryScan{packages: map[string][]importRecord{}, files: map[string][]string{}, modules: map[string]string{}, sources: map[string][]byte{}}
+	scan.overlaid, scan.overlayProblems = readBuildOverlays(root, overlays)
 	composed := composedFiles(t, root)
 	fileSet := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
@@ -251,6 +346,21 @@ func scanRepository(t *testing.T, root string) repositoryScan {
 			}
 			return nil
 		}
+		if strings.HasSuffix(path, ".json") {
+			// an overlay nobody declared: whatever it lays into a package is judged by no row
+			if _, declared := overlays[relative]; declared {
+				return nil
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			overlay := buildOverlay{}
+			if json.Unmarshal(body, &overlay) == nil && overlay.Replace != nil {
+				scan.overlayProblems = append(scan.overlayProblems, fmt.Sprintf("%s is a build overlay (a top-level Replace object) and buildOverlays does not name it: the source it lays into a package would be judged by no row", relative))
+			}
+			return nil
+		}
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
@@ -263,14 +373,20 @@ func scanRepository(t *testing.T, root string) repositoryScan {
 			return err
 		}
 		scan.sources[relative] = source
-		if relative == "testdata" || strings.HasPrefix(relative, "testdata/") || strings.Contains(relative, "/testdata/") {
-			return nil
+		dir := filepath.ToSlash(filepath.Dir(relative))
+		if underTestdata(relative) {
+			into, laid := scan.overlaid[relative]
+			if !laid {
+				scan.fixtures++
+				return nil
+			}
+			// the package the overlay compiles it into, not the directory it sits in
+			dir = into
 		}
 		parsed, err := parser.ParseFile(fileSet, path, source, parser.ImportsOnly)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", relative, err)
 		}
-		dir := filepath.ToSlash(filepath.Dir(relative))
 		scan.files[dir] = append(scan.files[dir], relative)
 		records := scan.packages[dir]
 		for _, spec := range parsed.Imports {
@@ -319,6 +435,9 @@ func layeringViolations(scan repositoryScan, rules map[string]layeringRule, serv
 	}
 	if files, found := scan.files["."]; found {
 		report("the repository root holds Go source (%s); it holds module metadata, documentation and test.sh only", strings.Join(files, ", "))
+	}
+	for _, problem := range scan.overlayProblems {
+		report("%s", problem)
 	}
 	for dir := range rules {
 		if _, found := scan.files[dir]; !found {
@@ -434,8 +553,28 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+// The directories the overlaid sources sit in, held to the declared list both ways.
+func overlaidDirectoryProblems(overlaid map[string]string, declared []string) []string {
+	problems := []string{}
+	holding := map[string]bool{}
+	for _, source := range sortedKeys(overlaid) {
+		holding[path.Dir(source)] = true
+	}
+	for _, dir := range sortedKeys(holding) {
+		if !slices.Contains(declared, dir) {
+			problems = append(problems, fmt.Sprintf("%s holds source a build overlay lays into a package, and overlaidSourceDirectories does not name it: every gate that skips testdata (listed there) has to read it by name first", dir))
+		}
+	}
+	for _, dir := range declared {
+		if !holding[dir] {
+			problems = append(problems, fmt.Sprintf("overlaidSourceDirectories names %s, and no build overlay lays a source from it: a row nothing uses", dir))
+		}
+	}
+	return problems
+}
+
 func TestEveryPackageImportsOnlyWhatItsRowAllows(t *testing.T) {
-	scan := scanRepository(t, repositoryRoot(t))
+	scan := scanRepository(t, repositoryRoot(t), buildOverlays)
 	files, imports := 0, 0
 	for _, dir := range sortedKeys(scan.packages) {
 		imports += len(scan.packages[dir])
@@ -443,12 +582,99 @@ func TestEveryPackageImportsOnlyWhatItsRowAllows(t *testing.T) {
 	files = len(scan.sources)
 	t.Logf("%d Go files read (testdata included), %d packages, %d import declarations, modules %v",
 		files, len(scan.files), imports, scan.modules)
+	// the testdata narrowing, printed: what no row judges, and what an overlay puts back under one
+	t.Logf("UNDER testdata: %d fixture file(s) no row judges; %d file(s) a build overlay lays into a package, judged by that package's row: %v",
+		scan.fixtures, len(scan.overlaid), scan.overlaid)
 	if len(scan.composed) > 0 {
 		t.Logf("NOT READ: %d file(s) of the core SDK's cgo package main that %s says a compose laid under sdk/cgo: %v",
 			len(scan.composed), composedRecord, scan.composed)
 	}
 	for _, violation := range layeringViolations(scan, layeringRules, serverSafePackages, staleLiteralUses) {
 		t.Error(violation)
+	}
+	for _, problem := range overlaidDirectoryProblems(scan.overlaid, overlaidSourceDirectories) {
+		t.Error(problem)
+	}
+}
+
+// The overlay rule on a fixture, each case for its own reason. A file under testdata that a declared
+// overlay lays into a package is judged by that package's row, and the fixture beside it by none.
+// With testdata skipped whole, which is the rule before the harness moved there, the same import
+// goes unjudged, and the one thing reported is the overlay nobody declared.
+func TestAnOverlaidSourceIsJudgedByThePackageItIsLaidInto(t *testing.T) {
+	root := t.TempDir()
+	write := func(relative string, body string) {
+		at := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const overlayPath = "sdk/cgo/ctest/overlay.json"
+	const harness = "sdk/cgo/ctest/testdata/harness.go"
+	write("go.mod", "module "+modulePath+"\n")
+	write("sdk/cgo/go.mod", "module "+modulePath+"/sdk/cgo\n")
+	write("sdk/cgo/own.go", "package main\n\nimport _ \"github.com/urnetwork/connect\"\n")
+	write(overlayPath, "{\r\n  \"Replace\": {\"harness.go\": \"ctest/testdata/harness.go\"}\r\n}\r\n")
+	write(harness, "//go:build harness\n\npackage main\n\nimport _ \"github.com/urnetwork/sdk\"\n")
+	write("sdk/cgo/ctest/testdata/fixture.go", "package fixture\n\nimport _ \"github.com/urnetwork/sdk\"\n")
+	rules := map[string]layeringRule{"sdk/cgo": {external: []string{"github.com/urnetwork/connect"}}}
+	overlays := map[string]string{overlayPath: "sdk/cgo"}
+	judged := "sdk/cgo imports github.com/urnetwork/sdk (" + harness + "), outside the standard library and its row"
+
+	scan := scanRepository(t, root, overlays)
+	if got := layeringViolations(scan, rules, nil, map[string]string{}); !slices.Equal(got, []string{judged}) {
+		t.Errorf("a declared overlay's source must be judged by the row of the package it is laid into, and nothing else reported: %q", got)
+	}
+	if scan.fixtures != 1 || len(scan.overlaid) != 1 || scan.overlaid[harness] != "sdk/cgo" {
+		t.Errorf("fixtures %d, overlaid %v: want the one fixture unjudged and the harness laid into sdk/cgo", scan.fixtures, scan.overlaid)
+	}
+
+	// the rejected design: nothing under testdata is judged
+	got := layeringViolations(scanRepository(t, root, nil), rules, nil, map[string]string{})
+	if len(got) != 1 || !strings.HasPrefix(got[0], overlayPath+" is a build overlay") {
+		t.Errorf("with no overlay declared the harness's import is unjudged, and the undeclared overlay is what is reported: %q", got)
+	}
+
+	// the declarations, each refused for its own reason
+	for _, c := range []struct {
+		name    string
+		overlay string
+		want    string
+	}{
+		{"a source outside testdata", `{"Replace": {"harness.go": "own.go"}}`, "an overlaid source is a .go file under a testdata directory"},
+		{"a source that is not Go", `{"Replace": {"harness.go": "ctest/testdata/harness.txt"}}`, "an overlaid source is a .go file under a testdata directory"},
+		{"a source that is not there", `{"Replace": {"harness.go": "ctest/testdata/gone.go"}}`, "which is not in the tree"},
+		{"an absolute source", `{"Replace": {"harness.go": "/ctest/testdata/harness.go"}}`, "only a relative, slash-separated path"},
+		{"a deleted file", `{"Replace": {"own.go": ""}}`, "only a relative, slash-separated path"},
+		{"nothing laid", `{"Replace": {}}`, "lays no Go source into any package"},
+		{"not an overlay", `[1, 2]`, "is not an overlay file"},
+	} {
+		write(overlayPath, c.overlay)
+		problems := scanRepository(t, root, overlays).overlayProblems
+		if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), c.want) {
+			t.Errorf("%s: want a problem holding %q, got %q", c.name, c.want, problems)
+		}
+	}
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash(overlayPath))); err != nil {
+		t.Fatal(err)
+	}
+	if problems := scanRepository(t, root, overlays).overlayProblems; len(problems) != 1 || !strings.Contains(problems[0], "is declared and cannot be read") {
+		t.Errorf("a declared overlay that is gone: %q", problems)
+	}
+
+	// the directories, both ways
+	laid := map[string]string{harness: "sdk/cgo"}
+	if problems := overlaidDirectoryProblems(laid, []string{"sdk/cgo/ctest/testdata"}); len(problems) != 0 {
+		t.Errorf("the declared directory was refused: %q", problems)
+	}
+	if problems := overlaidDirectoryProblems(laid, nil); len(problems) != 1 || !strings.Contains(problems[0], "overlaidSourceDirectories does not name it") {
+		t.Errorf("an overlaid source in an undeclared directory: %q", problems)
+	}
+	if problems := overlaidDirectoryProblems(nil, []string{"sdk/cgo/ctest/testdata"}); len(problems) != 1 || !strings.Contains(problems[0], "a row nothing uses") {
+		t.Errorf("a declared directory no overlay uses: %q", problems)
 	}
 }
 
@@ -471,7 +697,7 @@ func TestTheComposedCoreFilesAreLeftToTheCoreAndNamed(t *testing.T) {
 	write("sdk/cgo/own.go", "package main\n\nimport _ \"github.com/urnetwork/sdk\"\n")
 	write("sdk/cgo/.composed", "# composed by sdk/cgo/compose.sh from the fixture\nhandles.go\r\n")
 	rules := map[string]layeringRule{"sdk/cgo": {external: []string{"github.com/urnetwork/connect"}}}
-	scan := scanRepository(t, root)
+	scan := scanRepository(t, root, nil)
 	if !slices.Equal(scan.composed, []string{"sdk/cgo/handles.go"}) {
 		t.Errorf("the composed files named: %v, want [sdk/cgo/handles.go]", scan.composed)
 	}
@@ -483,7 +709,7 @@ func TestTheComposedCoreFilesAreLeftToTheCoreAndNamed(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "sdk", "cgo", ".composed")); err != nil {
 		t.Fatal(err)
 	}
-	if violations := layeringViolations(scanRepository(t, root), rules, nil, map[string]string{}); len(violations) != 2 {
+	if violations := layeringViolations(scanRepository(t, root, nil), rules, nil, map[string]string{}); len(violations) != 2 {
 		t.Errorf("with no compose record both files are this repository's and both are judged: %q", violations)
 	}
 }
@@ -526,7 +752,7 @@ func TestTheLayeringRulesFireOnAFixtureRepository(t *testing.T) {
 		"ghost":              {},
 		"boundary":           {external: []string{"golang.org/x/crypto"}},
 	}
-	violations := layeringViolations(scanRepository(t, root), rules, []string{"message", "syntax"}, map[string]string{"never.go": "a use nothing makes"})
+	violations := layeringViolations(scanRepository(t, root, nil), rules, []string{"message", "syntax"}, map[string]string{"never.go": "a use nothing makes"})
 	wants := []string{
 		"message imports mls (message/plain.go), which its row does not allow",
 		"message imports messagegroup/inner (message/alias.go), which its row does not allow",

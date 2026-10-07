@@ -61,3 +61,36 @@ Measured on Windows (go1.26.5) unless marked; "P_sdk" is the source,
 | record gate's sibling complement | the core SDK's data path | NOT retired (corrected 2026-10-06; this row said "Retired: there is no core code in this tree"). urnetwork/connect 54b5b106 had already put the whole sibling SDK under the gate, with reviewed AST contexts. Ported here (3a22cd99), and the core SDK beside the repository at its pin is a root of the gate (a25b7c8b), scanned whole, every reviewed context held live, required by test.sh (URMESSAGE_REQUIRE_CORE_SDK_ROOT). **O18, the maintainer's call:** keep it (the default) or drop it and record the loss here. |
 | test-citation gate, the root module's prose | 4 citations outside the subject that resolve to no single declaration | Printed, and held both ways to `citationOutsideSubjectUnresolved` (3 wrapped across comment lines, 1 message-server test). |
 | constant-time importer gate, nested modules | `sdk/urmessage` imports `message/message` outside the root module | Printed, and held both ways to `authNestedImporterDispositions` (F3, ruling O20). |
+
+## 5. The loopback harness under `testdata` (urnetwork/sdk a7b5db77)
+
+Upstream moved the loopback harness from the cgo package's directory to
+`cgo/ctest/testdata/loopback_test_world.go`, where `go mod tidy` does not read it, and a build
+overlay (`cgo/ctest/loopback-overlay.json`) lays it back into the package for the test library.
+The port is `966b77f2`. A directory named `testdata` is what most walks here skip as fixtures, so
+the move alone would have taken the harness out of every one of them with no test changing
+colour. Each such walk now reads `sdk/cgo/ctest/testdata` by name, and fails if it reads nothing
+there; `internal/layering` holds that directory to what the overlay lays down, both ways, and
+refuses an overlay nobody declared.
+
+| Walk | Skips `testdata`? | Now |
+|---|---|---|
+| internal/layering | read for stale literals, judged by no row | a file an overlay lays into a package is judged by that package's row (`sdk/cgo`); `buildOverlays` and `overlaidSourceDirectories`, both ways |
+| record gate | yes, unless a root names the directory | the directory is a root of its own (`joinOverlaidSourceRoot`); the complement must not answer the harness as skipped |
+| constant-time importer walk | yes | reads `authOverlaidSources`, as the package the overlay lays it into |
+| protocol attestation walk | yes | reads the directory, and fails if it walked no file there |
+| SDK crypto scope | yes, counted | reads `sdkOverlaidSourceDirs`; the harness's row names it at its new place |
+| citation, doc-link and both dark-group walks | yes | `skipsDirectory` reads `overlaidSourceDir`; the doc links resolve against the package the harness is compiled into |
+| `sdk/cgo/gen`'s harness test | reads the file by name | reads it at its new place, and exercises the scan's build-constraint guard on it in a directory of its own, as upstream's case does |
+| test.sh: gofmt | yes | holds the directory's files, and prints what it does not hold |
+| test.sh: the loopback modfile's tidy, the loopback library | — | both pass the overlay; the tidy's control is the same command without it, which must ask to drop the message server |
+| line-ending gate, retracted sentinel, receive-callback audit | no | unchanged: they read every directory |
+
+Measured, both ways, on linux (strace over every top-level test of the eight test binaries that
+opened the harness, each test run alone, 2,682 before and 2,685 after): the tests whose own
+process opens the harness are 19 at `cdd30926`, before the move, and 19 with these changes, 18 of
+them the same tests. The one that stopped is `sdk/cgo/gen`'s
+`TestTheDefNamesEveryHandWrittenExportThatShips`, whose scan reads the cgo package's directory,
+where the harness no longer is; the guard it relied on is the one the harness test now exercises
+on purpose. The one that started is `TestLoopbackModuleBoundaryAndOverlay`, which came with the
+port.

@@ -201,6 +201,8 @@ type citationCorpus struct {
 	// total is the .go files the walk saw, production how many of the subject's are not tests, and
 	// outside how many lie outside the subject and were read for their declarations only.
 	total, production, outside int
+	// overlaid is the files read in overlaidSourceDir: source under a directory named testdata.
+	overlaid []string
 }
 
 // citationHolding is which disposition of the rule below holds one spelling, or none of them.
@@ -262,12 +264,13 @@ func citationScan(t *testing.T, repository string, subject string) *citationCorp
 	cited := map[string][]string{}
 	citedOutside := map[string][]string{}
 	production, total, outside := 0, 0, 0
+	overlaid := []string{}
 	err := filepath.Walk(repository, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if info.IsDir() {
-			if name := info.Name(); name == ".git" || name == "testdata" || name == "vendor" || name == "build" {
+			if skipsDirectory(subject, path, ".git", "testdata", "vendor", "build") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -280,6 +283,9 @@ func citationScan(t *testing.T, repository string, subject string) *citationCorp
 			return readErr
 		}
 		total += 1
+		if inOverlaidSourceDir(subject, path) {
+			overlaid = append(overlaid, filepath.Base(path))
+		}
 		rel := filepath.ToSlash(func() string {
 			at, _ := filepath.Rel(repository, path)
 			return at
@@ -317,7 +323,7 @@ func citationScan(t *testing.T, repository string, subject string) *citationCorp
 	if err != nil {
 		t.Fatalf("walking %s: %v", repository, err)
 	}
-	return &citationCorpus{declared: declared, cited: cited, citedOutside: citedOutside, total: total, production: production, outside: outside}
+	return &citationCorpus{declared: declared, cited: cited, citedOutside: citedOutside, total: total, production: production, outside: outside, overlaid: overlaid}
 }
 
 func TestEveryTestNameCitedInThisRepositorysProductionProseResolvesToOneDeclaration(t *testing.T) {
@@ -359,6 +365,15 @@ func TestEveryTestNameCitedInThisRepositorysProductionProseResolvesToOneDeclarat
 	if scan.outside == 0 {
 		t.Fatalf("CONTROL FAILED: the walk read no file outside the subject, so the repository is this module")
 	}
+	// THE ONE DIRECTORY NAMED testdata THAT HOLDS SOURCE WAS READ. The loopback harness moved into it
+	// (overlaidSourceDir), and a walk that skips every testdata directory would have stopped reading
+	// its prose without any case here changing colour.
+	if len(scan.overlaid) == 0 {
+		t.Fatalf("CONTROL FAILED: the walk read no file in %s, the source a build overlay compiles: the "+
+			"loopback harness's prose is not in this gate's subject", overlaidSourceDir)
+	}
+	t.Logf("read although under a directory named testdata, as source a build overlay compiles (%s): %v",
+		overlaidSourceDir, scan.overlaid)
 
 	// ── THE DISPOSITIONS, HELD BOTH WAYS ───────────────────────────────────────────────────────
 	for name, why := range citationDeclaredElsewhere {
@@ -462,6 +477,79 @@ func TestEveryTestNameCitedInThisRepositorysProductionProseResolvesToOneDeclarat
 	}
 	for _, problem := range citationOutsideProblems(unresolvedNames, citationOutsideSubjectUnresolved) {
 		t.Error(problem)
+	}
+}
+
+// overlaidSourceDir is the one directory named testdata under this module that holds SOURCE and not
+// fixtures, relative to the module root, and overlaidIntoDir is the package directory a build
+// overlay compiles its files into. urnetwork/sdk a7b5db77 moved the loopback harness out of the cgo
+// package's directory to cgo/ctest/testdata/, so that go mod tidy would not read it, and
+// cgo/ctest/loopback-overlay.json lays it back into cgo's package main for the test library. The
+// walks of this package skip directories named testdata as fixtures, and they read this one: the
+// harness is production prose and production code, as it was at cgo/loopback_test_world.go.
+// internal/layering holds the directory to what the overlay lays down, both ways.
+const (
+	overlaidSourceDir = "cgo/ctest/testdata"
+	overlaidIntoDir   = "cgo"
+)
+
+// skipsDirectory is the directory rule of this package's source walks: a directory whose name is
+// one of skipped is not read, except overlaidSourceDir of the module rooted at module, which is
+// named testdata and is read all the same.
+func skipsDirectory(module string, path string, skipped ...string) bool {
+	if !slices.Contains(skipped, filepath.Base(path)) {
+		return false
+	}
+	within, err := filepath.Rel(module, path)
+	return err != nil || filepath.ToSlash(within) != overlaidSourceDir
+}
+
+// inOverlaidSourceDir reports whether a file sits directly in overlaidSourceDir of the module rooted
+// at module.
+func inOverlaidSourceDir(module string, path string) bool {
+	within, err := filepath.Rel(module, filepath.Dir(path))
+	return err == nil && filepath.ToSlash(within) == overlaidSourceDir
+}
+
+// The directory rule on a fixture, each case for its own reason: the names a walk lists are
+// skipped wherever they are; overlaidSourceDir is read although it is named testdata; a directory
+// named testdata anywhere else is still skipped, the fixture directory beside the harness's parent
+// among them; and a name a walk does not list is read.
+func TestTheWalksReadTheOneTestdataDirectoryThatHoldsSource(t *testing.T) {
+	module := filepath.Join(t.TempDir(), "sdk")
+	at := func(relative string) string { return filepath.Join(module, filepath.FromSlash(relative)) }
+	for _, c := range []struct {
+		directory string
+		skipped   bool
+	}{
+		{"cgo/ctest/testdata", false},
+		{"testdata", true},
+		{"urmessage/testdata", true},
+		{"cgo/testdata", true},
+		{"cgo/ctest/testdata/testdata", true},
+		{"cgo/ctest", false},
+		{"vendor", true},
+		{".git", true},
+		{"cgo/build", false},
+	} {
+		if got := skipsDirectory(module, at(c.directory), ".git", "testdata", "vendor"); got != c.skipped {
+			t.Errorf("skipsDirectory(%s) answered %v, want %v", c.directory, got, c.skipped)
+		}
+	}
+	if !skipsDirectory(module, at("cgo/build"), ".git", "testdata", "vendor", "build") {
+		t.Errorf("a walk that lists build must skip cgo/build")
+	}
+	// the same directory in another module is a fixture directory: the exception is one place
+	if !skipsDirectory(filepath.Dir(module), at("cgo/ctest/testdata"), "testdata") {
+		t.Errorf("cgo/ctest/testdata is read only as a directory of THIS module's root")
+	}
+	if !inOverlaidSourceDir(module, at("cgo/ctest/testdata/loopback_test_world.go")) {
+		t.Errorf("a file directly in the overlaid directory was not recognised")
+	}
+	for _, elsewhere := range []string{"cgo/loopback_test_world.go", "cgo/ctest/run.go", "cgo/ctest/testdata/deeper/x.go", "testdata/x.go"} {
+		if inOverlaidSourceDir(module, at(elsewhere)) {
+			t.Errorf("%s was taken for a file of the overlaid directory", elsewhere)
+		}
 	}
 }
 
@@ -959,12 +1047,13 @@ func TestEveryGodocLinkInThisRepositorysProductionProseNamesADeclaration(t *test
 	packages := map[string]*godocPackage{}
 	productionOf := map[string][]string{}
 	total, production := 0, 0
+	overlaid := []string{}
 	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if info.IsDir() {
-			if name := info.Name(); name == ".git" || name == "testdata" || name == "vendor" || name == "build" {
+			if skipsDirectory(root, path, ".git", "testdata", "vendor", "build") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -981,6 +1070,12 @@ func TestEveryGodocLinkInThisRepositorysProductionProseNamesADeclaration(t *test
 		}
 		production += 1
 		dir := filepath.Dir(path)
+		if inOverlaidSourceDir(root, path) {
+			// the package the overlay compiles the file into, whose declarations its links resolve
+			// against, as they did while it sat there
+			overlaid = append(overlaid, filepath.Base(path))
+			dir = filepath.Join(root, filepath.FromSlash(overlaidIntoDir))
+		}
 		if packages[dir] == nil {
 			packages[dir] = newGodocPackage()
 		}
@@ -1013,6 +1108,11 @@ func TestEveryGodocLinkInThisRepositorysProductionProseNamesADeclaration(t *test
 		t.Fatalf("CONTROL FAILED: the walk saw %d .go files of which %d are production; a run with "+
 			"no production files or no test files is measuring nothing", total, production)
 	}
+	if len(overlaid) == 0 {
+		t.Fatalf("CONTROL FAILED: the walk read no production file in %s, the source a build overlay "+
+			"compiles: the loopback harness's doc links are not in this gate's subject", overlaidSourceDir)
+	}
+	t.Logf("read although under a directory named testdata, as files of %s (%s): %v", overlaidIntoDir, overlaidSourceDir, overlaid)
 	// ── AND THE TABLES HOLD NO TEST-FILE DECLARATION, WHICH IS THIS PASS'S OWN FINDING ─────────
 	//
 	// BOTH LITERALS ARE COPIED FROM THE SOURCE AND THE PAIR FIRES FOR ITS OWN REASON. `rotWorld` is
@@ -1136,7 +1236,8 @@ func TestEveryGodocLinkInThisRepositorysProductionProseNamesADeclaration(t *test
 	// EVERY PRODUCTION FILE IS IN THE SUBJECT. In urnetwork/sdk this rule read only the files URmessage
 	// wrote (urmessageOwns: four directories and the message* names), because upstream's files shared
 	// the package and write brackets as plain prose. Every file here is URmessage's, so there is
-	// nothing to narrow; the one file the old narrowing missed, cgo/loopback_test_world.go, is read.
+	// nothing to narrow; the one file the old narrowing missed, the loopback harness, is read (from
+	// overlaidSourceDir, where it sits now, as a file of the package it is compiled into).
 	checkedFiles := 0
 	defer func() {
 		t.Logf("the doc-link rule read all %d production file(s)", checkedFiles)

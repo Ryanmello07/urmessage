@@ -20,6 +20,19 @@ func cgoDirectory(t *testing.T) string {
 	return filepath.Join(filepath.Dir(filename), "..")
 }
 
+// testingGenDir is this directory, sdk/cgo/gen. The name is the core SDK's (its
+// cgo/gen/extender_exports_test.go declares the same helper for its generator's tests):
+// loopback_module_test.go moved here from the core with the loopback harness, byte for byte, and
+// calls it.
+func testingGenDir(t *testing.T) string {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not resolve test path")
+	}
+	return filepath.Dir(filename)
+}
+
 // coreSdkRoot is the core SDK checkout the composition is built against: urnetwork/sdk at the
 // pinned commit, beside this repository, where test.sh puts it. The module's go.mod
 // replaces github.com/urnetwork/sdk with the same directory, so nothing in this module builds
@@ -178,15 +191,20 @@ func TestAFileNoShippedBuildCompilesContributesNoExportedSymbol(t *testing.T) {
 	}
 }
 
-// Re-homed from the core SDK's cgo/gen/manual_exports_test.go (its loopback half): the loopback
-// world is the only build-tag-gated file in this directory, it really does carry //export
-// directives, and not one of them may reach the .def. The second half -- that the file HAS
-// exports -- keeps the first from passing vacuously if the harness is deleted or renamed, and the
-// last lines hold it through messagingExports itself, so deleting the build-constraint guard there
-// is red here.
+// Re-homed from the core SDK's cgo/gen/manual_exports_test.go (its loopback half), and carrying
+// what urnetwork/sdk a7b5db77 changed there: the loopback world carries //export directives and can
+// be overlaid into this package, but not one of them may reach the .def. The second half -- that
+// the file HAS exports -- keeps the first from passing vacuously if the harness is deleted or
+// renamed.
+//
+// The harness sits under ctest/testdata now, outside the directory messagingExports reads, so the
+// real tree no longer exercises the scan's build-constraint guard: the file's place alone keeps it
+// out. The guard is therefore exercised on purpose, as upstream's case does it: the real harness
+// laid beside a shipping export in a directory of its own, and the real scan run there. Deleting
+// the guard from messagingExports is red here.
 func TestTheLoopbackHarnessIsNotInTheShippingLibrarysDef(t *testing.T) {
 	cgoDir := cgoDirectory(t)
-	b, err := os.ReadFile(filepath.Join(cgoDir, "loopback_test_world.go"))
+	b, err := os.ReadFile(filepath.Join(cgoDir, "ctest", "testdata", "loopback_test_world.go"))
 	if err != nil {
 		t.Fatalf("the loopback harness is not where this test expects it: %v", err)
 	}
@@ -214,6 +232,22 @@ func TestTheLoopbackHarnessIsNotInTheShippingLibrarysDef(t *testing.T) {
 			t.Errorf("include/urnetwork_sdk.def names the harness symbol %q", m[1])
 		}
 	}
+
+	// Exercise the build-tag guard even though the real fixture is now under testdata. Place it
+	// beside a shipping export in an isolated directory and run the actual scanner there.
+	fixtureDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fixtureDirectory, "loopback_test_world.go"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shippingSource := []byte("package main\n\n//export urnet_shipping_control\nfunc urnet_shipping_control() {}\n")
+	if err := os.WriteFile(filepath.Join(fixtureDirectory, "shipping.go"), shippingSource, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if names, err := messagingExports(fixtureDirectory); err != nil || len(names) != 1 || names[0] != "urnet_shipping_control" {
+		t.Fatalf("messagingExports admitted a tagged test export, or missed the shipping one beside it: %v (%v)", names, err)
+	}
+
+	// Also check discovery from the real cgo directory.
 	messaging, err := messagingExports(cgoDir)
 	if err != nil {
 		t.Fatal(err)

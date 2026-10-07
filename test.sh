@@ -11,7 +11,8 @@
 #   1. the siblings beside the repository at the commits scripts/siblings.txt pins (a missing one is
 #      cloned), and the checkout's line endings;
 #   2. the module census's own controls, and its rows against the tree;
-#   3. formatting: gofmt over every tracked Go file outside testdata;
+#   3. formatting: gofmt over every tracked Go file that is source (fixtures under testdata are not;
+#      the loopback harness, which a build overlay compiles from under one, is);
 #   4. every module scripts/module-census.sh has a row for, by its wiring:
 #        go          go mod verify, go mod tidy -diff, build, vet, every main package has a test,
 #                    go test with the race detector (the root module with the core SDK and
@@ -57,10 +58,8 @@ receipts="$work/receipts.tsv"
 results=()
 narrowings=()
 composed=0
-hidden=""
 
 cleanup() {
-  if [ -n "$hidden" ] && [ -f "$hidden" ]; then mv -f "$hidden" sdk/cgo/loopback_test_world.go; fi
   if [ "$composed" = 1 ] && [ -f sdk/cgo/.composed ]; then bash sdk/cgo/compose.sh --clean > /dev/null; fi
   rm -rf "$work"
 }
@@ -148,18 +147,34 @@ run "module census: its own controls" bash scripts/module-census.sh --self-test
 run "module census: the rows against the tree" bash scripts/module-census.sh --rows
 
 # ---------------------------------------------------------------- 3. gofmt
+# A directory named testdata holds fixtures, some misformatted on purpose, and they are not held.
+# One such directory holds source: the loopback harness, which urnetwork/sdk a7b5db77 moved under
+# sdk/cgo/ctest/testdata so that go mod tidy would not read it, and which a build overlay compiles
+# into the test library. It is held like any other source, and the step fails if nothing is there
+# to hold. internal/layering holds the directory to what the overlay lays down, both ways.
+overlaid_source_dir=sdk/cgo/ctest/testdata
 gofmt_check() {
-  local gofmt control unformatted
+  local gofmt control unformatted held overlaid fixtures
   gofmt="$(go env GOROOT)/bin/gofmt"
   control="$work/gofmt-control"
   mkdir -p "$control"
   printf '%s\n' 'package p' 'func  f( ) {}' > "$control/c.go"
   if [ -z "$("$gofmt" -l "$control")" ]; then echo "gofmt -l does not list a misformatted file; the check below would pass anything"; return 1; fi
-  unformatted=$(git ls-files -z -- '*.go' | tr '\0' '\n' | grep -v '/testdata/' | tr '\n' '\0' | xargs -0 "$gofmt" -l)
+  git ls-files -z -- '*.go' | tr '\0' '\n' > "$work/gofmt-tracked"
+  grep -v '/testdata/' "$work/gofmt-tracked" > "$work/gofmt-held"
+  grep "^$overlaid_source_dir/" "$work/gofmt-tracked" > "$work/gofmt-overlaid"
+  grep '/testdata/' "$work/gofmt-tracked" | grep -v "^$overlaid_source_dir/" > "$work/gofmt-fixtures"
+  held=$(grep -c . "$work/gofmt-held")
+  overlaid=$(grep -c . "$work/gofmt-overlaid")
+  fixtures=$(grep -c . "$work/gofmt-fixtures")
+  echo "gofmt holds $held tracked Go files outside testdata and $overlaid under $overlaid_source_dir, the source a build overlay compiles; not held: $fixtures fixture file(s) under other testdata directories"
+  if [ "$held" = 0 ]; then echo "git ls-files named no Go file outside testdata; the scan is broken, not the tree"; return 1; fi
+  if [ "$overlaid" = 0 ]; then echo "no tracked Go file under $overlaid_source_dir: the loopback harness is not where this step holds it"; return 1; fi
+  unformatted=$(cat "$work/gofmt-held" "$work/gofmt-overlaid" | tr '\n' '\0' | xargs -0 "$gofmt" -l)
   if [ -n "$unformatted" ]; then echo "gofmt would rewrite:"; echo "$unformatted"; return 1; fi
 }
 # every checkout, a CRLF one too: .gitattributes keeps *.go LF, and step 1 asserted it there
-run "gofmt over every tracked Go file outside testdata" gofmt_check
+run "gofmt over every tracked Go file that is source" gofmt_check
 
 # ---------------------------------------------------------------- 4. the modules
 # go_module <module file> <directory> [environment for go test...]
@@ -351,15 +366,20 @@ native() {
   composed=1
   receipt "$mod" compose "$(grep -vc '^#' sdk/cgo/.composed) core files"
   run "sdk/cgo: go mod verify" go -C "$dir" mod verify && receipt "$mod" verify
-  # go.mod is tidy over the composed tree WITHOUT the loopback harness, which only loopback.go.mod
-  # builds (it adds the message server); loopback.go.mod is tidy over all of it
-  hidden="$work/loopback_test_world.go"
-  mv sdk/cgo/loopback_test_world.go "$hidden"
-  run "sdk/cgo: go mod tidy -diff, the composed tree without the loopback harness" go -C "$dir" mod tidy -diff && receipt "$mod" tidy
-  mv "$hidden" sdk/cgo/loopback_test_world.go
-  hidden=""
-  run "sdk/cgo: go mod tidy -diff -modfile=loopback.go.mod" go -C "$dir" mod tidy -modfile=loopback.go.mod -diff &&
-    receipt sdk/cgo/loopback.go.mod tidy
+  # go.mod is tidy over the composed tree, which the loopback harness is not in: it sits under
+  # ctest/testdata, where go mod tidy does not read it (urnetwork/sdk a7b5db77). loopback.go.mod,
+  # which adds the message server the harness runs, is tidy over the tree WITH the harness laid in
+  # by its overlay. The control is the same command without the overlay: it must want to drop the
+  # message server, or the overlay is not what brings the harness's imports into the answer
+  run "sdk/cgo: go mod tidy -diff, the composed tree" go -C "$dir" mod tidy -diff && receipt "$mod" tidy
+  if go -C "$dir" mod tidy -modfile=loopback.go.mod -diff > "$work/loopback-tidy-control" 2>&1 ||
+    ! grep -q '^-.*github.com/urnetwork/message-server' "$work/loopback-tidy-control"; then
+    fail "sdk/cgo: the loopback tidy's control" "without -overlay, go mod tidy -modfile=loopback.go.mod does not ask to drop the message server, so the step below proves nothing about the harness"
+  else
+    run "sdk/cgo: go mod tidy -diff -modfile=loopback.go.mod, the harness laid in by its overlay" \
+      go -C "$dir" mod tidy -modfile=loopback.go.mod -overlay=ctest/loopback-overlay.json -diff &&
+      receipt sdk/cgo/loopback.go.mod tidy
+  fi
   # gen rewrites the tracked .def with LF line endings. When its content is the committed one, it is
   # checked out again, so a CRLF checkout is not left with a file git status calls modified; when it
   # is not, the regenerated file stays for the developer to read and commit
@@ -397,13 +417,13 @@ native() {
   run "sdk/cgo: go test ${race[*]:-} ./..." go -C "$dir" test -count=1 "${race[@]}" -timeout "$timeout" ./... && receipt "$mod" test "${race[*]:-norace}"
   receipt "$mod" protobuf "$(go -C "$dir" list -m -f '{{.Version}}' google.golang.org/protobuf)"
   if [ "$cc_ok" = 1 ]; then
-    # on every host: the loopback library builds with its modfile and tag and exports the harness,
-    # and the shipping library's header, built above, declares none of it
+    # on every host: the loopback library builds with its overlay, modfile and tag and exports the
+    # harness, and the shipping library's header, built above, declares none of it
     loopback_library() {
       local out="build/loopback/${library##*/}" exported shipped
       rm -rf "$dir/build/loopback"
       mkdir -p "$dir/build/loopback"
-      CGO_ENABLED=1 go -C "$dir" build -modfile=loopback.go.mod -tags urnet_message_loopback -buildmode=c-shared -o "$out" . || return 1
+      CGO_ENABLED=1 go -C "$dir" build -overlay=ctest/loopback-overlay.json -modfile=loopback.go.mod -tags urnet_message_loopback -buildmode=c-shared -o "$out" . || return 1
       if [ ! -f "$dir/$header" ]; then echo "the shipping library's header $dir/$header is not there"; return 1; fi
       exported=$(grep -cE '^extern .*\burnet_message_loopback_' "$dir/${out%.*}.h" || true)
       shipped=$(grep -cE 'urnet_message_loopback' "$dir/$header" || true)

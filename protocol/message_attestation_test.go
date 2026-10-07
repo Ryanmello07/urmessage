@@ -304,14 +304,27 @@ func TestNothingHereComputesTheAttestationPreimage(t *testing.T) {
 		reqAuthLabel:   nil,
 		epochKeysLabel: nil,
 	}
-	walked := 0
+	// A directory named testdata holds fixtures and is skipped, with one exception that is named:
+	// sdk/cgo/ctest/testdata holds the loopback harness, which a build overlay
+	// (sdk/cgo/ctest/loopback-overlay.json) compiles into the SDK's test library. urnetwork/sdk
+	// a7b5db77 moved it there from the cgo package's directory so that go mod tidy would not read it.
+	// It is source, so this walk reads it as it did before the move, and fails if it is not there
+	// to read; internal/layering holds the directory to what the overlay lays down, both ways.
+	const overlaidSourceDir = "sdk/cgo/ctest/testdata"
+	walked, overlaid := 0, []string{}
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if name := d.Name(); name == ".git" || name == "testdata" {
+			name := d.Name()
+			if name == ".git" {
 				return filepath.SkipDir
+			}
+			if name == "testdata" {
+				if within, relErr := filepath.Rel(root, path); relErr != nil || filepath.ToSlash(within) != overlaidSourceDir {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
@@ -328,6 +341,9 @@ func TestNothingHereComputesTheAttestationPreimage(t *testing.T) {
 			rel = path
 		}
 		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, overlaidSourceDir+"/") {
+			overlaid = append(overlaid, rel)
+		}
 		for label := range labels {
 			if strings.Contains(string(bs), label) {
 				labels[label] = append(labels[label], rel)
@@ -341,6 +357,10 @@ func TestNothingHereComputesTheAttestationPreimage(t *testing.T) {
 	if walked == 0 {
 		t.Fatal("walked no Go file at all, so every absence below is an absence of reading")
 	}
+	if len(overlaid) == 0 {
+		t.Errorf("walked no Go file under %s: the loopback harness, which a build overlay compiles, is not among the files the absence below is about", overlaidSourceDir)
+	}
+	t.Logf("of the %d Go files walked, %d are source under a directory named testdata that a build overlay compiles: %v", walked, len(overlaid), overlaid)
 	for _, label := range []string{attestLabel, writeAuthLabel, reqAuthLabel, epochKeysLabel} {
 		t.Logf("%-24s %v", label, labels[label])
 	}

@@ -11,8 +11,10 @@
 // before the split it also picked up the messaging exports, because they sat in its directory. They
 // sit here now, so this is the one place both halves are named together: the core's entries, read
 // off the core's own generated .def, and every //export of this directory's hand-written files that
-// is in a shipped build. The loopback harness (loopback_test_world.go, behind
-// `//go:build urnet_message_loopback`) is in none and contributes nothing.
+// is in a shipped build. The loopback harness is in none and contributes nothing, twice over: it sits
+// under ctest/testdata/, outside the directory this scan reads (a build overlay lays it into the test
+// library alone), and it keeps its `//go:build urnet_message_loopback` tag. Neither may let a test
+// export into a shipped library's .def, and gen's tests hold each by itself.
 //
 // The format is the core generator's: a comment line, LIBRARY and EXPORTS, then one tab-indented
 // name per line, sorted and without duplicates. gen's tests hold the committed file to this
