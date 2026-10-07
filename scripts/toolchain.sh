@@ -9,7 +9,7 @@
 # of the root go.mod, which mls/pins_test.go names too (TestPinnedToolchain reads the version that
 # built the test binary). A go.mod toolchain line is a MINIMUM. A host whose go command is newer
 # builds with the newer one and says nothing, and connect's own toolchain line moved to go1.27.1
-# (urnetwork/connect 062b333e) while every module's `go` line stayed at 1.26. So nothing here
+# (urnetwork/connect 062b333e) while no module's `go` line asks for more than 1.26. So nothing here
 # relies on the line: every build this repository makes sets GOTOOLCHAIN to the pin explicitly
 # (test.sh for the whole run, sdk/cgo/build.sh for the native library), and what a build wrote is
 # asked which toolchain built it.
@@ -27,7 +27,8 @@
 #
 # --self-test is the controls, and each must go its own way for its own reason:
 #   - --check accepts a go command that writes to stderr before it answers the pin (the first run on
-#     a host that fetches it), and refuses one that answers another release, by that answer;
+#     a host that fetches it), refuses one that answers another release, by that answer, and refuses
+#     one that cannot produce the pin at all, quoting what it said and naming the fix;
 #   - a program built under the pin is accepted;
 #   - a copy of it with the recorded version rewritten in place is refused, by that version;
 #   - the same program built under ANOTHER toolchain is refused, by that toolchain's version. The
@@ -172,13 +173,16 @@ EOF
   # --check itself, against a go command planted first on PATH. One that writes to stderr before it
   # answers the pin is accepted: that is the first run on a host that has to fetch the pin, which
   # this check refused until stderr stopped being read as the answer. One that answers another
-  # release is refused, by that answer.
-  local real_go
+  # release is refused, by that answer. One that cannot produce the pin at all, which is a host with
+  # no such release and no way to fetch it, is refused with its own words quoted and the fix named.
+  local real_go unavailable
   real_go=$(command -v go)
-  mkdir -p "$dir/chatty" "$dir/wrong"
+  unavailable="go: download $pinned: toolchain not available (planted by the control)"
+  mkdir -p "$dir/chatty" "$dir/wrong" "$dir/none"
   printf '%s\n' '#!/usr/bin/env bash' "echo 'go: downloading $pinned (a line on stderr, planted by the control)' >&2" "exec '$real_go' \"\$@\"" > "$dir/chatty/go"
   printf '%s\n' '#!/usr/bin/env bash' "if [ \"\${1:-} \${2:-}\" = 'env GOVERSION' ]; then echo $planted; exit 0; fi" "exec '$real_go' \"\$@\"" > "$dir/wrong/go"
-  chmod +x "$dir/chatty/go" "$dir/wrong/go"
+  printf '%s\n' '#!/usr/bin/env bash' "echo '$unavailable' >&2" 'exit 1' > "$dir/none/go"
+  chmod +x "$dir/chatty/go" "$dir/wrong/go" "$dir/none/go"
   if out=$(PATH="$dir/chatty:$PATH" bash "$0" --check 2>&1); then
     echo "  control: a go command that writes to stderr before it answers $pinned -> accepted, as it must"
   else
@@ -193,6 +197,16 @@ EOF
     echo "  control: a go command that answers $planted -> refused, as it must: $(printf '%s\n' "$out" | grep -F "answered '$planted'" | head -n 1)"
   else
     echo "  CONTROL BROKEN: a go command that answers $planted was refused without that answer being named"
+    printf '%s\n' "$out" | sed 's/^/    /'
+    failed=1
+  fi
+  if out=$(PATH="$dir/none:$PATH" bash "$0" --check 2>&1); then
+    echo "  CONTROL BROKEN: a go command that cannot produce $pinned was accepted"
+    failed=1
+  elif printf '%s\n' "$out" | grep -qF "$unavailable" && printf '%s\n' "$out" | grep -qF "install $pinned from https://go.dev/dl/"; then
+    echo "  control: a go command that cannot produce $pinned -> refused, as it must, with its words quoted and the fix named: $(printf '%s\n' "$out" | grep -F "exit status" | head -n 1)"
+  else
+    echo "  CONTROL BROKEN: a go command that cannot produce $pinned was refused without its words quoted, or without the fix named"
     printf '%s\n' "$out" | sed 's/^/    /'
     failed=1
   fi

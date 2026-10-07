@@ -108,8 +108,8 @@ tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run
 its vectors, known answers and guardrails are run, under one compiler: Go 1.26.5, the
 `toolchain` line of `go.mod`, which `mls/pins_test.go` holds every test binary to. That
 line is a minimum. A newer go command builds with itself and says nothing, and connect's
-own toolchain line has moved to go1.27.1 while every module's `go` line is still 1.26. So
-nothing here relies on the line:
+own toolchain line has moved to go1.27.1 while no module's `go` line asks for more than
+1.26. So nothing here relies on the line:
 
 - `./test.sh` reads the pin with [scripts/toolchain.sh](scripts/toolchain.sh), sets
   `GOTOOLCHAIN` to it for the whole run, and stops with the fix named when the host
