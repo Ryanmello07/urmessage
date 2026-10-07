@@ -1,0 +1,248 @@
+# FORK-ONLY. Runs a message ref's own test.sh on GitHub's runners, and re-runs the import's proof.
+#
+# WHY IT IS HERE. GitHub Actions is off for the urnetwork organization, and the urnetwork
+# repositories carry no workflow files: the maintainers build and test on their own hardware
+# (urnetwork/connect e8611390), and the message repository's test.sh is its whole run. So the pull
+# request to urnetwork/message carries no workflow either, and its CI evidence comes from this
+# fork. This file is on the fork's main only. Dispatch it with the branch (or commit) to test as
+# `ref`; `repository` is the repository that holds it.
+#
+# THERE IS NO CONTROL RUN ON UPSTREAM main. urnetwork/message main is one commit, the LICENSE: it
+# has no test.sh to run, so a failure here cannot be compared against upstream's own.
+#
+# WHAT IT DOES TO THE REF: nothing. The ref is checked out as `message`, the directory name its
+# modules' relative paths expect, and its own ./test.sh is run unmodified. test.sh clones the
+# siblings its scripts/siblings.txt pins beside the checkout (connect, the core SDK,
+# message-server, connect from before the removal, glog, gvisor, goidenticons), builds and tests
+# every module, and prints a verdict. No module or build cache is restored.
+#
+# THE LEGS, each on its own runner:
+#   linux            ubuntu, core.autocrlf=false, the Go release the ref's go.mod pins.
+#   linux-newer-go   the same, with the NEWEST stable Go on the runner instead. A go.mod toolchain
+#                    line never lowers the compiler, so a ref that does not force its pin builds
+#                    its cryptography with whatever is installed; this leg is the host on which
+#                    that would show. test.sh forces GOTOOLCHAIN to the pin, and its toolchain
+#                    control builds under the runner's own Go as the "other" toolchain.
+#   windows          Windows, core.autocrlf=true: the CRLF checkout the line-ending gates are
+#                    written for, the Windows native library, and the loopback library's C
+#                    consumer, which is a Windows program.
+#   provenance       docs/history/verify_split.py and docs/history/carried.py, with their controls,
+#                    from repositories fetched here: the import sources by commit from the forks
+#                    that hold them, upstream connect and sdk at main, and the two removal heads
+#                    the ref's scripts/siblings.txt pins. Each removal's base is the merge base of
+#                    its head and upstream main, and the content is measured at upstream main.
+#
+# Every leg uploads its full log.
+name: Fork CI - a message ref's own test.sh
+
+run-name: "fork-ci ${{ inputs.repository }}@${{ inputs.ref }} ${{ inputs.legs }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "message repository to test (owner/name)"
+        required: true
+        default: Ryanmello07/urmessage
+      ref:
+        description: "branch, tag or full commit of that repository"
+        required: true
+      legs:
+        description: "the legs to run, as a JSON list"
+        required: true
+        default: '["linux", "linux-newer-go", "windows", "provenance"]'
+      fuzztime:
+        description: "per fuzz target (test.sh's MESSAGE_TEST_FUZZTIME); 60s is the full run"
+        required: true
+        default: 60s
+
+permissions:
+  contents: read
+
+env:
+  MESSAGE_REPOSITORY: ${{ inputs.repository }}
+  MESSAGE_REF: ${{ inputs.ref }}
+
+jobs:
+  run:
+    name: ${{ matrix.leg }}
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJSON(inputs.legs) }}
+    runs-on: ${{ matrix.leg == 'windows' && 'windows-2022' || 'ubuntu-24.04' }}
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
+    env:
+      LEG: ${{ matrix.leg }}
+    steps:
+      # Each host's own default: false on linux, true on Windows, where it is what a contributor's
+      # clone has and what test.sh's line-ending gates are written for.
+      - name: Line endings as this host's git has them
+        run: |
+          if [ "$LEG" = windows ]; then git config --global core.autocrlf true; else git config --global core.autocrlf false; fi
+          git config --global core.longpaths true || true
+          echo "core.autocrlf=$(git config --global core.autocrlf)"
+
+      - name: Check out the ref as message
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          path: message
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The Go release the ref's go.mod pins
+        id: pin
+        run: |
+          pinned=$(tr -d '\r' < message/go.mod | sed -n 's/^toolchain[[:space:]]*go\([0-9][0-9A-Za-z.]*\)[[:space:]]*$/\1/p')
+          if [ -z "$pinned" ]; then echo "message/go.mod has no toolchain line"; exit 1; fi
+          echo "the ref pins go$pinned"
+          echo "version=$pinned" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go, the pinned release
+        if: matrix.leg != 'linux-newer-go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.pin.outputs.version }}
+          cache: false
+
+      - name: Set up Go, the newest stable release
+        if: matrix.leg == 'linux-newer-go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+
+      - name: What is being run, and on what
+        run: |
+          {
+            echo "### $LEG: $MESSAGE_REPOSITORY@$MESSAGE_REF"
+            echo
+            echo '```'
+            echo "message $(git -C message rev-parse HEAD)"
+            echo "the ref pins go${{ steps.pin.outputs.version }}; the runner's go command: $(go version)"
+            echo "core.autocrlf=$(git -C message config core.autocrlf); mls/GATES.md is checked out $(git -C message ls-files --eol -- mls/GATES.md | awk '{print $2}')"
+            echo "C compiler: $(gcc --version 2> /dev/null | head -n 1 || echo none)"
+            echo "$(nproc 2> /dev/null || echo ?) cpus, $(uname -sr)"
+            if [ -f message/scripts/siblings.txt ]; then
+              echo "the ref's sibling pins:"
+              grep -v '^#' message/scripts/siblings.txt | tr -d '\r' | grep . | sed 's/^/  /'
+            fi
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: test.sh
+        if: matrix.leg != 'provenance'
+        working-directory: message
+        env:
+          MESSAGE_TEST_FUZZTIME: ${{ inputs.fuzztime }}
+        run: |
+          # the runner starts this script with -e; a failing test.sh must reach the lines after it
+          set +e -uo pipefail
+          mkdir -p ../_logs
+          ./test.sh 2>&1 | tee ../_logs/test-sh.log
+          status=${PIPESTATUS[0]}
+          echo "$status" > ../_logs/test-sh.status
+          echo "test.sh exited $status"
+          exit "$status"
+
+      - name: The verdict, step by step
+        if: always() && matrix.leg != 'provenance'
+        run: |
+          set +e -uo pipefail
+          mkdir -p _logs
+          cd _logs
+          if [ ! -f test-sh.log ]; then echo "no test.sh log: the run stopped before test.sh" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          {
+            echo "test.sh exited **$(cat test-sh.status 2> /dev/null || echo unknown)**."
+            echo
+            echo '```'
+            # test.sh's own summary: every step with its result, what the run was narrower than, the verdict
+            awk '/^=+ summary$/ {seen = 1} seen' test-sh.log | tr -d '\r'
+            echo '```'
+            echo
+            echo "Siblings as test.sh found them:"
+            echo '```'
+            grep -E '^(PINNED|UNPINNED|MISSING|DIRTY|WRONG COMMIT|UNPINNABLE) ' test-sh.log | tr -d '\r'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          gzip -k test-sh.log
+
+      - name: The import's proof, re-run from fetched repositories
+        if: matrix.leg == 'provenance'
+        run: |
+          set +e -uo pipefail
+          mkdir -p _logs
+          log="$PWD/_logs/provenance.log"
+          : > "$log"
+          result=0
+          # pin <name>: the URL and the commit the ref's scripts/siblings.txt gives a sibling
+          pin() { grep -E "^$1[[:space:]]" message/scripts/siblings.txt | tr -d '\r' | awk '{print $2, $3}'; }
+          read -r connect_url connect_head <<< "$(pin connect)"
+          read -r sdk_url sdk_head <<< "$(pin sdk)"
+          echo "removal heads: connect $connect_head from $connect_url; sdk $sdk_head from $sdk_url" | tee -a "$log"
+          set -e
+          git init -q --bare connect-src.git
+          git -C connect-src.git fetch -q https://github.com/Ryanmello07/connect.git e449f7d8126c0b5748f5083392a8855bac877b32:refs/heads/main
+          git -C connect-src.git fetch -q https://github.com/urnetwork/connect.git 7ca8e222e3496552146f2d97eb09237401662c99:refs/remotes/upstream/control '+refs/heads/main:refs/remotes/upstream/main'
+          git -C connect-src.git fetch -q "$connect_url" "$connect_head:refs/remotes/removal/head"
+          git init -q --bare sdk-src.git
+          git -C sdk-src.git fetch -q https://github.com/Ryanmello07/urnetwork-sdk.git 6141b98d05bcac98d5ccae11c54c7748919017e6:refs/heads/main
+          git -C sdk-src.git fetch -q https://github.com/urnetwork/sdk.git '+refs/heads/main:refs/remotes/upstream/main'
+          git -C sdk-src.git fetch -q "$sdk_url" "$sdk_head:refs/remotes/removal/head"
+          set +e
+          connect_main=$(git -C connect-src.git rev-parse upstream/main)
+          sdk_main=$(git -C sdk-src.git rev-parse upstream/main)
+          connect_base=$(git -C connect-src.git merge-base removal/head upstream/main)
+          sdk_base=$(git -C sdk-src.git merge-base removal/head upstream/main)
+          {
+            echo "upstream connect main $connect_main; the connect removal merges main at $connect_base"
+            echo "upstream sdk main $sdk_main; the sdk removal merges main at $sdk_base"
+          } | tee -a "$log"
+          cd message
+          {
+            echo
+            echo "== verify_split.py"
+            python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol,sdk \
+              --connect ../connect-src.git --sdk ../sdk-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips \
+              --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt \
+              --commit-map connect-core=docs/history/connect-core-commit-map.txt \
+              --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt \
+              --commit-map sdk=docs/history/sdk-commit-map.txt --manifest docs/history/adaptations.tsv
+            echo "verify_split.py exited $?"
+          } 2>&1 | tee -a "$log"
+          tail -n 3 "$log" | grep -q '^verify_split.py exited 0$' || result=1
+          {
+            echo
+            echo "== carried.py"
+            python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv --controls \
+              --removal "connect=../connect-src.git:$connect_base..removal/head@upstream/main" \
+              --removal "sdk=../sdk-src.git:$sdk_base..removal/head@upstream/main"
+            echo "carried.py exited $?"
+          } 2>&1 | tee -a "$log"
+          tail -n 3 "$log" | grep -q '^carried.py exited 0$' || result=1
+          {
+            echo "verify_split.py and carried.py: $([ "$result" = 0 ] && echo both PASS || echo NOT both PASS)"
+            echo
+            echo '```'
+            grep -E '^(removal heads|upstream |verify_split.py exited|carried.py exited|PASS|FAIL)' "$log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          gzip -k "$log"
+          exit "$result"
+
+      - name: Keep the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-ci-${{ matrix.leg }}
+          if-no-files-found: ignore
+          path: |
+            _logs/test-sh.log.gz
+            _logs/test-sh.status
+            _logs/provenance.log.gz
