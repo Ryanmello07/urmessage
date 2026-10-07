@@ -104,9 +104,10 @@ and message, and changes its id, so each import publishes a commit map: one
 
 - Source: P_sdk, `Ryanmello07/urnetwork-sdk` `6141b98d05bcac98d5ccae11c54c7748919017e6`,
   the fork's `beta/message` after the sync that merged upstream `urnetwork/sdk`; the fork tags
-  it `split/source-sdk-3`. It differs from upstream `main` (`b8e0da26`) in five of the 148
-  files: the three tunnel files carry the fork's 1 s establish hold (the owner's ruling
-  "Build the 1 s hold", 2026-10-04), and the loopback modfiles' indirect requirements.
+  it `split/source-sdk-3`. It differs from upstream `main` as it was then (`b8e0da26`) in five
+  of the 148 files: the three tunnel files carry the fork's 1 s establish hold (the owner's
+  ruling "Build the 1 s hold", 2026-10-04), and the loopback modfiles' indirect requirements,
+  which upstream has since added itself (`a7b5db77`).
 - Filter: [sdk-paths.stage3.txt](history/sdk-paths.stage3.txt): the root `message*.go` files,
   `urmessage/`, `cp3b/`, `livepeer/`, `liveprobe/` and the messaging cgo files, each renamed
   under `sdk/`; `cgo/gen/manual_exports_test.go` stays in the core SDK. A second pass removes
@@ -137,18 +138,31 @@ The imports are projections of fork commits, `e449f7d8` and `6141b98d`, and the 
 requests delete the same paths from later upstream commits. Two kinds of difference sit between
 the two, and [ported.tsv](history/ported.tsv) declares every one of them.
 
-**Upstream changed connect paths after `e449f7d8`.** The maintainer's two commits are ported
-here, each as one commit with its original author, author date and message, followed by
+**Upstream changed imported paths after the imports' sources.** Each upstream commit is ported
+here as one commit with its original author, author date and message, followed by
 `(cherry picked from commit ...)` and a port note:
 
 | Upstream commit | Paths here | Port |
 |---|---|---|
-| `54b5b106` Bitprecipice, 2026-10-05, "Fix transfer custody and persistent TCP collapse admission" | `message/record_test.go` (the reviewed SDK contexts of the record gate, `TestJoinSDKPacketAndPoolContexts`), and the five fixtures under `message/testdata/reviewed-sdk/` | `3a22cd99` |
-| `e8611390` Bitprecipice, 2026-10-06, "Remove the GitHub workflows" | `mls/hpke_fuzz_test.go`, `syntax/fuzz_test.go`, `syntax/layering_test.go` (its two workflow tests), and the codec's workflow, deleted | `4be82ed6` |
-| `f5e1aa1f` Bitprecipice, 2026-10-06, "Require deterministic root cause tests for every bug fix" | `CODESTYLE.md`, which connect keeps too: the two copies are kept in step | `d749b68d` |
+| connect `54b5b106` Bitprecipice, 2026-10-05, "Fix transfer custody and persistent TCP collapse admission" | `message/record_test.go` (the reviewed SDK contexts of the record gate, `TestJoinSDKPacketAndPoolContexts`), and the five fixtures under `message/testdata/reviewed-sdk/` | `3a22cd99` |
+| connect `e8611390` Bitprecipice, 2026-10-06, "Remove the GitHub workflows" | `mls/hpke_fuzz_test.go`, `syntax/fuzz_test.go`, `syntax/layering_test.go` (its two workflow tests), and the codec's workflow, deleted | `4be82ed6` |
+| connect `f5e1aa1f` Bitprecipice, 2026-10-06, "Require deterministic root cause tests for every bug fix" | `CODESTYLE.md`, which connect keeps too: the two copies are kept in step | `d749b68d` |
+| connect `03d82b4e`, `bbe2d568`, `48405dff`, `a3bb8775` Bitprecipice, 2026-10-06: the section "Packet flow and durable state", added and then rewritten three times | `CODESTYLE.md` | `3849bdef`, `fb6ecbc1`, `2a193955`, `de8d5c5e`, one for one |
+| sdk `a7b5db77` Product Builder, 2026-10-06, "Isolate C ABI loopback dependencies from release modules" | the loopback harness, moved to `sdk/cgo/ctest/testdata/`; `sdk/cgo/ctest/loopback-overlay.json`, which lays it back into the package for the test library; `sdk/cgo/ctest/run.sh`; `sdk/cgo/gen/loopback_module_test.go` | `966b77f2` |
 
 The merge of connect#216 (`94453d74`) changed no imported path beyond what `e8611390` then
-removed: the codec workflow's trigger and its needle.
+removed: the codec workflow's trigger and its needle. The merge `89f66cda` brought `f5e1aa1f`
+and `03d82b4e` together in connect, and changes `CODESTYLE.md` against each of its parents.
+
+Two upstream changes needed no commit here, and ported.tsv says why each one stands:
+
+| Upstream commit | Path there | Why nothing was carried |
+|---|---|---|
+| sdk `a7b5db77` | `cgo/loopback.go.mod`, `cgo/loopback.go.sum`: three indirect requirements | The import already held them, from the fork's `2dc9bf77` (`port-in-source`). |
+| sdk `06f33802` Product Builder, 2026-10-06, "Generate runtime license JSON to avoid linking the YAML parser" | `message_stream_adapter_test.go`: one row of the value census renamed, `licenseYml` to `licenseJSON` | The row names a core SDK value. The census here holds this package's values alone ([3-scope.md](history/3-scope.md)), so the row is among the lines this repository removed (`port-void`). |
+
+`a7b5db77` moved the harness, so the gates that skip `testdata` read that one directory by
+name; [3-scope.md](history/3-scope.md), section 5, has each of them before and after.
 
 **The fork carries changes upstream never had.** These commits are reachable only from the
 forks, so re-running the verifier fetches from `Ryanmello07/connect` (tag
@@ -162,7 +176,7 @@ tags are what keep this proof reproducible; neither fork is protected by a rules
 | `c71bb73b` | sdk | per-peer encryption OPPORTUNISTIC, not REQUIRED (the owner's ruling of 2026-10-04): `message_route.go`, `message_tunnel.go`, `message_tunnel_test.go` |
 | `d20d82c1` | sdk | the 1 s establish hold on every window client (the owner's second ruling of 2026-10-04): the same three files |
 | `f370a732` | sdk | the SX-0 sync merge of upstream `0c6462f2` |
-| `2dc9bf77` | sdk | the loopback modfile's indirect requirements for upstream connect's uTLS dial: `cgo/loopback.go.mod`, `cgo/loopback.go.sum` |
+| `2dc9bf77` | sdk | the loopback modfile's indirect requirements for upstream connect's uTLS dial: `cgo/loopback.go.mod`, `cgo/loopback.go.sum`. Upstream made the same change afterwards, in `a7b5db77` |
 
 The tunnel's hold and OPPORTUNISTIC were never reviewed upstream; the message pull request
 names them at its top.
@@ -172,11 +186,34 @@ from its base, and holds this tip to them: every deleted path is here (or declar
 the manifest), the tip contains every upstream change to it since the merge base of the
 import's source and the removal's base (a three-way merge that changes nothing), and every
 upstream change and fork-only change is declared in ported.tsv, both ways. Its control is the
-tip the review measured, `f3f8f2bd`, before the ports, where it fails for exactly the ten
-ported paths. An imported path is one the import specs (the `*-paths*.txt` files) select, and a
+tip the review measured, `f3f8f2bd`, before the ports, where it fails for exactly the ported
+paths. An imported path is one the import specs (the `*-paths*.txt` files) select, and a
 file upstream adds later under a directory an import took whole is one too: carried.py holds its
 projections to the specs, so a directory that verify_split.py projects through the files it held
 at the source (the sdk's `cgo/ctest/`) still has what upstream adds there measured.
+
+Three more rules came with `a7b5db77` and `06f33802`, each with a control against the design it
+replaces:
+
+- **A path upstream moved.** The harness is a deletion at its old path and a new file at its new
+  one, and a new file has no merge base, so an adapted copy could only conflict with it.
+  carried.py measures the new path against the old path's blob at the merge base, taking the
+  lineage from this repository's own manifest (the rename row verify_split.py holds to the
+  import's bytes) and checking that upstream's commits which removed the one are among those
+  that added the other. With no lineage it fails for exactly that path.
+- **A file upstream added outside every imported directory**, which the removal deletes and this
+  repository carries (`cgo/gen/loopback_module_test.go`), has a row in carried.py's `ADDED`. It
+  must be absent from the import's source and present upstream; with the row dropped, nothing
+  projects the path and the removal's deletion of it is reported.
+- **An upstream change to lines this repository removed** (`port-void`). The three-way merge
+  conflicts, and is accepted only when every conflict's side here is empty and the merge taken
+  this side's way is the tip byte for byte, so every other upstream change is in the tip. The
+  lines not carried are printed. A line the tip kept, a line it changed its own way, and a
+  second upstream change outside the removed region are each refused.
+
+The kind of a row is what carried.py measures, not what the row says: an upstream change the
+import's source already held is `port-in-source` and names no commit here, and a `port` row must
+name a commit of this repository that changes the path.
 
 ## Re-running the verifier
 
@@ -209,23 +246,26 @@ the source file one change earlier, and synthetic changes to the expected tree.
 import; the sdk side's control is `d20d82c1`, the fork's `beta/message` before its sync, which
 the fetch of `6141b98d` brings with its history.
 
-The removals' deletions, against each removal pull request's base and head (fetch those into
-the same two repositories first; the bases below are the ones measured, and the check is re-run
-against the final ones before the removals merge):
+The removals' deletions, against each removal pull request's base and head. Fetch those into
+the same two repositories first. A removal's base is the upstream `main` commit its branch last
+merged, which is the merge base of its head and `main`. Its head is the commit
+[scripts/siblings.txt](../scripts/siblings.txt) pins for that sibling, fetched from the URL
+given there: the owner's fork until the pull request has merged, the urnetwork repository after.
 
-    git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git <connect removal base>:refs/remotes/upstream/removal-base <connect removal head>:refs/remotes/upstream/removal-head
-    git -C ../sdk-src.git fetch https://github.com/urnetwork/sdk.git <sdk removal base>:refs/remotes/upstream/removal-base <sdk removal head>:refs/remotes/upstream/removal-head
-    python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv --controls --removal connect=../connect-src.git:upstream/removal-base..upstream/removal-head --removal sdk=../sdk-src.git:upstream/removal-base..upstream/removal-head
+    git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git main:refs/remotes/upstream/main
+    git -C ../connect-src.git fetch <connect's URL in scripts/siblings.txt> <connect's pin>:refs/remotes/removal/head
+    git -C ../sdk-src.git fetch https://github.com/urnetwork/sdk.git main:refs/remotes/upstream/main
+    git -C ../sdk-src.git fetch <sdk's URL in scripts/siblings.txt> <sdk's pin>:refs/remotes/removal/head
+    python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv --controls \
+        --removal connect=../connect-src.git:$(git -C ../connect-src.git merge-base removal/head upstream/main)..removal/head@upstream/main \
+        --removal sdk=../sdk-src.git:$(git -C ../sdk-src.git merge-base removal/head upstream/main)..removal/head@upstream/main
 
-It must end with `PASS`. A suffix `@<commit>` on a removal measures the content against that
-upstream commit instead of the removal's base, the newest `main` say, so a change upstream made
+It must end with `PASS`. The suffix `@<commit>` on a removal measures the content against that
+upstream commit instead of the removal's base, the newest `main` here, so a change upstream made
 after the removal's base is caught before the removal merges it; a ported.tsv row whose commits
-that upstream does not yet hold is printed as ahead of it. Measured on 2026-10-06: connect
-`ca2562ba..41076bc4` (848 deletions) and sdk `364fcb2d..1945759a` (148 deletions) pass at their
-bases, and connect passes again at the newest `main`, `42552157`. At the newest sdk `main`,
-`a7b5db77`, it fails for that commit alone: made after the sdk removal's base, it moves the
-loopback harness to `cgo/ctest/testdata/` behind an overlay, and neither the sdk removal nor this
-repository carries it yet.
+that upstream does not yet hold is printed as ahead of it. Measured on 2026-10-06, with the
+controls: connect `6df2fa87..0f2ff669` (848 deletions) against `main` at `511ee2cf`, and sdk
+`06f33802..0f03e27e` (150 deletions) against `main` at `06f33802`, both `PASS`.
 
 ## Files in docs/history
 
@@ -259,6 +299,9 @@ repository carries it yet.
 ## Changes in connect and the core SDK until the removals merge
 
 An earlier version of this file said the source copies were frozen once imported. Nothing held
-that, and upstream changed two connect paths after the import's source. The copies change until
-the removal pull requests merge, and changes made there have to arrive here: carried.py is the
-check, and ported.tsv the record. After the removals merge, the paths exist only here.
+that, and upstream has changed imported paths in nine commits since the imports' sources (the
+tables above). The
+copies change until the removal pull requests merge, and changes made there have to arrive here:
+carried.py is the check, and ported.tsv the record. After the removals merge, the paths exist
+only here, except `CODESTYLE.md`, which connect keeps: its two copies stay the maintainers' to
+keep in step.
