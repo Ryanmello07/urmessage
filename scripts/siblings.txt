@@ -1,29 +1,43 @@
 # The sibling checkouts this repository builds and tests against, each at ONE pinned commit.
 # test.sh places them beside the repository (scripts/siblings.sh clones a missing one) and refuses a
 # sibling at any other commit; scripts/siblings.sh refuses an unpinned name, a short or symbolic
-# commit and a URL outside https://github.com/urnetwork/. Bump a pin in its own commit.
+# commit, and a fetch source that is neither https://github.com/urnetwork/ nor one of the review
+# sources it lists. Bump a pin in its own commit.
 # name  url  commit
+#
+# THREE OF THESE PINS ARE PULL REQUEST HEADS, FETCHED FROM THE OWNER'S FORKS UNTIL THEY MERGE. This
+# repository is one of a set: the removal of messaging from urnetwork/sdk, the removal from
+# urnetwork/connect, this import, and message-server's switch to these packages. They are built and
+# tested together, so each pins the others' heads, and those heads are on the forks the pull requests
+# come from. The pin is the commit, which no fetch source can change. When a pull request has merged
+# (with a merge commit, so its head keeps its id), switch that line's URL to the urnetwork
+# repository named in its comment and delete the fork from scripts/siblings.sh's review sources;
+# until then test.sh's verdict names each such sibling.
 #
 # connect: the transport. The SDK module (sdk/go.mod), the native composition (sdk/cgo/go.mod), the
 # commands and the acceptance suite build against it, and protocol's code-point names test reads its
-# frame.proto as text. Pinned to the HEAD OF THE CONNECT PULL REQUEST THAT REMOVES MESSAGING from
-# connect and adds connect.NewOperatorClientSettings, which sdk/message_tunnel.go calls. A connect
+# frame.proto as text. Pinned to the head of the connect pull request that removes messaging from
+# connect and adds connect.NewOperatorClientSettings, which sdk/message_tunnel.go calls: branch
+# upstream/remove-message of the fork, which merges urnetwork/connect main at 6df2fa87. A connect
 # still carrying message.proto would register the schema twice in every binary here, which protobuf
-# refuses at init. PLACEHOLDER until that pull request's head is filled in: siblings.sh refuses it.
-connect https://github.com/urnetwork/connect.git FILL_IN_THE_CONNECT_REMOVAL_PR_HEAD_SHA
+# refuses at init. After the merge: https://github.com/urnetwork/connect.git.
+connect https://github.com/Ryanmello07/connect.git 0f2ff66907f2c5fae735c45f687e598568ae85c4
 #
 # sdk: the core SDK. sdk/cgo/compose.sh lays its cgo package main under sdk/cgo to build the one
 # native library both halves ship in, and the record gate (message/record_test.go) scans it whole,
-# with the reviewed TCP/IP contexts of urnetwork/connect 54b5b106. Pinned to the HEAD OF THE SDK PULL
-# REQUEST THAT REMOVES MESSAGING from the core SDK; compose.sh refuses a core that still carries the
-# messaging half. PLACEHOLDER, as above.
-sdk https://github.com/urnetwork/sdk.git FILL_IN_THE_SDK_REMOVAL_PR_HEAD_SHA
+# with the reviewed TCP/IP contexts of urnetwork/connect 54b5b106. Pinned to the head of the sdk
+# pull request that removes messaging from the core SDK: branch upstream/remove-message of the fork,
+# which merges urnetwork/sdk main at 06f33802. compose.sh refuses a core that still carries the
+# messaging half. After the merge: https://github.com/urnetwork/sdk.git.
+sdk https://github.com/Ryanmello07/urnetwork-sdk.git 0f03e27e1482a4e77811c5982005c853b5a7b1ca
 #
 # message-server: the server half. sdk/cp3b (the cross-process acceptance suite) and the loopback
 # library (sdk/cgo/loopback.go.mod, run by sdk/cgo/ctest/run.sh) run it in process. Pinned to the
-# HEAD OF THE MESSAGE-SERVER PULL REQUEST THAT SWITCHES IT TO THIS REPOSITORY'S PACKAGES: before the
-# switch it imports connect's copies, which the connect removal deletes. PLACEHOLDER, as above.
-message-server https://github.com/urnetwork/message-server.git FILL_IN_THE_MESSAGE_SERVER_SWITCH_PR_HEAD_SHA
+# head of the message-server branch that switches it to this repository's packages
+# (split/use-message-repo): before the switch it imports connect's copies, which the connect removal
+# deletes. That branch pins this repository in turn, so the two pins are settled together when its
+# pull request opens. After the merge: https://github.com/urnetwork/message-server.git.
+message-server https://github.com/Ryanmello07/urnetwork-message-server.git ee23a490fb615e4a44a626beb87aff81b57bda69
 #
 # connect-golden: urnetwork/connect from BEFORE the messaging schema left it (the merge of #217,
 # 2026-10-05 09:10Z; protocol/message.pb.go is the copy this repository's was regenerated from).
@@ -34,7 +48,9 @@ connect-golden https://github.com/urnetwork/connect.git 92a657fadab90293b86703dd
 #
 # glog, gvisor and goidenticons: what connect and the core SDK replace by path, which their own
 # go.mod files cannot do for this repository's modules. gvisor's commit is on urnetwork/gvisor's
-# default branch, go.
+# default branch, go. glog's master has since moved to fe810311 and goidenticons' main to e94d6357
+# (the removal of its workflow); each pin moves in a commit of its own, with the run that shows the
+# set still builds and passes.
 glog https://github.com/urnetwork/glog.git 80a11b434ae90ae2221deb932daa21913919875a
 gvisor https://github.com/urnetwork/gvisor.git c0783dba2eeff7b79692a7f122ffee5f8bd837c1
 goidenticons https://github.com/urnetwork/goidenticons.git 06eb779a691e056be7dc5fa9a0239001c3ea390f

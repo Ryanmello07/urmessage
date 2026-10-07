@@ -9,7 +9,8 @@
 # runs, in this order:
 #
 #   1. the siblings beside the repository at the commits scripts/siblings.txt pins (a missing one is
-#      cloned), and the checkout's line endings;
+#      cloned; a pin fetched from a fork, a pull request head, is named in the verdict), the pin
+#      script's own controls, and the checkout's line endings;
 #   2. the module census's own controls, and its rows against the tree;
 #   3. formatting: gofmt over every tracked Go file that is source (fixtures under testdata are not;
 #      the loopback harness, which a build overlay compiles from under one, is);
@@ -106,6 +107,7 @@ echo "$(go version); $goos/$goarch; C compiler: $([ "$cc_ok" = 1 ] && go env CC 
 receipt host goos "$goos"
 
 # ---------------------------------------------------------------- 1. siblings and line endings
+run "sibling pins: the script's own controls" bash scripts/siblings.sh --self-test
 siblings=(connect connect-golden sdk message-server glog gvisor goidenticons)
 for name in "${siblings[@]}"; do
   if [ ! -e "../$name" ]; then
@@ -116,8 +118,14 @@ sibling_report=$(bash scripts/siblings.sh --verify "${siblings[@]}")
 sibling_status=$?
 echo "$sibling_report"
 if [ "$sibling_status" = 0 ]; then pass "siblings at their pins"; else fail "siblings at their pins" "see above"; fi
+# What the pinned run is narrower by, named in the verdict: a sibling accepted at some other commit,
+# and a sibling whose pin is a pull request head fetched from a fork (scripts/siblings.sh's review
+# sources), which is a commit the urnetwork repository does not hold until that pull request merges
 while read -r state name rest; do
   if [ "$state" = UNPINNED ]; then narrowings+=("sibling $name is UNPINNED: $rest"); fi
+  case "$state $rest" in
+    "PINNED "*" FORK "*) narrowings+=("sibling $name is pinned to ${rest%% *}, a pull request head fetched from a fork (${rest##* FORK }): urnetwork's own repository holds it once that pull request merges") ;;
+  esac
 done <<< "$sibling_report"
 
 # Line endings are read from git's own record of the working tree (`git ls-files --eol`), not by
