@@ -57,8 +57,8 @@
 #                          Each worker is a process of its own: a 24-core Windows host whose page
 #                          file could not grow ran out of commit memory in a fuzz leg
 #   MESSAGE_TEST_TIMEOUT   per go test invocation (default 3h)
-#   PROTOC                 a protoc 35.1 binary, when none is on PATH (linux x86-64 fetches the
-#                          pinned release by digest itself)
+#   PROTOC                 a protoc 35.1 binary, when none is on PATH (linux and Windows on x86-64
+#                          fetch the pinned release by digest themselves)
 #   WARP_VERSION           the SDK version the native library reports (default 0.0.0-test)
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -347,24 +347,40 @@ wiregolden
 # protocol/message.pb.go is generated once from message.proto by the pinned pair; regenerated here
 # into a scratch directory and compared, so the committed Go can be neither hand-edited nor stale
 regenerate() {
-  local protoc="" gen="" cache zip
+  local protoc="" gen="" cache zip="" digest="" binary=protoc py
   cache="${XDG_CACHE_HOME:-$HOME/.cache}/urnetwork-message"
   for candidate in "${PROTOC:-}" "$(command -v protoc 2> /dev/null)"; do
     if [ -n "$candidate" ] && "$candidate" --version 2> /dev/null | tr -d '\r' | grep -qx 'libprotoc 35.1'; then protoc=$candidate; break; fi
   done
-  if [ -z "$protoc" ] && [ "$goos/$goarch" = linux/amd64 ]; then
-    zip=protoc-35.1-linux-x86_64.zip
+  # no protoc 35.1 on the host: the release's own archive for it, fetched once and held to its
+  # digest, on the two hosts the full run is made of
+  if [ -z "$protoc" ]; then
+    case "$goos/$goarch" in
+      linux/amd64) zip=protoc-35.1-linux-x86_64.zip; digest=6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7 ;;
+      windows/amd64) zip=protoc-35.1-win64.zip; digest=5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082; binary=protoc.exe ;;
+    esac
+  fi
+  if [ -n "$zip" ]; then
+    # unzip where there is one, python's zipfile where there is not (a stock Ubuntu server has none)
+    unpack() {
+      if command -v unzip > /dev/null 2>&1; then unzip -oq "$1" -d "$2"; return; fi
+      for py in python3 python; do
+        if command -v "$py" > /dev/null 2>&1; then "$py" -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$1" "$2"; return; fi
+      done
+      echo "neither unzip nor python is on PATH to unpack $1"
+      return 1
+    }
     mkdir -p "$cache/protoc-35.1"
-    if [ ! -x "$cache/protoc-35.1/bin/protoc" ]; then
+    if [ ! -x "$cache/protoc-35.1/bin/$binary" ]; then
       curl -fsSLo "$cache/$zip" "https://github.com/protocolbuffers/protobuf/releases/download/v35.1/$zip" &&
-        echo "6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7  $cache/$zip" | sha256sum -c - &&
-        python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$cache/$zip" "$cache/protoc-35.1" &&
-        chmod +x "$cache/protoc-35.1/bin/protoc"
+        echo "$digest  $cache/$zip" | sha256sum -c - &&
+        unpack "$cache/$zip" "$cache/protoc-35.1" &&
+        chmod +x "$cache/protoc-35.1/bin/$binary"
     fi
-    if "$cache/protoc-35.1/bin/protoc" --version 2> /dev/null | tr -d '\r' | grep -qx 'libprotoc 35.1'; then protoc="$cache/protoc-35.1/bin/protoc"; fi
+    if "$cache/protoc-35.1/bin/$binary" --version 2> /dev/null | tr -d '\r' | grep -qx 'libprotoc 35.1'; then protoc="$cache/protoc-35.1/bin/$binary"; fi
   fi
   if [ -z "$protoc" ]; then
-    skip "protocol: regenerate message.pb.go" "no protoc 35.1 on this host (set PROTOC; linux x86-64 fetches it)"
+    skip "protocol: regenerate message.pb.go" "no protoc 35.1 on this host (set PROTOC; linux and Windows on x86-64 fetch it)"
     return
   fi
   for candidate in "$(dirname "$protoc")/protoc-gen-go" "$(dirname "$protoc")/protoc-gen-go.exe" "$(command -v protoc-gen-go 2> /dev/null)" "$cache/gobin/protoc-gen-go" "$cache/gobin/protoc-gen-go.exe"; do
