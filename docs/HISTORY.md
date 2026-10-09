@@ -12,6 +12,15 @@ and message, and changes its id, so each import publishes a commit map: one
 
 `0d697b0a07fbdee660a90d995c1255673a056bba`: the repository's first commit, `LICENSE`.
 
+The tip's `LICENSE` is not the base's. On 2026-10-09, three minutes after the import merged, the
+repository's owner changed its copyright line on `main`, in
+`b2da8432fb9114ef71daab63971a90d0d2ec0a36`: `Copyright (c) 2023 UR Foundation` became
+`Copyright (c) 2024 BringYour, Inc.`. No other byte differs, and the file is now the core SDK's
+`LICENSE` byte for byte (blob `4b028936` here and at urnetwork/sdk `679a836a`).
+[adaptations.tsv](history/adaptations.tsv) declares it as the `edit` of a base path: the row pins
+the new bytes and names that commit, and the verifier asks the history whether it is the commit
+that changed the file (revision 6, below).
+
 ## Imports
 
 | Stage | Imported | Source | Filtered tip | Commits | Paths | Import merge |
@@ -249,7 +258,9 @@ name a commit of this repository that changes the path.
   changes an imported path is missing; the published commit map equals the computed
   one, both ways;
 - **E:** every other path of the tip is declared in
-  [adaptations.tsv](history/adaptations.tsv), and every declaration is needed.
+  [adaptations.tsv](history/adaptations.tsv), and every declaration is needed. A path of the
+  base that the tip holds with other bytes is declared too, and its row names every commit that
+  changed it since the base (`LICENSE`, by `b2da8432`).
 
 It reads repositories only, and never checks out a file. From the root of a
 checkout:
@@ -262,7 +273,12 @@ checkout:
     python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol,sdk --connect ../connect-src.git --sdk ../sdk-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt --commit-map connect-core=docs/history/connect-core-commit-map.txt --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt --commit-map sdk=docs/history/sdk-commit-map.txt --manifest docs/history/adaptations.tsv
 
 It must end with `PASS`. `--controls` also runs negative controls that must fire:
-the source file one change earlier, and synthetic changes to the expected tree.
+the source file one change earlier, and synthetic changes to the expected tree. For the
+changed base path it runs part E four more times over the same tip, with the `LICENSE` row
+dropped, with its pin replaced by the base's digest, with `b2da8432` taken out of its reason,
+and with the base's bytes in the tip again; each must fail for `LICENSE` alone, for its own
+reason. The first of the four is what `main` printed between the owner's commit and this
+declaration: `E: LICENSE differs from base and is not declared`.
 `7ca8e222`, an earlier `urnetwork/connect` `main`, is the control for the stage 2a
 import; the sdk side's control is `d20d82c1`, the fork's `beta/message` before its sync, which
 the fetch of `6141b98d` brings with its history.
@@ -305,8 +321,13 @@ head (`812df82f..af5666ed`): the same 150 deletions either way.
 
 ## Files in docs/history
 
-- `verify_split.py`: the verifier, revision 5, sha256
-  `53fc3bc32c1fd879b25d19d09293d78bd26c3fef00cd86670bab74d451605bbe`. Revision 5 adds one rule: a
+- `verify_split.py`: the verifier, revision 6, sha256
+  `352ac42a85c13f6351875cbf43dd8a5798082fa2ab30e0cd97e0e9a8df465299`. Revision 6 adds one rule and
+  its four controls: the `edit` row of a base path names every commit that changed the path since
+  the base, which the verifier reads from the history (`LICENSE`, the owner's `b2da8432`). On a
+  tip whose base paths are unchanged its output is revision 5's line for line, measured at
+  `07704991`, the import's merge. Revision 5 (sha256
+  `53fc3bc32c1fd879b25d19d09293d78bd26c3fef00cd86670bab74d451605bbe`) added one rule: a
   rename row whose target the tip does not hold fails, where it passed as a declaration before; a
   path renamed on import and later deleted is a `delete` row. Revision 4 (sha256
   `ed620472a7656e889f1f25b9fd50094b9282f312d433f16d87f391cf99106e7e`) verified stage 3. Stages 1 and 2 were
@@ -324,9 +345,9 @@ head (`812df82f..af5666ed`): the same 150 deletions either way.
 - `sdk-paths.stage3.txt`, `sdk-commit-map.txt`: the same for stage 3.
 - `2a-scope.md`: stage 2a's scope record.
 - `3-scope.md`: stage 3's.
-- `adaptations.tsv`: every path of the tip that is neither imported unchanged nor
-  part of the base, with its reason and, for a new or edited file, the sha256 of its
-  bytes. It declares itself as `manifest`.
+- `adaptations.tsv`: every path of the tip that is neither imported unchanged nor an
+  unchanged path of the base, with its reason and, for a new or edited file, the sha256 of
+  its bytes. It declares itself as `manifest`.
 - `verified-tips.txt`: every tip the verifier passed, oldest first.
 - `carried.py`: the removals' deletions held to this tip (above).
 - `ported.tsv`: every upstream change after an import's source carried here, every path upstream
