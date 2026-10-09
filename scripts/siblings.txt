@@ -28,7 +28,7 @@
 # connect still carrying message.proto would register the schema twice in every binary here, which
 # protobuf refuses at init, and connect main carries it until that pull request merges: until then
 # nothing here is built beside connect main. After the merge: https://github.com/urnetwork/connect.git.
-connect https://github.com/urnetwork/connect.git 0f2ff66907f2c5fae735c45f687e598568ae85c4
+connect https://github.com/urnetwork/connect.git 847460bba8aa31fb2e86ce007e9d5443d884544b
 #
 # sdk: the core SDK. sdk/cgo/compose.sh lays its cgo package main under sdk/cgo to build the one
 # native library both halves ship in, and the record gate (message/record_test.go) scans it whole,
