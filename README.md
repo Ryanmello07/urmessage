@@ -15,13 +15,16 @@ build and test on their own hardware).
 
 ## Layout and status
 
-Status: stages 1, 2a, 2b and 3 are imported, with their history. The import merged on
-2026-10-09, as the merge commit `07704991`, before the connect and core SDK pull requests that
-remove the moved code from those repositories, so the code is in its new home before anything
-is deleted. Until connect's removal has merged, build this repository only beside the connect
-commit [scripts/siblings.txt](scripts/siblings.txt) pins, never beside connect `main`: `main`
-still registers `message.proto`, and a binary that links both copies stops at init. See
-[docs/HISTORY.md](docs/HISTORY.md).
+Status: stages 1, 2a, 2b and 3 are imported, with their history, and the move is complete.
+Every pull request of the set merged on 2026-10-09, each with a merge commit: the import here
+(`07704991`), message-server's switch to these packages (urnetwork/message-server
+`e9eae67a`), and the removals of the moved code from the core SDK (urnetwork/sdk `b8209d9d`)
+and from connect (urnetwork/connect `847460bb`). The import merged first, so the code was in
+its new home before anything was deleted. [scripts/siblings.txt](scripts/siblings.txt) pins
+those three merge commits, and this repository builds and tests beside connect `main` and core
+SDK `main` as they stood there. Do not build it beside a connect from before `847460bb`: that
+connect still registers `message.proto`, and a binary that links both copies stops at init.
+See [docs/HISTORY.md](docs/HISTORY.md).
 
 | Path | Contents | Comes from | Stage |
 |---|---|---|---|
@@ -75,12 +78,11 @@ tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run
 - `./test.sh` runs everything else too, and requires the siblings at the commits
   [scripts/siblings.txt](scripts/siblings.txt) pins, cloning a missing one beside the
   checkout: connect, the core SDK, message-server, connect from before the removal, glog,
-  gvisor and goidenticons. Three of those pins are commits of the pull requests the
-  import arrived with, which merge after it (the removals from connect and the core SDK,
-  and message-server's switch to these packages): each is the commit the set was last built
-  and tested at, which a branch that has taken its `main` again since is ahead of. Until
-  each has merged, its commit is fetched from the fork it was pushed to, and the verdict
-  names it; siblings.txt says which urnetwork URL replaces the fork afterwards.
+  gvisor and goidenticons. Every pin is a commit of an urnetwork repository, fetched from
+  it. Three of them were commits of the pull requests the import arrived with, fetched from
+  forks until those merged; they are now the merge commits on message-server, core SDK and
+  connect `main`. A pin is the commit the set was last built and tested at, not a branch:
+  a `main` that has moved on since is ahead of it, and siblings.txt says when a pin moves.
 - It runs every module (the SDK, the commands, the acceptance suite against
   message-server, the native library and its C consumer) with the race detector, the
   wire corpus against the pinned connect, the schema's regeneration, the codec's fuzz
@@ -151,7 +153,8 @@ own toolchain line has moved to go1.27.1 while no module's `go` line asks for mo
 - Work on a branch of your fork and open a pull request against `main`.
 - Merge pull requests with **Create a merge commit** only. Squash and rebase merges
   rewrite commits, and the imports here carry their source history commit by
-  commit (see [docs/HISTORY.md](docs/HISTORY.md)).
+  commit (see [docs/HISTORY.md](docs/HISTORY.md)). The commit the import's proof is
+  held at must stay in `main`'s history too, and every branch is checked for it.
 - Never force-push. Update a branch under review by adding commits or by merging
   `main` into it, never with "Update with rebase". To start over, open a new branch
   and a new pull request.
@@ -162,8 +165,10 @@ own toolchain line has moved to go1.27.1 while no module's `go` line asks for mo
 Imported files keep their history: each import is a merge whose second parent is
 the source repository's history, filtered to the imported paths.
 [docs/HISTORY.md](docs/HISTORY.md) lists every import with its pinned source and
-commit map, and shows how to re-run the verifier,
-[docs/history/verify_split.py](docs/history/verify_split.py).
+commit map. The proof that the tree is those imports, the changes it declares and
+everything the removals deleted is held at one recorded commit, and
+[docs/history/proof.py](docs/history/proof.py) checks that a later tip has that commit
+in its history and runs the proof again there; HISTORY.md has the command.
 
 ## Design documents
 

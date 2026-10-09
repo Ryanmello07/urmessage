@@ -5,9 +5,11 @@
 - A release is an annotated tag on `main` of `urnetwork/message`, made by a
   maintainer (`git tag -a`). A lightweight tag is not a release.
 - No tag before the schema cutover. From stage 2b until the cutover,
-  `message/protocol` cannot be linked beside connect's copy of the schema (see
-  [BOUNDARY.md](BOUNDARY.md)), so a release would publish a package that panics
-  next to connect. The first tag is `v0.1.0`, after the cutover.
+  `message/protocol` could not be linked beside connect's copy of the schema (see
+  [BOUNDARY.md](BOUNDARY.md)), so a release would have published a package that
+  panics next to connect. The cutover was the merge of connect's removal,
+  urnetwork/connect `847460bb` (2026-10-09). No version has been tagged yet; the
+  first tag is `v0.1.0`.
 - A nested module is tagged with its directory as prefix, as Go requires:
   `sdk/v0.1.0` releases `github.com/urnetwork/message/sdk`.
 - Forks never tag. test.sh never tags, releases or publishes.

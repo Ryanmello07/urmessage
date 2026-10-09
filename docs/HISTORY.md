@@ -148,7 +148,7 @@ base and the pull request's head, `66628426`.
 ## Upstream's changes after the imports, and the fork's own
 
 The imports are projections of fork commits, `e449f7d8` and `6141b98d`, and the removal pull
-requests delete the same paths from later upstream commits. Two kinds of difference sit between
+requests deleted the same paths from later upstream commits. Two kinds of difference sit between
 the two, and [ported.tsv](history/ported.tsv) declares every one of them.
 
 **Upstream changed imported paths after the imports' sources.** Each upstream commit is ported
@@ -169,11 +169,9 @@ The merge of connect#216 (`94453d74`) changed no imported path beyond what `e861
 removed: the codec workflow's trigger and its needle. The merge `89f66cda` brought `f5e1aa1f`
 and `03d82b4e` together in connect, and changes `CODESTYLE.md` against each of its parents.
 connect `main` took `5f5a205d` by the merge `60f3bd61`, which changes the file against one
-parent only. `6b86a4c3` and `84fb2386` were made on `main` itself. The connect commit pinned
-here, `0f2ff669`, merged `main` before all three, so it holds the file as it was; the removal's
-branch has merged `main` since (to `64e433f4`) and holds `main`'s copy, blob `0feba3df`, which
-is this repository's too. The removal does not change the file, so its merge leaves `main`'s
-copy as it is.
+parent only. `6b86a4c3` and `84fb2386` were made on `main` itself. The removal did not change
+the file, so its merge, `847460bb`, which this repository now pins, left `main`'s copy as it
+was: blob `0feba3df`, which is this repository's too.
 
 Five upstream changes needed no commit here, and ported.tsv says why each one stands:
 
@@ -463,29 +461,49 @@ request's head's.
 - `recorded-tip.txt`: the recorded tip's id, one line. The recorded tip does not hold it; the
   commit after it adds it.
 
-## Changes in connect and the core SDK until the removals merge
+## The set, as it merged
+
+This repository arrived as one of a set of pull requests that were built and tested together.
+All of them merged on 2026-10-09, each with a merge commit, so every commit kept its id:
+
+| Repository | Pull request | Merge commit on `main` | Merged (UTC) |
+|---|---|---|---|
+| urnetwork/message | 1, the import | `07704991dc89ffeee35a70b4bb7372f588dc9067` | 09:07 |
+| urnetwork/message-server | 3, its switch to these packages | `e9eae67a4d49f6d192bdd3ae00dca6cac75fd0e3` | 12:22 |
+| urnetwork/sdk | 158, the removal of messaging | `b8209d9d7f6d858b2171cd92d4203bdadb758260` | 12:25 |
+| urnetwork/connect | 219, the removal of messaging | `847460bba8aa31fb2e86ce007e9d5443d884544b` | 13:44 |
+
+[scripts/siblings.txt](../scripts/siblings.txt) pins the last three, each a commit of its
+upstream `main`. Before they merged it pinned a commit of each pull request's branch, fetched
+from the fork it was pushed to. The three pins moved the same day, each in a commit of its own
+(`0c086237`, `10f10172`, `7fa04709`), after the commit that switched the three URLs
+(`a1326929`), and nothing is fetched from a fork any more.
+
+## Changes in connect and the core SDK until the removals merged
 
 An earlier version of this file said the source copies were frozen once imported. Nothing held
-that, and upstream has changed imported paths in 15 commits since the imports' sources (the
-tables above). The
-copies change until the removal pull requests merge, and changes made there have to arrive here:
-carried.py is the check, and ported.tsv the record. After the removals merge, the paths exist
-only here, except `CODESTYLE.md`, which connect keeps: its two copies stay the maintainers' to
-keep in step.
+that, and upstream changed imported paths in 15 commits between the imports' sources and the
+removals (the tables above). Those changes had to arrive here: carried.py was the check, and
+ported.tsv is the record. Since the removals merged the paths exist only here, except
+`CODESTYLE.md`, which connect keeps: its two copies stay the maintainers' to keep in step, and
+nothing here measures connect's copy after `64e433f4`, the last commit of its `main` before the
+removal.
 
-The import merged before the two removals, on 2026-10-09 (`07704991`, above), so the code is
-in its new home before anything is deleted. It could, because it builds and tests against the
-commits [scripts/siblings.txt](../scripts/siblings.txt) pins on the removals' branches, not
-against connect or sdk `main`. Those pins do not move for the import's own merge: each stays
-the commit the set was tested at until its removal has merged. Two things follow while the
-removals wait:
+The import merged before the two removals (`07704991`, above), so the code was in its new home
+before anything was deleted. It could, because it built and tested against the commits
+scripts/siblings.txt then pinned on the removals' branches, not against connect or sdk `main`.
+Two things followed while the removals waited, and both have ended:
 
-- **This repository is not built beside connect `main`.** `main` still registers
-  `message.proto`, so a binary linking both copies stops at init, and it has no
-  `connect.NewOperatorClientSettings`, which `sdk/message_tunnel.go` calls. The pins keep the
-  two apart.
-- **A change upstream makes to a moved path arrives here as a pull request of its own**, a port
-  commit with its row in ported.tsv, as the ports above did. carried.py is run against this
-  repository's `main` and the newest connect and sdk `main` before each removal merges. The
-  first such pull request, on the day of the merge, declared what `80f6e365` and `69c49348`
-  added (above); nothing in them was this package's to port.
+- **This repository was not built beside connect `main`.** Until `847460bb`, `main` still
+  registered `message.proto`, so a binary linking both copies stopped at init, and it had no
+  `connect.NewOperatorClientSettings`, which `sdk/message_tunnel.go` calls. The pins kept the
+  two apart. It is built and tested beside connect `main` and sdk `main` as of those merges now,
+  and connect from before the removal stays pinned as connect-golden, the reference the wire
+  corpus is compared with and never a build dependency.
+- **A change upstream made to a moved path arrived here as a pull request of its own**, a port
+  commit with its row in ported.tsv, as the ports above did, and carried.py was run against
+  this repository's `main` and the newest connect and sdk `main` before each removal merged.
+  The first such pull request, on the day of the import's merge, declared what `80f6e365` and
+  `69c49348` added (above); nothing in them was this package's to port. It was also the last:
+  each removal merged into the same commit of its `main` that pull request was measured
+  against, which is the base carried.py records.

@@ -5,55 +5,54 @@
 # sources it lists. Bump a pin in its own commit.
 # name  url  commit
 #
-# THREE OF THESE PINS ARE COMMITS OF PULL REQUESTS UNDER REVIEW, FETCHED FROM THE OWNER'S FORKS UNTIL
-# THEY MERGE. This repository arrived as one of a set: its import, message-server's switch to these
-# packages, and the removals of messaging from urnetwork/sdk and urnetwork/connect. They are built
-# and tested together, so this file pins a commit of each of the other three branches, and those
-# commits are on the forks the pull requests come from. The pin is the commit, which no fetch source
-# can change, and it is the commit the set was last built and tested at. A branch that has taken its
-# upstream main again since then is ahead of its pin, and the pin stays where it was tested: it moves
-# only when something this repository takes from that sibling has changed, in a commit of its own.
-# THE IMPORT MERGED FIRST, on 2026-10-09 (urnetwork/message 07704991), before the two removals, and
-# it could because it builds against these pinned commits and never against connect or sdk main.
-# The other three merge after it, and no pin moves for the import's own merge. When one of them
-# has merged (with a merge commit, so its commits keep their ids), switch that line's URL to the
-# urnetwork repository named in its comment and delete the fork from scripts/siblings.sh's review
-# sources; until then test.sh's verdict names each such sibling.
+# EVERY PIN IS A COMMIT OF AN URNETWORK REPOSITORY, FETCHED FROM IT. This repository arrived as one
+# of a set of pull requests: its import, message-server's switch to these packages, and the removals
+# of messaging from urnetwork/sdk and urnetwork/connect. They were built and tested together, so
+# until they merged this file pinned a commit of each of the other three branches, fetched from the
+# owner's forks. All of them merged on 2026-10-09, each with a merge commit, so every commit kept
+# its id:
+#   urnetwork/message         pull request 1, the import        07704991
+#   urnetwork/message-server  pull request 3, the switch        e9eae67a
+#   urnetwork/sdk             pull request 158, the removal     b8209d9d
+#   urnetwork/connect         pull request 219, the removal     847460bb
+# The import merged first, before the two removals, so the code was in its new home before anything
+# was deleted; it could, because it built against the pinned commits and never against connect or
+# sdk main. The three pins then moved to those merge commits, each in a commit of its own, and the
+# forks left scripts/siblings.sh's review sources, which are empty.
+# A PIN IS STILL A COMMIT, NOT A BRANCH: the one the set was last built and tested at, which no
+# fetch source can change. When a sibling's main moves on, it is ahead of its pin, and the pin stays
+# where it was tested. It moves when something this repository takes from that sibling has changed,
+# in a commit of its own, with the run that shows the set still builds and passes.
 #
 # connect: the transport. The SDK module (sdk/go.mod), the native composition (sdk/cgo/go.mod), the
 # commands and the acceptance suite build against it, and protocol's code-point names test reads its
-# frame.proto as text. Pinned to a commit of the connect pull request that removes messaging from
-# connect and adds connect.NewOperatorClientSettings, which sdk/message_tunnel.go calls: branch
-# upstream/remove-message of the fork, as of its merge of urnetwork/connect main at 6df2fa87. A
-# connect still carrying message.proto would register the schema twice in every binary here, which
-# protobuf refuses at init, and connect main carries it until that pull request merges: until then
-# nothing here is built beside connect main. After the merge: https://github.com/urnetwork/connect.git.
+# frame.proto as text. Pinned to urnetwork/connect main as the removal of messaging merged there
+# (847460bb, 2026-10-09 13:44 UTC). That merge took protocol/message.proto out of connect and added
+# connect.NewOperatorClientSettings, which sdk/message_tunnel.go calls. A connect from before it
+# still carries message.proto, and would register the schema twice in every binary here, which
+# protobuf refuses at init: connect-golden, below, is such a commit, and is never a build
+# dependency. The module files of everything that builds against connect record what its go.mod
+# requires, by go mod tidy as test.sh checks it; a pin move that changes those requirements changes
+# those files in the same commit.
 connect https://github.com/urnetwork/connect.git 847460bba8aa31fb2e86ce007e9d5443d884544b
 #
 # sdk: the core SDK. sdk/cgo/compose.sh lays its cgo package main under sdk/cgo to build the one
 # native library both halves ship in, and the record gate (message/record_test.go) scans it whole,
-# with the reviewed TCP/IP contexts of urnetwork/connect 54b5b106. Pinned to a commit of the sdk
-# pull request that removes messaging from the core SDK: branch upstream/remove-message of the fork,
-# as of its merge of urnetwork/sdk main at 06f33802. That branch has merged main again since, more
-# than once, and the pin stays where the set was tested. Up to af5666ed (its merge of main at
-# 812df82f) nothing under cgo/ differs from the pin but go.mod and go.sum, which compose.sh does not
-# take, so the files it lays down and the core .def that gen reads are the same bytes. From 0da627ac
-# (its merge of main at 679a836a, 2026-10-09) the branch also carries the core's C ABI as
-# urnetwork/sdk e0661931 regenerated it: cgo/exports_gen.go, the two headers, the coverage report,
-# and two more names in the core .def. Moving the pin that far is therefore a change to what this
-# repository takes, made in a commit of its own with the composed .def regenerated and the run that
-# shows the set still passes. compose.sh refuses a core that still carries the messaging half.
-# After the merge: https://github.com/urnetwork/sdk.git.
+# with the reviewed TCP/IP contexts of urnetwork/connect 54b5b106. Pinned to urnetwork/sdk main as
+# the removal of messaging merged there (b8209d9d, 2026-10-09 12:25 UTC). compose.sh refuses a core
+# that still carries the messaging half. The library's .def, sdk/cgo/include/urnetwork_sdk.def, is
+# generated from the core's .def at this commit and this repository's exports: 1,231 names, the
+# core's 1,172 and the 59 messaging ones. A pin move that changes the core's C ABI regenerates it in
+# the same commit, and a consumer that vendors the .def takes the new one when it moves its own pin.
 sdk https://github.com/urnetwork/sdk.git b8209d9d7f6d858b2171cd92d4203bdadb758260
 #
 # message-server: the server half. sdk/cp3b (the cross-process acceptance suite) and the loopback
-# library (sdk/cgo/loopback.go.mod, run by sdk/cgo/ctest/run.sh) run it in process. Pinned to a
-# commit of the message-server branch that switches it to this repository's packages
-# (split/use-message-repo): before the switch it imports connect's copies, which the connect removal
-# deletes. That branch pins this repository in turn, and two commits cannot each name the other, so
-# this pin is the branch as it stood before its own pins were filled; what it has gained since is its
-# pins, its ledger, its README and its workflow, and no Go or module file. After the merge:
-# https://github.com/urnetwork/message-server.git.
+# library (sdk/cgo/loopback.go.mod, run by sdk/cgo/ctest/run.sh) run it in process. Pinned to
+# urnetwork/message-server main as its switch to this repository's packages merged there (e9eae67a,
+# 2026-10-09 12:22 UTC); before the switch it imported connect's copies, which the connect removal
+# deleted. message-server pins this repository in turn, and two commits cannot each name the other:
+# each side pins a commit of the other that already exists, and a change to an API both use is made
+# in the steps docs/BOUNDARY.md gives.
 message-server https://github.com/urnetwork/message-server.git e9eae67a4d49f6d192bdd3ae00dca6cac75fd0e3
 #
 # connect-golden: urnetwork/connect from BEFORE the messaging schema left it (the merge of #217,
