@@ -87,6 +87,18 @@ tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run
   targets, and the module census over what ran. The full run is two runs, a linux host
   with gcc and a Windows clone made with `core.autocrlf=true` (below), and each prints
   what it did not run.
+- Both runs need a C compiler on `PATH`: gcc on linux, and a MinGW-w64 gcc on Windows.
+  The race detector, the native library, the loopback library and its C consumer are
+  built with cgo. On linux a run without one fails at its first step. On another host
+  `test.sh` says at its first step what it will skip, skips each of those steps by name,
+  and its census then fails the run for what was not built: a run with no C compiler
+  never ends in `VERDICT: PASS`.
+- A run is long, and it downloads. On 2026-10-09 it took 23 to 28 minutes on a linux host
+  with six cores, from empty caches, and 24 to 38 on a Windows host with 24 cores and a
+  warm build cache. From nothing it fetches the seven siblings (about 0.8 GB on disk) and
+  about 0.65 GB of Go modules, among them a second Go release for the toolchain check's
+  control, and protoc 35.1. It leaves a build cache of about 4 GB, in the go command's own
+  cache directories and not in the checkout.
 - Name the directory `message`. The modules find their siblings by relative path
   (`../connect`, `../sdk`, ...), and consumers' local `replace` directives point at
   `../message`.
@@ -98,8 +110,14 @@ tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run
   With a C compiler on the host:
 
       bash sdk/cgo/compose.sh
-      WARP_VERSION=<version> bash sdk/cgo/build.sh <output>/URnetworkSdk.dll
+      WARP_VERSION=<version> bash sdk/cgo/build.sh <output>/<library>
       bash sdk/cgo/compose.sh --clean
+
+  `<library>` is the name the platform loads: `URnetworkSdk.dll` on Windows,
+  `libURnetworkSdk.so` on linux, `libURnetworkSdk.dylib` on macOS. build.sh builds for the
+  host it runs on and writes the file it is given, whatever its name, so the `.dll` name
+  on linux gets an ELF library. The C header is written beside it, under the same name
+  with `.h`.
 
   [sdk/cgo/build.sh](sdk/cgo/build.sh) is the one place the recipe is written: the core
   SDK's release recipe (its `cgo/Makefile`: c-shared, `-trimpath`, `greenteagc`, stripped,

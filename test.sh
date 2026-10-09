@@ -125,7 +125,11 @@ if [ "$cc_ok" = 1 ]; then
 elif [ "$goos" = linux ]; then
   fail "the race detector" "linux with no C compiler or CGO_ENABLED=0: the full run needs gcc"
 else
-  skip "the race detector" "no C compiler on this $goos host"
+  # Another host may run without one, and every step that needs a C compiler is then skipped by
+  # name: the race detector here, and below the native library, the composed package's vet and
+  # tests, and the loopback library with its C consumer. The census fails the run for the receipts
+  # those steps did not write. Said at this first result, so nobody waits for the verdict to learn it
+  skip "the race detector" "no C compiler on this $goos host: the native library, the composed package's vet and tests and the loopback library are skipped below for the same reason, and the census then fails this run for their receipts"
 fi
 echo "$(go version); $goos/$goarch; C compiler: $([ "$cc_ok" = 1 ] && go env CC || echo none); race: ${race[*]:-off}"
 # the census owes some steps on one kind of host only, and reads which host this was from here
@@ -474,8 +478,20 @@ native() {
   else
     skip "sdk/cgo: the c-shared library and its exports" "no C compiler on this host"
   fi
-  run "sdk/cgo: go vet ./..." go -C "$dir" vet ./... && receipt "$mod" vet
-  run "sdk/cgo: go test ${race[*]:-} ./..." go -C "$dir" test -count=1 "${race[@]}" -timeout "$timeout" ./... && receipt "$mod" test "${race[*]:-norace}"
+  if [ "$cc_ok" = 1 ]; then
+    run "sdk/cgo: go vet ./..." go -C "$dir" vet ./... && receipt "$mod" vet
+    run "sdk/cgo: go test ${race[*]:-} ./..." go -C "$dir" test -count=1 "${race[@]}" -timeout "$timeout" ./... && receipt "$mod" test "${race[*]:-norace}"
+  else
+    # The composed package is cgo. With no C compiler the go command leaves every file that imports
+    # "C" out of the build, the files that are left name what those declare, and vet and test fail
+    # on each such name ("undefined: urnet_message_context_new"): the host's failure, read as the
+    # tree's. So both are skipped with the library, which needs the same compiler. gen is not cgo
+    # and is vetted and tested as before. No vet and no test receipt is written, so the census
+    # fails this module by name for what this host could not run
+    skip "sdk/cgo: go vet and go test of the composed package" "no C compiler on this host: the package is cgo and does not compile without one"
+    run "sdk/cgo: go vet ./gen/..., which is not cgo" go -C "$dir" vet ./gen/...
+    run "sdk/cgo: go test ./gen/..., which is not cgo" go -C "$dir" test -count=1 -timeout "$timeout" ./gen/...
+  fi
   receipt "$mod" protobuf "$(go -C "$dir" list -m -f '{{.Version}}' google.golang.org/protobuf)"
   if [ "$cc_ok" = 1 ]; then
     # on every host: the loopback library builds with its overlay, modfile and tag and exports the
