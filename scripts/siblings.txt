@@ -54,7 +54,7 @@ sdk https://github.com/urnetwork/sdk.git 0f03e27e1482a4e77811c5982005c853b5a7b1c
 # this pin is the branch as it stood before its own pins were filled; what it has gained since is its
 # pins, its ledger, its README and its workflow, and no Go or module file. After the merge:
 # https://github.com/urnetwork/message-server.git.
-message-server https://github.com/urnetwork/message-server.git ee23a490fb615e4a44a626beb87aff81b57bda69
+message-server https://github.com/urnetwork/message-server.git e9eae67a4d49f6d192bdd3ae00dca6cac75fd0e3
 #
 # connect-golden: urnetwork/connect from BEFORE the messaging schema left it (the merge of #217,
 # 2026-10-05 09:10Z; protocol/message.pb.go is the copy this repository's was regenerated from).
