@@ -282,7 +282,9 @@ it for later work, and a later tip is held to two rules instead, by
 
 A commit cannot hold its own id. So the recorded tip does not hold recorded-tip.txt: the commit
 after it adds that file, writes the id into the next sentence, and changes nothing else.
-This tree is made to be that tip, and it is proven as one with `--at` (below) before it is recorded.
+**The recorded tip is `7a33917306ae39a2e8675f92b6639e4e7153f30c`**, the last commit of the pull
+request that moved the sibling pins to the merged upstream commits, before the one that records
+it. It was proven as one with `--at` (below) before it was recorded.
 
 ## Running the proof again
 
