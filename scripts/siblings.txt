@@ -6,18 +6,19 @@
 # name  url  commit
 #
 # THREE OF THESE PINS ARE COMMITS OF PULL REQUESTS UNDER REVIEW, FETCHED FROM THE OWNER'S FORKS UNTIL
-# THEY MERGE. This repository is one of a set: this import, message-server's switch to these
+# THEY MERGE. This repository arrived as one of a set: its import, message-server's switch to these
 # packages, and the removals of messaging from urnetwork/sdk and urnetwork/connect. They are built
 # and tested together, so this file pins a commit of each of the other three branches, and those
 # commits are on the forks the pull requests come from. The pin is the commit, which no fetch source
 # can change, and it is the commit the set was last built and tested at. A branch that has taken its
 # upstream main again since then is ahead of its pin, and the pin stays where it was tested: it moves
 # only when something this repository takes from that sibling has changed, in a commit of its own.
-# THIS IMPORT MERGES FIRST, before the two removals, and it can because it builds against these
-# pinned commits and never against connect or sdk main. When a pull request has merged (with a merge
-# commit, so its commits keep their ids), switch that line's URL to the urnetwork repository named
-# in its comment and delete the fork from scripts/siblings.sh's review sources; until then test.sh's
-# verdict names each such sibling.
+# THE IMPORT MERGED FIRST, on 2026-10-09 (urnetwork/message 07704991), before the two removals, and
+# it could because it builds against these pinned commits and never against connect or sdk main.
+# The other three merge after it, and no pin moves for the import's own merge. When one of them
+# has merged (with a merge commit, so its commits keep their ids), switch that line's URL to the
+# urnetwork repository named in its comment and delete the fork from scripts/siblings.sh's review
+# sources; until then test.sh's verdict names each such sibling.
 #
 # connect: the transport. The SDK module (sdk/go.mod), the native composition (sdk/cgo/go.mod), the
 # commands and the acceptance suite build against it, and protocol's code-point names test reads its
@@ -33,11 +34,16 @@ connect https://github.com/Ryanmello07/connect.git 0f2ff66907f2c5fae735c45f687e5
 # native library both halves ship in, and the record gate (message/record_test.go) scans it whole,
 # with the reviewed TCP/IP contexts of urnetwork/connect 54b5b106. Pinned to a commit of the sdk
 # pull request that removes messaging from the core SDK: branch upstream/remove-message of the fork,
-# as of its merge of urnetwork/sdk main at 06f33802. That branch has merged main twice more since
-# (to 812df82f, 2026-10-09), and the pin stays: between the pin and that head nothing under cgo/
-# differs but its go.mod and go.sum, which compose.sh does not take, so the files it lays down and
-# the core .def that gen reads are the same bytes at either commit. compose.sh refuses a core that
-# still carries the messaging half. After the merge: https://github.com/urnetwork/sdk.git.
+# as of its merge of urnetwork/sdk main at 06f33802. That branch has merged main again since, more
+# than once, and the pin stays where the set was tested. Up to af5666ed (its merge of main at
+# 812df82f) nothing under cgo/ differs from the pin but go.mod and go.sum, which compose.sh does not
+# take, so the files it lays down and the core .def that gen reads are the same bytes. From 0da627ac
+# (its merge of main at 679a836a, 2026-10-09) the branch also carries the core's C ABI as
+# urnetwork/sdk e0661931 regenerated it: cgo/exports_gen.go, the two headers, the coverage report,
+# and two more names in the core .def. Moving the pin that far is therefore a change to what this
+# repository takes, made in a commit of its own with the composed .def regenerated and the run that
+# shows the set still passes. compose.sh refuses a core that still carries the messaging half.
+# After the merge: https://github.com/urnetwork/sdk.git.
 sdk https://github.com/Ryanmello07/urnetwork-sdk.git 0f03e27e1482a4e77811c5982005c853b5a7b1ca
 #
 # message-server: the server half. sdk/cp3b (the cross-process acceptance suite) and the loopback

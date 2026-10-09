@@ -21,13 +21,13 @@
 # so no fetch source can change what a pin builds; what the URL rule protects is that the pins can
 # be fetched from the project's own repositories by anyone, for good.
 #
-# REVIEW SOURCES. This repository arrives as one of a set of pull requests that are built and tested
-# together: this import, message-server's switch to these packages, and the removals from
-# urnetwork/sdk and urnetwork/connect. It pins a commit of each of the other three branches, and
-# those commits exist on the owner's forks before any of them is merged upstream, so until its pull
-# request merges a pinned commit is fetched from the fork it was pushed to. A pin is the commit the
-# set was last built and tested at, which need not be the branch's newest: scripts/siblings.txt
-# says when a pin moves. Those forks are named here one by one,
+# REVIEW SOURCES. This repository arrived as one of a set of pull requests that are built and tested
+# together: its import, which merged first (2026-10-09), message-server's switch to these packages,
+# and the removals from urnetwork/sdk and urnetwork/connect. It pins a commit of each of the other
+# three branches, and those commits exist on the owner's forks before any of them is merged
+# upstream, so until its pull request merges a pinned commit is fetched from the fork it was pushed
+# to. A pin is the commit the set was last built and tested at, which need not be the branch's
+# newest: scripts/siblings.txt says when a pin moves. Those forks are named here one by one,
 # and nothing else outside urnetwork/ is accepted: not another repository of the same owner, not
 # another owner's fork of the same repository. --check and --verify print FORK and the URL beside
 # such a pin, and test.sh carries it into its verdict, so a run against a commit the upstream

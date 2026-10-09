@@ -30,6 +30,10 @@ that changed the file (revision 6, below).
 | 2b | `protocol/message*` | connect `e449f7d8` | `28a9c4f1` | 10 | 8 | `0ebd54f6` |
 | 3 | the core SDK's root `message*.go`, `urmessage/`, `cp3b/`, `livepeer/`, `liveprobe/` and its 11 messaging cgo files, under `sdk/` | sdk `6141b98d` | `e5223830` | 123 | 148 | `0417c59a` |
 
+The four imports reached `main` together, in urnetwork/message pull request 1, merged with a
+merge commit on 2026-10-09: `07704991dc89ffeee35a70b4bb7372f588dc9067`, whose parents are the
+base and the pull request's head, `66628426`.
+
 ### Stage 1: CODESTYLE.md
 
 - Source: `Ryanmello07/connect` `e449f7d8126c0b5748f5083392a8855bac877b32`, which
@@ -200,8 +204,8 @@ tags are what keep this proof reproducible; neither fork is protected by a rules
 
 Of these, the tunnel's 1 s hold is the one change in behaviour upstream has not reviewed: with
 it the three tunnel files differ from sdk `main`, and without it (`d20d82c1`'s parent) they are
-sdk `main`'s byte for byte. The message pull request names it at its top. An earlier version of
-this file listed OPPORTUNISTIC beside it; that change is upstream's too.
+sdk `main`'s byte for byte. This repository's pull request 1, the import, names it at its top.
+An earlier version of this file listed OPPORTUNISTIC beside it; that change is upstream's too.
 
 **The proof.** [carried.py](history/carried.py) reads each removal pull request's deletions,
 from its base, and holds this tip to them: every deleted path is here (or declared deleted in
@@ -381,10 +385,12 @@ carried.py is the check, and ported.tsv the record. After the removals merge, th
 only here, except `CODESTYLE.md`, which connect keeps: its two copies stay the maintainers' to
 keep in step.
 
-This import merges before the two removals, so that the code is in its new home before
-anything is deleted. It can, because it builds and tests against the commits
-[scripts/siblings.txt](../scripts/siblings.txt) pins on the removals' branches, not against
-connect or sdk `main`. Two things follow while the removals wait:
+The import merged before the two removals, on 2026-10-09 (`07704991`, above), so the code is
+in its new home before anything is deleted. It could, because it builds and tests against the
+commits [scripts/siblings.txt](../scripts/siblings.txt) pins on the removals' branches, not
+against connect or sdk `main`. Those pins do not move for the import's own merge: each stays
+the commit the set was tested at until its removal has merged. Two things follow while the
+removals wait:
 
 - **This repository is not built beside connect `main`.** `main` still registers
   `message.proto`, so a binary linking both copies stops at init, and it has no
@@ -392,4 +398,6 @@ connect or sdk `main`. Two things follow while the removals wait:
   two apart.
 - **A change upstream makes to a moved path arrives here as a pull request of its own**, a port
   commit with its row in ported.tsv, as the ports above did. carried.py is run against this
-  repository's `main` and the newest connect and sdk `main` before each removal merges.
+  repository's `main` and the newest connect and sdk `main` before each removal merges. The
+  first such pull request, on the day of the merge, declared what `80f6e365` and `69c49348`
+  added (above); nothing in them was this package's to port.
