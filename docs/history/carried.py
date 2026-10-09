@@ -75,7 +75,11 @@ both ways: no Go file of the tip names it, a Go file upstream keeps (one the rem
 delete and no import takes) does, and a line set aside names it. The lines set aside are pinned
 by their sha256 and printed, so a line upstream adds beside them later is not set aside with
 them. A line upstream CHANGED is never set aside, whatever it names: the tip holds the line it
-replaces, or removed it, and the merge says which.
+replaces, or removed it, and the merge says which. urnetwork/sdk 80f6e365 and 69c49348 then added
+nine more lines for eight more core values, three of the API client's and five of its credential
+renewer's. All nine fall among lines the tip removed, so the removed-region rule would have passed
+them by where they merge. They are named in CORE_SUBJECT all the same: a line is declared by what
+it names, held both ways, wherever it lands.
 
 The complement is printed: what the removal's head still holds under the imported paths, and what it
 changes rather than deletes. Read-only on every repository, like verify_split.py, whose projections,
@@ -148,14 +152,28 @@ ADDED = {"sdk": [("cgo/gen/loopback_module_test.go", "sdk/cgo/gen/loopback_modul
 # values of the core SDK that lines upstream ADDED to an imported path name, and that this
 # repository does not declare: source path -> (the names, sha256 of the lines set aside). Such
 # lines cannot be carried as written, because what they are about stayed in the core. Each name is
-# held both ways (core_subject, below), and the digest is of upstream's own bytes:
-#   git show <commit> -- <path> | grep '^+' | grep -v '^+++' | cut -c2- | sha256sum
-# for the one upstream commit that added them (urnetwork/sdk ae5a65fc here).
+# held both ways (core_subject, below), and the digest is of upstream's own bytes: the lines set
+# aside, in the order the file holds them. Here they are every line upstream added to the path
+# between the merge base of the import's source and upstream (0c6462f2) and the upstream measured,
+# U, but the one line of a row upstream CHANGED (06f33802's "licenseJSON", never set aside):
+#   git diff 0c6462f2 <U> -- message_stream_adapter_test.go | grep '^+' | grep -v '^+++' |
+#       grep -v '"licenseJSON"' | cut -c2- | sha256sum
+# 46 lines, of three commits of urnetwork/sdk: ae5a65fc (37, the two teardown constants), 80f6e365
+# (4, the API client's three values) and 69c49348 (5, the credential renewer's five).
+# A LIMIT, measured: one name is enough to set a block aside, so a name whose line shares a block
+# with another's can be dropped and the run still passes (apiAdminRoutePatterns, beside
+# apiAdminRouteAccess). What holds such a line is the digest; what the list adds, name by name, is
+# the check both ways. So every core value the lines name is listed, and the list is read with the
+# lines when they are pinned.
 CORE_SUBJECT = {
     "sdk": {
         "message_stream_adapter_test.go": (
-            ("mobileMemoryTeardownCapacity", "mobileMemoryTeardownLifetime"),
-            "46f0e46a2696baa12962d58c436b8b1f0632e2a75b8601b508af08bc191f726c",
+            ("ErrNetworkCredentialRequired", "apiAdminRouteAccess", "apiAdminRoutePatterns",
+             "closedNetworkRenewerDone",
+             "mobileMemoryTeardownCapacity", "mobileMemoryTeardownLifetime",
+             "networkRenewalMaxRetryJitter", "networkRenewalMinRetryTimeout",
+             "networkRenewalRefusedRetryTimeout", "networkRenewalRetryJitterBase"),
+            "e472b705d22cb7a522790a80043bf544762525d746b173cf6b860367c47db5bd",
         ),
     },
 }

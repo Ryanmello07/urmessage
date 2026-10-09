@@ -12,6 +12,15 @@ and message, and changes its id, so each import publishes a commit map: one
 
 `0d697b0a07fbdee660a90d995c1255673a056bba`: the repository's first commit, `LICENSE`.
 
+The tip's `LICENSE` is not the base's. On 2026-10-09, three minutes after the import merged, the
+repository's owner changed its copyright line on `main`, in
+`b2da8432fb9114ef71daab63971a90d0d2ec0a36`: `Copyright (c) 2023 UR Foundation` became
+`Copyright (c) 2024 BringYour, Inc.`. No other byte differs, and the file is now the core SDK's
+`LICENSE` byte for byte (blob `4b028936` here and at urnetwork/sdk `679a836a`).
+[adaptations.tsv](history/adaptations.tsv) declares it as the `edit` of a base path: the row pins
+the new bytes and names that commit, and the verifier asks the history whether it is the commit
+that changed the file (revision 6, below).
+
 ## Imports
 
 | Stage | Imported | Source | Filtered tip | Commits | Paths | Import merge |
@@ -20,6 +29,10 @@ and message, and changes its id, so each import publishes a commit map: one
 | 2a | `message/`, `messagegroup/`, `mls/`, `mls/syntax/` as `syntax/`, `.gitattributes`, the codec's workflow | connect `e449f7d8` | `fbbc842d` | 465 | 837 | `a456b1cd` |
 | 2b | `protocol/message*` | connect `e449f7d8` | `28a9c4f1` | 10 | 8 | `0ebd54f6` |
 | 3 | the core SDK's root `message*.go`, `urmessage/`, `cp3b/`, `livepeer/`, `liveprobe/` and its 11 messaging cgo files, under `sdk/` | sdk `6141b98d` | `e5223830` | 123 | 148 | `0417c59a` |
+
+The four imports reached `main` together, in urnetwork/message pull request 1, merged with a
+merge commit on 2026-10-09: `07704991dc89ffeee35a70b4bb7372f588dc9067`, whose parents are the
+base and the pull request's head, `66628426`.
 
 ### Stage 1: CODESTYLE.md
 
@@ -156,17 +169,21 @@ The merge of connect#216 (`94453d74`) changed no imported path beyond what `e861
 removed: the codec workflow's trigger and its needle. The merge `89f66cda` brought `f5e1aa1f`
 and `03d82b4e` together in connect, and changes `CODESTYLE.md` against each of its parents.
 connect `main` took `5f5a205d` by the merge `60f3bd61`, which changes the file against one
-parent only. `6b86a4c3` and `84fb2386` were made on `main` itself. The connect removal's head
-merges `main` before all three, so it holds the file as it was; the removal does not change
-the file, so its merge leaves `main`'s copy as it is.
+parent only. `6b86a4c3` and `84fb2386` were made on `main` itself. The connect commit pinned
+here, `0f2ff669`, merged `main` before all three, so it holds the file as it was; the removal's
+branch has merged `main` since (to `64e433f4`) and holds `main`'s copy, blob `0feba3df`, which
+is this repository's too. The removal does not change the file, so its merge leaves `main`'s
+copy as it is.
 
-Three upstream changes needed no commit here, and ported.tsv says why each one stands:
+Five upstream changes needed no commit here, and ported.tsv says why each one stands:
 
 | Upstream commit | Path there | Why nothing was carried |
 |---|---|---|
 | sdk `a7b5db77` | `cgo/loopback.go.mod`, `cgo/loopback.go.sum`: three indirect requirements | The import already held them, from the fork's `2dc9bf77` (`port-in-source`). |
 | sdk `06f33802` Product Builder, 2026-10-06, "Generate runtime license JSON to avoid linking the YAML parser" | `message_stream_adapter_test.go`: one row of the value census renamed, `licenseYml` to `licenseJSON` | The row names a core SDK value. The census here holds this package's values alone ([3-scope.md](history/3-scope.md)), so the row is among the lines this repository removed (`port-void`). |
 | sdk `ae5a65fc` Bitprecipice, 2026-10-08, "Preserve regression fixes, memory diagnostics, and test harness evidence" | `message_stream_adapter_test.go`: a census row for the core constant `mobileMemoryTeardownLifetime`, and a new test, `TestStreamAdapterTeardownConstantsHaveCompleteCensus`, 37 lines in all | Both name constants of the core SDK, `mobileMemoryTeardownLifetime` and `mobileMemoryTeardownCapacity`, which its `memory_teardown_observation.go` declares and the sdk removal keeps. This package declares neither, so the lines cannot compile here, and the census here has no core value to hold. carried.py sets them aside by those two names (`port-void`, the same row as `06f33802`). |
+| sdk `80f6e365` Bitprecipice, 2026-10-09, "Send the network credential on the SDK's admin calls" | `message_stream_adapter_test.go`: census rows for `ErrNetworkCredentialRequired`, `apiAdminRouteAccess` and `apiAdminRoutePatterns`, and a non-sentinel ruling for the first, 4 lines | All three are values of the core SDK's API client, declared in its `api_network_credential.go`, which the sdk removal keeps. This package declares none of them. carried.py sets the lines aside by those names (`port-void`, the same row). |
+| sdk `69c49348` Bitprecipice, 2026-10-09, "List the renewal's package values in the value census" | `message_stream_adapter_test.go`: census rows for `closedNetworkRenewerDone` and the four timing constants `networkRenewalMaxRetryJitter`, `networkRenewalMinRetryTimeout`, `networkRenewalRefusedRetryTimeout` and `networkRenewalRetryJitterBase`, 5 lines | All five are values of the core SDK's credential renewer, declared in its `api_network_credential_renewal.go`, which the sdk removal keeps. This package declares none of them. Set aside by name (`port-void`, the same row). |
 
 `a7b5db77` moved the harness, so the gates that skip `testdata` read that one directory by
 name; [3-scope.md](history/3-scope.md), section 5, has each of them before and after.
@@ -187,8 +204,8 @@ tags are what keep this proof reproducible; neither fork is protected by a rules
 
 Of these, the tunnel's 1 s hold is the one change in behaviour upstream has not reviewed: with
 it the three tunnel files differ from sdk `main`, and without it (`d20d82c1`'s parent) they are
-sdk `main`'s byte for byte. The message pull request names it at its top. An earlier version of
-this file listed OPPORTUNISTIC beside it; that change is upstream's too.
+sdk `main`'s byte for byte. This repository's pull request 1, the import, names it at its top.
+An earlier version of this file listed OPPORTUNISTIC beside it; that change is upstream's too.
 
 **The proof.** [carried.py](history/carried.py) reads each removal pull request's deletions,
 from its base, and holds this tip to them: every deleted path is here (or declared deleted in
@@ -230,7 +247,11 @@ design it replaces:
   spells too, a name only the moved file spells, and a name no added line spells are each
   refused, and so is a line planted beside the pinned ones; with the digest unchecked, the
   design it replaces, that planted line is set aside with the rest and nothing reports it. A
-  line upstream changed, rather than added, is never set aside.
+  line upstream changed, rather than added, is never set aside. `80f6e365` and `69c49348` then
+  added nine more lines, for eight more values of the core, all of them among lines this
+  repository removed, where the rule above would have passed them by position. Their values
+  are named in `CORE_SUBJECT` too, ten names and 46 pinned lines in all, so each of the nine
+  is set aside for the value it names, held both ways, and not for where it merges.
 
 The kind of a row is what carried.py measures, not what the row says: an upstream change the
 import's source already held is `port-in-source` and names no commit here, and a `port` row must
@@ -249,7 +270,9 @@ name a commit of this repository that changes the path.
   changes an imported path is missing; the published commit map equals the computed
   one, both ways;
 - **E:** every other path of the tip is declared in
-  [adaptations.tsv](history/adaptations.tsv), and every declaration is needed.
+  [adaptations.tsv](history/adaptations.tsv), and every declaration is needed. A path of the
+  base that the tip holds with other bytes is declared too, and its row names every commit that
+  changed it since the base (`LICENSE`, by `b2da8432`).
 
 It reads repositories only, and never checks out a file. From the root of a
 checkout:
@@ -262,7 +285,12 @@ checkout:
     python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol,sdk --connect ../connect-src.git --sdk ../sdk-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt --commit-map connect-core=docs/history/connect-core-commit-map.txt --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt --commit-map sdk=docs/history/sdk-commit-map.txt --manifest docs/history/adaptations.tsv
 
 It must end with `PASS`. `--controls` also runs negative controls that must fire:
-the source file one change earlier, and synthetic changes to the expected tree.
+the source file one change earlier, and synthetic changes to the expected tree. For the
+changed base path it runs part E four more times over the same tip, with the `LICENSE` row
+dropped, with its pin replaced by the base's digest, with `b2da8432` taken out of its reason,
+and with the base's bytes in the tip again; each must fail for `LICENSE` alone, for its own
+reason. The first of the four is what `main` printed between the owner's commit and this
+declaration: `E: LICENSE differs from base and is not declared`.
 `7ca8e222`, an earlier `urnetwork/connect` `main`, is the control for the stage 2a
 import; the sdk side's control is `d20d82c1`, the fork's `beta/message` before its sync, which
 the fetch of `6141b98d` brings with its history.
@@ -303,10 +331,25 @@ carried, the command fails for those two paths and no other. At the tip that car
 passes with the controls, for the pinned sdk commit (`06f33802..0f03e27e`) and for that newer
 head (`812df82f..af5666ed`): the same 150 deletions either way.
 
+Measured a third time on 2026-10-09, after the import had merged, with connect `main` at
+`64e433f4` and sdk `main` at `679a836a`. sdk `main` had added nine more lines to
+`message_stream_adapter_test.go` (`80f6e365`, `69c49348`), and both removal branches had merged
+`main` again, connect to the head `4bcc5fd8` and sdk to `0da627ac`. At `b2da8432`, `main`
+before those lines were declared, the command fails for that one path: its row names two of
+upstream's four commits. At the tip that declares them it passes with the controls, for the
+commits this repository pins (connect `6df2fa87..0f2ff669`, sdk `06f33802..0f03e27e`) and for
+those newer heads (`64e433f4..4bcc5fd8`, `679a836a..0da627ac`): 848 and 150 deletions either
+way.
+
 ## Files in docs/history
 
-- `verify_split.py`: the verifier, revision 5, sha256
-  `53fc3bc32c1fd879b25d19d09293d78bd26c3fef00cd86670bab74d451605bbe`. Revision 5 adds one rule: a
+- `verify_split.py`: the verifier, revision 6, sha256
+  `352ac42a85c13f6351875cbf43dd8a5798082fa2ab30e0cd97e0e9a8df465299`. Revision 6 adds one rule and
+  its four controls: the `edit` row of a base path names every commit that changed the path since
+  the base, which the verifier reads from the history (`LICENSE`, the owner's `b2da8432`). On a
+  tip whose base paths are unchanged its output is revision 5's line for line, measured at
+  `07704991`, the import's merge. Revision 5 (sha256
+  `53fc3bc32c1fd879b25d19d09293d78bd26c3fef00cd86670bab74d451605bbe`) added one rule: a
   rename row whose target the tip does not hold fails, where it passed as a declaration before; a
   path renamed on import and later deleted is a `delete` row. Revision 4 (sha256
   `ed620472a7656e889f1f25b9fd50094b9282f312d433f16d87f391cf99106e7e`) verified stage 3. Stages 1 and 2 were
@@ -324,9 +367,9 @@ head (`812df82f..af5666ed`): the same 150 deletions either way.
 - `sdk-paths.stage3.txt`, `sdk-commit-map.txt`: the same for stage 3.
 - `2a-scope.md`: stage 2a's scope record.
 - `3-scope.md`: stage 3's.
-- `adaptations.tsv`: every path of the tip that is neither imported unchanged nor
-  part of the base, with its reason and, for a new or edited file, the sha256 of its
-  bytes. It declares itself as `manifest`.
+- `adaptations.tsv`: every path of the tip that is neither imported unchanged nor an
+  unchanged path of the base, with its reason and, for a new or edited file, the sha256 of
+  its bytes. It declares itself as `manifest`.
 - `verified-tips.txt`: every tip the verifier passed, oldest first.
 - `carried.py`: the removals' deletions held to this tip (above).
 - `ported.tsv`: every upstream change after an import's source carried here, every path upstream
@@ -335,17 +378,19 @@ head (`812df82f..af5666ed`): the same 150 deletions either way.
 ## Changes in connect and the core SDK until the removals merge
 
 An earlier version of this file said the source copies were frozen once imported. Nothing held
-that, and upstream has changed imported paths in 13 commits since the imports' sources (the
+that, and upstream has changed imported paths in 15 commits since the imports' sources (the
 tables above). The
 copies change until the removal pull requests merge, and changes made there have to arrive here:
 carried.py is the check, and ported.tsv the record. After the removals merge, the paths exist
 only here, except `CODESTYLE.md`, which connect keeps: its two copies stay the maintainers' to
 keep in step.
 
-This import merges before the two removals, so that the code is in its new home before
-anything is deleted. It can, because it builds and tests against the commits
-[scripts/siblings.txt](../scripts/siblings.txt) pins on the removals' branches, not against
-connect or sdk `main`. Two things follow while the removals wait:
+The import merged before the two removals, on 2026-10-09 (`07704991`, above), so the code is
+in its new home before anything is deleted. It could, because it builds and tests against the
+commits [scripts/siblings.txt](../scripts/siblings.txt) pins on the removals' branches, not
+against connect or sdk `main`. Those pins do not move for the import's own merge: each stays
+the commit the set was tested at until its removal has merged. Two things follow while the
+removals wait:
 
 - **This repository is not built beside connect `main`.** `main` still registers
   `message.proto`, so a binary linking both copies stops at init, and it has no
@@ -353,4 +398,6 @@ connect or sdk `main`. Two things follow while the removals wait:
   two apart.
 - **A change upstream makes to a moved path arrives here as a pull request of its own**, a port
   commit with its row in ported.tsv, as the ports above did. carried.py is run against this
-  repository's `main` and the newest connect and sdk `main` before each removal merges.
+  repository's `main` and the newest connect and sdk `main` before each removal merges. The
+  first such pull request, on the day of the merge, declared what `80f6e365` and `69c49348`
+  added (above); nothing in them was this package's to port.

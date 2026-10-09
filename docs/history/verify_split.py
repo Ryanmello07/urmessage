@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """verify_split.py: the staged byte-level proof for the message repository's imports.
 
+Revision 6 (2026-10-09), one change, for a path of the base that the tip holds with other bytes.
+The base is one commit, LICENSE. The repository's owner changed its copyright line on main in
+b2da8432, after the import had merged, and until then no base path had differed, so part E's rule
+for one had never met a real tree. The rule is revision 5's: an 'edit' row that pins the tip's
+bytes. It now also asks the history where those bytes come from: the row's reason must name every
+commit in base..tip that changes the path, so no row declares a change to the base without naming
+the commit that made it. With --controls, part E runs again over the same tip, once for each thing
+that can be wrong with such a row: the row dropped, its pin replaced by the base's digest, the
+commit taken out of its reason, and the tip given the base's bytes again. Each must fail for that
+path alone, for its own reason. Every other check, and every line of output for a tip whose base
+paths are unchanged, is revision 5's.
+
 Revision 5 (2026-10-06), one change: a rename-to or rename+edit-to row whose target the tip does not
 hold fails. Before, it passed as a declaration, so a renamed path deleted later (the codec's
 workflow, .github/workflows/mls-syntax.yml imported as syntax.yml and then removed with GitHub
@@ -709,7 +721,8 @@ def read_manifest(path):
     """TSV: path, kind, reason[, sha256=<hex>]. '#' starts a comment.
 
     kind is one of
-      edit                 a projected or base path whose bytes changed; pins sha256
+      edit                 a projected or base path whose bytes changed; pins sha256. For a base
+                           path the reason names every commit that changed it since the base
       new                  a path in no projection and not in base; pins sha256
       literal              a .go path whose only change is the module-path rewrite of a string or
                            comment OUTSIDE its import declarations (each one reviewed: the reason
@@ -749,11 +762,24 @@ def read_manifest(path):
     return entries
 
 
-def adaptation_audit(dst, tip, base, sources, manifest, review_out=None, manifest_bytes=None):
+def commits_changing(repo, since, until, path):
+    """The commits in since..until that change path, newest first, by git's default history
+    simplification: a merge that takes one parent's copy is not one of them."""
+    return git(repo, "log", "--format=%H", since + ".." + until, "--", ":(literal)" + path).decode().split()
+
+
+def adaptation_audit(dst, tip, base, sources, manifest, review_out=None, manifest_bytes=None, verbose=True, held=None, notes=None):
     """Part E. Every path of the tip, classified; undeclared differences and unneeded
-    declarations both fail."""
+    declarations both fail. The controls pass held, entries that replace the tip's own in memory
+    (path -> mode, type, blob), and verbose=False; notes, when given, is filled with the base
+    paths the manifest declares edited, each with the commits that changed it since the base."""
     fails = []
     act = ls_tree(dst, tip)
+    if held:
+        act.update(held)
+    base_edits = {}
+    if notes is not None:
+        notes["base edits"] = base_edits
     proj = {}
     for label, (repo, rv, projector, stage) in sources.items():
         exp, _ = expected_tree(label, repo, rv, projector)
@@ -858,6 +884,17 @@ def adaptation_audit(dst, tip, base, sources, manifest, review_out=None, manifes
                     tally["declared edit (base)"] += 1
                     used.add(p)
                     pinned(p, decl, data)
+                    # revision 6: the bytes come from commits of this repository, and the row
+                    # names them. The history is asked; the row is not taken at its word
+                    by = commits_changing(dst, base, tip, p)
+                    base_edits[p] = by
+                    unnamed = [c for c in by if c[:8] not in decl[1]]
+                    if not by:
+                        fails.append("E: %s differs from base, and no commit in %s..%s changes it: the history query is broken, not the tree"
+                                     % (p, base[:12], tip[:12]))
+                    elif unnamed:
+                        fails.append("E: %s differs from base by %s, and its row's reason does not name %s: the edit of a base path names every commit that made it"
+                                     % (p, ", ".join(c[:8] for c in by), ", ".join(c[:8] for c in unnamed)))
                 else:
                     fails.append("E: %s differs from base and is not declared" % p)
             else:
@@ -886,7 +923,12 @@ def adaptation_audit(dst, tip, base, sources, manifest, review_out=None, manifes
             fails.append("E: %s (from %s) is missing from the tip and the manifest does not declare it" % (p, proj[p][2]))
     for p in sorted(set(manifest) - used):
         fails.append("E: the manifest declares %s (%s) and nothing in the tip uses the declaration" % (p, manifest[p][0]))
+    if not verbose:
+        return fails
     print("  part E: tip paths by kind %s" % dict(sorted(tally.items())))
+    for p, by in sorted(base_edits.items()):
+        print("  part E: the base path %s is declared edited; the commits that change it since the base: %s"
+              % (p, ", ".join(c[:8] for c in by) or "none found"))
     if review_out:
         os.makedirs(review_out, exist_ok=True)
         with open(os.path.join(review_out, "declared-changes.diff"), "w", encoding="utf-8", newline="\n") as f:
@@ -896,6 +938,37 @@ def adaptation_audit(dst, tip, base, sources, manifest, review_out=None, manifes
                 f.writelines(difflib.unified_diff(a, b, "mechanical/" + src_path, "tip/" + p))
         print("  part E: the review surface (every declared change against its mechanical baseline) is in %s"
               % os.path.join(review_out, "declared-changes.diff"))
+    return fails
+
+
+def base_edit_controls(dst, tip, base, sources, manifest, manifest_bytes, edits):
+    """Revision 6's controls. For each base path the manifest declares edited, part E is run again
+    over the same tip with one thing wrong, and must report that path alone, for that reason."""
+    fails = []
+    base_tree = ls_tree(dst, base)
+    for p, by in sorted(edits.items()):
+        kind, reason, digest = manifest[p]
+        base_oid = base_tree[p][2]
+        base_digest = hashlib.sha256(blobs(dst, [base_oid])[base_oid]).hexdigest()
+        unnamed = reason
+        for c in by:
+            unnamed = unnamed.replace(c[:8], "-")
+        runs = [
+            ("its row dropped", {k: v for k, v in manifest.items() if k != p}, None,
+             "differs from base and is not declared"),
+            ("its row pinned to the base's bytes, sha256 %s" % base_digest[:16], {**manifest, p: (kind, reason, base_digest)}, None,
+             "a change after the declaration must be declared again"),
+            ("%s taken out of its row's reason" % ", ".join(c[:8] for c in by), {**manifest, p: (kind, unnamed, digest)}, None,
+             "names every commit that made it"),
+            ("the base's bytes in the tip again", manifest, {p: base_tree[p]},
+             "for the unchanged base path"),
+        ]
+        for title, rows, held, needle in runs:
+            got = adaptation_audit(dst, tip, base, sources, rows, None, manifest_bytes, verbose=False, held=held)
+            ok = len(got) == 1 and p in got[0].split() and needle in got[0]
+            print("  control: the base path %s with %s -> %s" % (p, title, "reported: %s" % got[0] if ok else "BROKEN: %s" % got[:5]))
+            if not ok:
+                fails.append("control: the base path %s with %s: want one failure, for that path, saying %r; got %s" % (p, title, needle, got[:5]))
     return fails
 
 # ---------------------------------------------------------------- main
@@ -1043,7 +1116,10 @@ def main():
     if a.manifest:
         with open(a.manifest, "rb") as f:
             manifest_bytes = f.read()
-        failures += adaptation_audit(a.dst, tip, base, sources, read_manifest(a.manifest), a.review_out, manifest_bytes)
+        manifest, notes = read_manifest(a.manifest), {}
+        failures += adaptation_audit(a.dst, tip, base, sources, manifest, a.review_out, manifest_bytes, notes=notes)
+        if a.controls:
+            failures += base_edit_controls(a.dst, tip, base, sources, manifest, manifest_bytes, notes["base edits"])
 
     print()
     if failures:
