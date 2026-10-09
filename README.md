@@ -15,13 +15,16 @@ build and test on their own hardware).
 
 ## Layout and status
 
-Status: stages 1, 2a, 2b and 3 are imported, with their history. The import merged on
-2026-10-09, as the merge commit `07704991`, before the connect and core SDK pull requests that
-remove the moved code from those repositories, so the code is in its new home before anything
-is deleted. Until connect's removal has merged, build this repository only beside the connect
-commit [scripts/siblings.txt](scripts/siblings.txt) pins, never beside connect `main`: `main`
-still registers `message.proto`, and a binary that links both copies stops at init. See
-[docs/HISTORY.md](docs/HISTORY.md).
+Status: stages 1, 2a, 2b and 3 are imported, with their history, and the move is complete.
+Every pull request of the set merged on 2026-10-09, each with a merge commit: the import here
+(`07704991`), message-server's switch to these packages (urnetwork/message-server
+`e9eae67a`), and the removals of the moved code from the core SDK (urnetwork/sdk `b8209d9d`)
+and from connect (urnetwork/connect `847460bb`). The import merged first, so the code was in
+its new home before anything was deleted. [scripts/siblings.txt](scripts/siblings.txt) pins
+those three merge commits, and this repository builds and tests beside connect `main` and core
+SDK `main` as they stood there. Do not build it beside a connect from before `847460bb`: that
+connect still registers `message.proto`, and a binary that links both copies stops at init.
+See [docs/HISTORY.md](docs/HISTORY.md).
 
 | Path | Contents | Comes from | Stage |
 |---|---|---|---|
@@ -75,18 +78,29 @@ tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run
 - `./test.sh` runs everything else too, and requires the siblings at the commits
   [scripts/siblings.txt](scripts/siblings.txt) pins, cloning a missing one beside the
   checkout: connect, the core SDK, message-server, connect from before the removal, glog,
-  gvisor and goidenticons. Three of those pins are commits of the pull requests the
-  import arrived with, which merge after it (the removals from connect and the core SDK,
-  and message-server's switch to these packages): each is the commit the set was last built
-  and tested at, which a branch that has taken its `main` again since is ahead of. Until
-  each has merged, its commit is fetched from the fork it was pushed to, and the verdict
-  names it; siblings.txt says which urnetwork URL replaces the fork afterwards.
+  gvisor and goidenticons. Every pin is a commit of an urnetwork repository, fetched from
+  it. Three of them were commits of the pull requests the import arrived with, fetched from
+  forks until those merged; they are now the merge commits on message-server, core SDK and
+  connect `main`. A pin is the commit the set was last built and tested at, not a branch:
+  a `main` that has moved on since is ahead of it, and siblings.txt says when a pin moves.
 - It runs every module (the SDK, the commands, the acceptance suite against
   message-server, the native library and its C consumer) with the race detector, the
   wire corpus against the pinned connect, the schema's regeneration, the codec's fuzz
   targets, and the module census over what ran. The full run is two runs, a linux host
   with gcc and a Windows clone made with `core.autocrlf=true` (below), and each prints
   what it did not run.
+- Both runs need a C compiler on `PATH`: gcc on linux, and a MinGW-w64 gcc on Windows.
+  The race detector, the native library, the loopback library and its C consumer are
+  built with cgo. On linux a run without one fails at its first step. On another host
+  `test.sh` says at its first step what it will skip, skips each of those steps by name,
+  and its census then fails the run for what was not built: a run with no C compiler
+  never ends in `VERDICT: PASS`.
+- A run is long, and it downloads. On 2026-10-09 it took 23 to 28 minutes on a linux host
+  with six cores, from empty caches, and 24 to 38 on a Windows host with 24 cores and a
+  warm build cache. From nothing it fetches the seven siblings (about 0.8 GB on disk) and
+  about 0.65 GB of Go modules, among them a second Go release for the toolchain check's
+  control, and protoc 35.1. It leaves a build cache of about 4 GB, in the go command's own
+  cache directories and not in the checkout.
 - Name the directory `message`. The modules find their siblings by relative path
   (`../connect`, `../sdk`, ...), and consumers' local `replace` directives point at
   `../message`.
@@ -98,8 +112,14 @@ tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run
   With a C compiler on the host:
 
       bash sdk/cgo/compose.sh
-      WARP_VERSION=<version> bash sdk/cgo/build.sh <output>/URnetworkSdk.dll
+      WARP_VERSION=<version> bash sdk/cgo/build.sh <output>/<library>
       bash sdk/cgo/compose.sh --clean
+
+  `<library>` is the name the platform loads: `URnetworkSdk.dll` on Windows,
+  `libURnetworkSdk.so` on linux, `libURnetworkSdk.dylib` on macOS. build.sh builds for the
+  host it runs on and writes the file it is given, whatever its name, so the `.dll` name
+  on linux gets an ELF library. The C header is written beside it, under the same name
+  with `.h`.
 
   [sdk/cgo/build.sh](sdk/cgo/build.sh) is the one place the recipe is written: the core
   SDK's release recipe (its `cgo/Makefile`: c-shared, `-trimpath`, `greenteagc`, stripped,
@@ -133,7 +153,8 @@ own toolchain line has moved to go1.27.1 while no module's `go` line asks for mo
 - Work on a branch of your fork and open a pull request against `main`.
 - Merge pull requests with **Create a merge commit** only. Squash and rebase merges
   rewrite commits, and the imports here carry their source history commit by
-  commit (see [docs/HISTORY.md](docs/HISTORY.md)).
+  commit (see [docs/HISTORY.md](docs/HISTORY.md)). The commit the import's proof is
+  held at must stay in `main`'s history too, and every branch is checked for it.
 - Never force-push. Update a branch under review by adding commits or by merging
   `main` into it, never with "Update with rebase". To start over, open a new branch
   and a new pull request.
@@ -144,8 +165,10 @@ own toolchain line has moved to go1.27.1 while no module's `go` line asks for mo
 Imported files keep their history: each import is a merge whose second parent is
 the source repository's history, filtered to the imported paths.
 [docs/HISTORY.md](docs/HISTORY.md) lists every import with its pinned source and
-commit map, and shows how to re-run the verifier,
-[docs/history/verify_split.py](docs/history/verify_split.py).
+commit map. The proof that the tree is those imports, the changes it declares and
+everything the removals deleted is held at one recorded commit, and
+[docs/history/proof.py](docs/history/proof.py) checks that a later tip has that commit
+in its history and runs the proof again there; HISTORY.md has the command.
 
 ## Design documents
 
