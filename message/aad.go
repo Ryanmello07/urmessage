@@ -269,3 +269,5 @@ func AADHead(algId uint16, h *RecordHeader, serverAttachment []byte) ([]byte, er
 	writer.WriteOpaqueLP(attachmentHash[:])
 	return writer.Bytes()
 }
+
+// A later change, made for a control of the provenance leg. Never merged.
