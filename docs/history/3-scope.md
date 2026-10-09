@@ -54,6 +54,7 @@ Measured on Windows (go1.26.5) unless marked; "P_sdk" is the source,
 | Moving gate | Non-moved half | Kept by |
 |---|---|---|
 | value census, non-sentinel rulings, Sync rulings, part-size rulings | core package-level values, errors, Syncs and 2048-valued constants | Out of subject: after the sdk removal the core SDK holds no stream adapter, store or message binding for any of them to reach. |
+| what upstream added to its copy of the value census after the import (urnetwork/sdk `06f33802`, `ae5a65fc`) | a renamed row (`licenseJSON`), a new row (`mobileMemoryTeardownLifetime`) and a new test, `TestStreamAdapterTeardownConstantsHaveCompleteCensus`, of that constant and `mobileMemoryTeardownCapacity`: core values, every one | Out of subject, as the row above, and nothing of it lands here ([ported.tsv](ported.tsv), `port-void`): this package declares none of those values, so it has no row to rename and the test cannot compile. Its own values (44 named on windows) are still held both ways. The sdk removal's pull request says what holds the two teardown constants once the census has left the core. |
 | receive-callback audit | the core provider's control-frame registration | The core's own `device_receive_callback_policy_test.go`, at one entry. |
 | test-citation gate | core prose citing core tests (5 names, TestMain at 3 sites) | The core's port, `citation_gate_test.go` (the sdk removal PR). |
 | godoc-link gate | none: its subject was URmessage's files only | — |

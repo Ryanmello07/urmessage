@@ -20,13 +20,17 @@ and U, T this repository's tip, and m() the mechanical import-path rewrite of th
      m(U:D) (theirs) is clean and is T:M byte for byte. One other outcome is accepted, and is
      declared (port-void, below): the merge conflicts, every conflict is a region the tip REMOVED
      (the tip's side of it is empty), and taken the tip's way it is T:M byte for byte, so upstream
-     changed only lines this repository's adaptation took out and every other change is in the tip;
+     changed only lines this repository's adaptation took out and every other change is in the tip.
+     Before either merge, the lines upstream ADDED whose subject is a value of the core are set
+     aside (CORE_SUBJECT, below): they are measured by what they name, not by where they merge;
   3. upstream's changes are declared: when m(U:D) differs from m(MB:D), ported.tsv has a row for D
      naming exactly the upstream commits that changed it (MB..U), of the kind the measurement says:
        port            the tip commit that ported them, an ancestor of the tip that changes M;
        port-in-source  no tip commit: the import's source already held the change (the fork had
                        made it first), shown by the same three-way merge with m(S:D) as ours;
-       port-void       no tip commit: step 2's other outcome, nothing of the change lands here;
+       port-void       no tip commit: nothing of the change lands here. Every part of it is one
+                       of step 2's two exceptions: lines the tip removed, or lines set aside
+                       because their subject is the core's;
   4. the fork's changes are declared: when m(S:D) differs from m(MB:D), the import carried changes
      upstream never had, and ported.tsv has a fork-only row naming exactly those commits (MB..S);
   5. a path the import holds that upstream deleted after MB (in MB or S, not in U) is gone from the
@@ -56,6 +60,23 @@ every such directory, which the removal deletes and this repository carries, has
 (a7b5db77's cgo/gen/loopback_module_test.go, the harness's own test): it is no import spec's, so
 it must be absent from the import's source, and upstream must hold it.
 
+UPSTREAM ADDS LINES ABOUT A VALUE OF THE CORE. In urnetwork/sdk the messaging SDK shared package
+sdk with the VPN SDK, so a moved file could name any core value, and the value census in
+message_stream_adapter_test.go held the values of both. Here that census holds this package's
+values alone (docs/history/3-scope.md), and upstream goes on adding core values to its copy:
+urnetwork/sdk ae5a65fc adds a census row for the core constant mobileMemoryTeardownLifetime, and
+a test, TestStreamAdapterTeardownConstantsHaveCompleteCensus, of that constant and of
+mobileMemoryTeardownCapacity. Neither can be carried as written: this repository declares neither
+constant, and the core keeps both. And the removed-region rule alone refuses the change: the row
+falls among lines the tip removed, but the test is appended to the file, where the tip removed
+nothing. CORE_SUBJECT names such values, path by path. A block of lines upstream ADDED is set
+aside when a line of it names one of them (the row and the test both), and every name is held
+both ways: no Go file of the tip names it, a Go file upstream keeps (one the removal does not
+delete and no import takes) does, and a line set aside names it. The lines set aside are pinned
+by their sha256 and printed, so a line upstream adds beside them later is not set aside with
+them. A line upstream CHANGED is never set aside, whatever it names: the tip holds the line it
+replaces, or removed it, and the merge says which.
+
 The complement is printed: what the removal's head still holds under the imported paths, and what it
 changes rather than deletes. Read-only on every repository, like verify_split.py, whose projections,
 mechanical rewrite and git helpers this imports.
@@ -73,10 +94,18 @@ directory. Then the three rules upstream's a7b5db77 and 06f33802 made necessary,
 design it replaces: a moved path measured with no lineage (an empty merge base), which must fail
 for exactly that path; an ADDED row dropped, which must leave its path projected by nothing; and
 the removed-region rule on inputs written here, where a line the tip kept, a line the tip changed
-its own way, and a second upstream change outside the removed region must each be refused.
+its own way, and a second upstream change outside the removed region must each be refused. Then
+the rule urnetwork/sdk ae5a65fc made necessary: a CORE_SUBJECT entry dropped, which must fail for
+exactly its path, by a change outside what the tip removed; a name the tip itself spells, a name
+only the moved files spell, and a name no added line spells, each refused for its own reason; a
+line planted in upstream's file beside the lines set aside, which the digest must refuse, and
+which rides along unmeasured with the digest unchecked (the design it replaces); and the
+set-aside on inputs written here, where an added block that names no core value and a CHANGED
+line that names one must each stay in the merge.
 """
 import argparse
 import difflib
+import hashlib
 import os
 import re
 import subprocess
@@ -116,6 +145,23 @@ DIRECTORIES = {"sdk": [("cgo/ctest/", "sdk/cgo/ctest/", "3")]}
 # the removal deletes and this repository carries: (source path, where it lands, stage). No import
 # spec selects them, so each is held to being absent from the import's source and present upstream.
 ADDED = {"sdk": [("cgo/gen/loopback_module_test.go", "sdk/cgo/gen/loopback_module_test.go", "3")]}
+# values of the core SDK that lines upstream ADDED to an imported path name, and that this
+# repository does not declare: source path -> (the names, sha256 of the lines set aside). Such
+# lines cannot be carried as written, because what they are about stayed in the core. Each name is
+# held both ways (core_subject, below), and the digest is of upstream's own bytes:
+#   git show <commit> -- <path> | grep '^+' | grep -v '^+++' | cut -c2- | sha256sum
+# for the one upstream commit that added them (urnetwork/sdk ae5a65fc here).
+CORE_SUBJECT = {
+    "sdk": {
+        "message_stream_adapter_test.go": (
+            ("mobileMemoryTeardownCapacity", "mobileMemoryTeardownLifetime"),
+            "46f0e46a2696baa12962d58c436b8b1f0632e2a75b8601b508af08bc191f726c",
+        ),
+    },
+}
+# whether the lines set aside are held to that digest; the controls turn it off to run the design
+# it replaces, where any added block naming a core value is set aside with whatever sits beside it
+PIN_ASIDE = True
 # whether a path upstream moved is measured against the path it continues (the tip's manifest says
 # which); the controls turn it off to run the design it replaces
 LINEAGE = True
@@ -373,6 +419,89 @@ def changed_lines(base, theirs):
             if line[:1] in "+-" and not line.startswith(("+++", "---"))]
 
 
+_naming = {}
+
+
+def _word(name):
+    """A name as a whole identifier: no identifier character before it or after it."""
+    return re.compile(rb"(?<![A-Za-z0-9_])" + re.escape(name.encode()) + rb"(?![A-Za-z0-9_])")
+
+
+def go_files_naming(repo, commit, names):
+    """name -> the .go files of a commit's tree that spell it as a whole word, by one git grep.
+    The same query answers "no Go file of the tip names it" and "a Go file upstream keeps does",
+    so the absence it reports on one tree is beside a presence it reports on the other."""
+    missing = sorted(n for n in set(names) if (repo, commit, n) not in _naming)
+    if missing:
+        for n in missing:
+            _naming[(repo, commit, n)] = set()
+        args = ["grep", "-z", "-o", "-w", "-F"]
+        for n in missing:
+            args += ["-e", n]
+        out = vs.git(repo, *args, commit, "--", "*.go", ok_codes=(0, 1))
+        for line in out.split(b"\n"):
+            head, found, match = line.partition(b"\0")
+            if not found:
+                continue
+            path = head.decode("utf-8", "surrogateescape")[len(commit) + 1:]
+            _naming.setdefault((repo, commit, match.decode("utf-8", "replace")), set()).add(path)
+    return {n: sorted(_naming[(repo, commit, n)]) for n in names}
+
+
+def set_aside(base, theirs, names):
+    """Upstream's change base->theirs without the lines it ADDED that name one of names.
+
+    A block of added lines, between two lines upstream left alone or at either end of the file, is
+    set aside whole when a line of it names one of the values. A line upstream CHANGED is never
+    set aside, whatever it names. Answers (theirs without those blocks, the lines set aside)."""
+    old, new = (base or b"").splitlines(keepends=True), theirs.splitlines(keepends=True)
+    words = [_word(n) for n in names]
+    kept, aside = [], []
+    for tag, _, _, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        block = new[j1:j2]
+        if tag == "insert" and any(w.search(line) for w in words for line in block):
+            aside.extend(block)
+        else:
+            kept.extend(block)
+    return b"".join(kept), aside
+
+
+def core_subject(side, path, entry, repo, upstream, deleted, dst, tip, base, theirs):
+    """A CORE_SUBJECT entry held both ways. Answers (theirs without the lines set aside, those
+    lines, the Go files upstream keeps that name the values, every problem found).
+
+      - no Go file of the tip names the value: one that does has its subject here, and lines
+        about it are to be ported, not set aside;
+      - a Go file upstream holds, which the removal does not delete and no import takes, names
+        it: a value only the moved files name is not the core's;
+      - a line set aside names it, and at least one line is set aside: an entry nothing needs is
+        a failure, like a ported.tsv row nothing needs;
+      - the lines set aside are the ones pinned."""
+    names, digest = entry
+    kept, aside = set_aside(base, theirs, names)
+    here, there = go_files_naming(dst, tip, names), go_files_naming(repo, upstream, names)
+    gone = set(deleted)
+    keepers, problems = set(), []
+    for name in names:
+        staying = [p for p in there[name] if p not in gone and project(side, p)[0] is None]
+        keepers.update(staying)
+        if here[name]:
+            problems.append("CORE_SUBJECT names %s for %s, and the tip names it too (%s): its subject is here, so the lines are to be ported, not set aside"
+                            % (name, path, ", ".join(here[name][:3])))
+        if not staying:
+            problems.append("CORE_SUBJECT names %s for %s, and no Go file the core keeps at %s names it (%s): nothing shows its subject stays in the core"
+                            % (name, path, upstream[:12], "only %s" % ", ".join(there[name][:3]) if there[name] else "no file names it at all"))
+        if not any(_word(name).search(line) for line in aside):
+            problems.append("CORE_SUBJECT names %s for %s, and no line upstream added since the merge base names it: delete it" % (name, path))
+    if not aside:
+        problems.append("CORE_SUBJECT has an entry for %s, and upstream added no line that names its values: delete the entry" % path)
+    got = hashlib.sha256(b"".join(aside)).hexdigest()
+    if PIN_ASIDE and aside and got != digest:
+        problems.append("the lines upstream added to %s that name a core value are not the ones CORE_SUBJECT pins: %d line(s), sha256 %s, pinned %s. Read them before pinning them: a line beside them whose subject is here is to be ported"
+                        % (path, len(aside), got, digest))
+    return kept, aside, sorted(keepers), problems
+
+
 def changes_path(repo, commit, path):
     """Whether a commit changes a path, against any of its parents."""
     return bool(vs.git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--root", "--no-renames", commit, "--", path).strip())
@@ -431,9 +560,9 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True, notes=None):
                 lineage[d] = earlier[renamed_from[m]]
     for at in (source, mb):
         prefetch(repo, at, sorted(lineage.values()))
-    void = []
+    void, set_asides = [], {}
     if notes is not None:
-        notes["lineage"], notes["void"] = lineage, void
+        notes["lineage"], notes["void"], notes["aside"], notes["deleted"] = lineage, void, set_asides, set(deleted)
 
     def row(kind, path):
         key = (side, kind, path)
@@ -451,6 +580,8 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True, notes=None):
     def plain(stage, path, data):
         return data if stage is None else mech(stage, path, data)
 
+    for d in sorted(set(CORE_SUBJECT.get(side, {})) - set(deleted + kept)):
+        fails.append((d, "CORE_SUBJECT has an entry for %s, which is no imported path upstream holds at %s: delete the entry" % (d, upstream[:12])))
     for d in deleted + kept:
         where = "deleted by the removal" if d in deleted else "kept in %s" % side
         m, stage = project(side, d)
@@ -478,6 +609,22 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True, notes=None):
                       % (d, origin, ", ".join(c[:10] for c in left), renamed_from[m], m))
         s, a = blob_at(repo, source, origin), blob_at(repo, mb, origin)
         mb_, ms_, ma_ = plain(stage, d, b), plain(stage, origin, s), plain(stage, origin, a)
+        # the lines upstream added whose subject is a value of the core are set aside before any
+        # merge: bk is upstream's file without them, and it is what the tip is held to
+        entry, bk, aside = CORE_SUBJECT.get(side, {}).get(d), b, []
+        if entry:
+            bk, aside, keepers, problems = core_subject(side, d, entry, repo, upstream, deleted, dst, tip, a, b)
+            set_asides[d] = (aside, keepers)
+            if problems:
+                fails.extend((d, problem) for problem in problems)
+                continue
+            tally["with lines set aside, their subject the core's"] += 1
+            if verbose:
+                print("  %s: %d line(s) upstream added are set aside (sha256 %s). They name %s, which the core keeps (%s) and no Go file of the tip names. NOT CARRIED:"
+                      % (d, len(aside), entry[1], ", ".join(entry[0]), ", ".join(keepers)))
+                for line in aside:
+                    print("      +%s" % line.decode("utf-8", "replace").rstrip("\r\n"))
+        mbk_ = plain(stage, d, bk)
         voided = False
         if m not in tip_tree:
             if m in declared_deletes:
@@ -493,15 +640,20 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True, notes=None):
                 # the tip holds every upstream change since the merge base: shown with the import-spec
                 # rewrite of both of upstream's sides, or with every literal rewritten too, when the tip's
                 # own literal rewrite sits beside an upstream change and only the second can merge it
-                pairs = [(ma_, mb_)]
+                pairs = [(ma_, mbk_)]
                 if stage is not None:
-                    pairs.append((mech_all(stage, origin, a), mech_all(stage, d, b)))
+                    pairs.append((mech_all(stage, origin, a), mech_all(stage, d, bk)))
                 ok, how = contains(t, *pairs[0])
                 if not ok and len(pairs) > 1:
                     ok, how_all = contains(t, *pairs[1])
                     if ok:
                         how = how_all + " (with the literal rewrite applied to upstream's two sides)"
-                if ok:
+                if ok and aside and mbk_ == ma_:
+                    # upstream changed nothing but the lines set aside, so nothing of it lands here
+                    voided = True
+                    void.append(d)
+                    tally["adapted here, upstream's whole change set aside"] += 1
+                elif ok:
                     tally["adapted here, holding every upstream change"] += 1
                 else:
                     # step 2's other outcome: every conflict is a region the tip removed
@@ -518,9 +670,9 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True, notes=None):
                     void.append(d)
                     tally["adapted here, upstream's change inside what the tip removed"] += 1
                     if verbose:
-                        took = changed_lines(ma_, mb_)
-                        print("  %s: upstream's change conflicts in %d region(s), each one the tip removed whole (upstream holds %d line(s) there), and every other upstream change is in the tip. NOT CARRIED, %d changed line(s):"
-                              % (d, detail, len(there), len(took)))
+                        took = changed_lines(ma_, mbk_)
+                        print("  %s: %s conflicts in %d region(s), each one the tip removed whole (upstream holds %d line(s) there), and every other upstream change is in the tip. NOT CARRIED, %d changed line(s):"
+                              % (d, "the rest of upstream's change" if aside else "upstream's change", detail, len(there), len(took)))
                         for line in took[:12]:
                             print("      %s" % line)
         if mb_ != ma_:
@@ -768,6 +920,99 @@ def main():
                   % (name, "accepted" if holds else "refused: %s" % detail, "" if ok else "  <-- BROKEN"))
             if not ok:
                 failures.append("control: the removed-region rule, %s: got %s %s" % (name, holds, detail))
+        # the lines upstream added whose subject is the core's: the entry dropped, each refusal for
+        # its own reason, and the digest against the design it replaces
+        global PIN_ASIDE
+        for side in sorted(CORE_SUBJECT):
+            repo, base, _, upstream = removals[side]
+            at = vs.rev(repo, upstream or base)
+
+            def held(path, entry):
+                """check_side's failures with path's entry replaced, or dropped when entry is None."""
+                saved = CORE_SUBJECT[side]
+                CORE_SUBJECT[side] = {k: v for k, v in saved.items() if k != path}
+                if entry is not None:
+                    CORE_SUBJECT[side][path] = entry
+                try:
+                    return check_side(side, removals[side], a.dst, tip, rows, set(), verbose=False)
+                finally:
+                    CORE_SUBJECT[side] = saved
+
+            def one(control, path, got, needle):
+                """A control that must fail for path alone, with one message, which holds needle."""
+                ok = len(got) == 1 and got[0][0] == path and needle in got[0][1]
+                print("  control: %s -> %s" % (control, "refused: %s" % got[0][1] if ok else "BROKEN: %s" % got))
+                if not ok:
+                    failures.append("control: %s: want one failure, for %s, saying %r; got %s" % (control, path, needle, got))
+
+            notes = {}
+            check_side(side, removals[side], a.dst, tip, rows, set(), verbose=False, notes=notes)
+            for path in sorted(CORE_SUBJECT[side]):
+                names, digest = CORE_SUBJECT[side][path]
+                lines, keepers = notes["aside"].get(path, ([], []))
+                if not lines or not keepers:
+                    failures.append("control: CORE_SUBJECT's entry for %s sets no line aside, or nothing the core keeps names its values, so its controls have nothing to run on" % path)
+                    continue
+                one("the CORE_SUBJECT entry for %s dropped" % path, path, held(path, None), "outside what the tip removed")
+
+                # three names, each taken from the source, each wrong in exactly one way
+                def stays(found):
+                    return any(p not in notes["deleted"] and project(side, p)[0] is None for p in found)
+                spelled = sorted({w.decode() for w in re.findall(rb"[A-Za-z_][A-Za-z0-9_]{5,}", b"".join(lines))} - set(names))
+                here, there = go_files_naming(a.dst, tip, spelled), go_files_naming(repo, at, spelled)
+                both = next((w for w in spelled if here[w] and stays(there[w])), None)
+                moved = next((w for w in spelled if not here[w] and there[w] and not stays(there[w])), None)
+                beside = sorted({w.decode() for w in re.findall(rb"[A-Za-z_][A-Za-z0-9_]{11,}", blob_at(repo, at, keepers[0]))} - set(spelled) - set(names))[:150]
+                absent = go_files_naming(a.dst, tip, beside)
+                unnamed = next((w for w in beside if not absent[w]), None)
+                if None in (both, moved, unnamed):
+                    failures.append("control: the lines set aside from %s and %s offer no name for a control (%s, %s, %s)" % (path, keepers[0], both, moved, unnamed))
+                    continue
+                one("%s named in CORE_SUBJECT for %s, a name the set-aside lines spell and the tip spells too" % (both, path),
+                    path, held(path, (tuple(names) + (both,), digest)), "the tip names it too")
+                one("%s named there, a name only the moved file spells" % moved,
+                    path, held(path, (tuple(names) + (moved,), digest)), "no Go file the core keeps")
+                one("%s named there, a name the core keeps and no added line spells" % unnamed,
+                    path, held(path, (tuple(names) + (unnamed,), digest)), "no line upstream added since the merge base names it")
+
+                # the digest: a line planted in upstream's file, beside the lines set aside
+                oid = tree_of(repo, at)[path][2]
+                real = blob_at(repo, at, path)
+                anchor = next((line for line in lines if real.count(line) == 1), None)
+                if anchor is None:
+                    failures.append("control: no line set aside from %s is unique in upstream's file, so nothing can be planted beside one" % path)
+                    continue
+                _blobs[(repo, oid)] = real.replace(anchor, anchor + b"// planted by carried.py's control: a line whose subject would be here\n", 1)
+                try:
+                    one("a line planted in upstream's %s beside the lines set aside" % path, path,
+                        held(path, (names, digest)), "are not the ones CORE_SUBJECT pins")
+                    PIN_ASIDE = False
+                    try:
+                        unpinned = held(path, (names, digest))
+                    finally:
+                        PIN_ASIDE = True
+                finally:
+                    _blobs[(repo, oid)] = real
+                ok = not unpinned
+                print("  control: the same planted line with the digest unchecked, the design it replaces -> %s"
+                      % ("set aside with the rest, and nothing reports it" if ok else "BROKEN: %s" % unpinned))
+                if not ok:
+                    failures.append("control: with the digest unchecked the planted line was still reported: %s" % unpinned)
+        value = "coreValue"
+        three = b"a\nb\nc\n"
+        for name, theirs_, want_kept, want_aside in (
+            ("an added line that names the value", b"a\nb\ncoreValue()\nc\n", three, [b"coreValue()\n"]),
+            ("an added line that names no such value", b"a\nb\nx\nc\n", b"a\nb\nx\nc\n", []),
+            ("an added line whose names only contain the value's", b"a\nb\nxcoreValue(coreValues)\nc\n", b"a\nb\nxcoreValue(coreValues)\nc\n", []),
+            ("a CHANGED line that names the value", b"a\ncoreValue()\nc\n", b"a\ncoreValue()\nc\n", []),
+            ("two added blocks, one of which names the value", b"a\nx\nb\ncoreValue()\nc\n", b"a\nx\nb\nc\n", [b"coreValue()\n"]),
+        ):
+            got_kept, got_aside = set_aside(three, theirs_, (value,))
+            ok = got_kept == want_kept and got_aside == want_aside
+            print("  control: the set-aside, %s -> %s%s"
+                  % (name, "set aside" if got_aside else "left in the merge", "" if ok else "  <-- BROKEN"))
+            if not ok:
+                failures.append("control: the set-aside, %s: kept %r, set aside %r" % (name, got_kept, got_aside))
     print()
     if failures:
         print("FAIL (%d)" % len(failures))
