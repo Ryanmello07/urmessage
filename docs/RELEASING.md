@@ -26,7 +26,11 @@ updated by adding commits or by merging `main` into them.
 If an import pull request is merged by squash or rebase, `main` holds its files
 but not its history. The import merge and its source commits are not ancestors of
 `main`, and the next import refuses to build ("the earlier import ... is not in
-main"). Do not rewrite `main`. Restore the history with one more merge:
+main"). The same goes for the pull request that holds the recorded tip, the one
+commit the import's proof is held at (see [HISTORY.md](HISTORY.md)): squashed or
+rebased, that commit is not an ancestor of `main`, and `docs/history/proof.py`
+fails on `main` and on every branch cut from it. Do not rewrite `main`. Restore
+the history with one more merge:
 
 1. Check that the bad merge changed nothing but history. This must print nothing,
    which holds when `main` had not moved while the pull request was open:
@@ -43,8 +47,11 @@ main"). Do not rewrite `main`. Restore the history with one more merge:
    `-s ours` keeps `main`'s tree and records the original tip as a second parent,
    so the import merge and its source history become ancestors of `main` again.
 3. Open a pull request from that branch and merge it with **Create a merge commit**.
-4. Run `docs/history/verify_split.py` on the result (see [HISTORY.md](HISTORY.md)).
-   Its import discovery finds the original import merge through the second parent.
+4. Run `docs/history/proof.py` on the result (see [HISTORY.md](HISTORY.md)). The
+   recorded tip is an ancestor of `main` again, through the merge's second parent,
+   and the verifier's import discovery finds the original import merge the same
+   way. proof.py's own controls build both halves of this: a squashed history,
+   which it refuses, and that history after this merge, which it accepts.
 
 A rebase merge also leaves rewritten copies of the commits on `main`. They stay:
 removing them would need a force push.

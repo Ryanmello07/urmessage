@@ -207,11 +207,12 @@ it the three tunnel files differ from sdk `main`, and without it (`d20d82c1`'s p
 sdk `main`'s byte for byte. This repository's pull request 1, the import, names it at its top.
 An earlier version of this file listed OPPORTUNISTIC beside it; that change is upstream's too.
 
-**The proof.** [carried.py](history/carried.py) reads each removal pull request's deletions,
-from its base, and holds this tip to them: every deleted path is here (or declared deleted in
-the manifest), the tip contains every upstream change to it since the merge base of the
-import's source and the removal's base (a three-way merge that changes nothing), and every
-upstream change and fork-only change is declared in ported.tsv, both ways. Its control is the
+**The proof.** [carried.py](history/carried.py) reads what each removal deleted when it merged,
+a range it records ("The removals, as they merged", below), and holds the tip to it: every
+deleted path is here (or declared deleted in the manifest), the tip contains every upstream
+change to it since the merge base of the import's source and the removal's base (a three-way
+merge that changes nothing), and every upstream change and fork-only change is declared in
+ported.tsv, both ways. Its control is the
 tip the review measured, `f3f8f2bd`, before the ports, where it fails for exactly the ported
 paths. An imported path is one the import specs (the `*-paths*.txt` files) select, and a
 file upstream adds later under a directory an import took whole is one too: carried.py holds its
@@ -257,7 +258,70 @@ The kind of a row is what carried.py measures, not what the row says: an upstrea
 import's source already held is `port-in-source` and names no commit here, and a `port` row must
 name a commit of this repository that changes the path.
 
-## Re-running the verifier
+## The recorded tip
+
+The proof is a statement about one tree. [verify_split.py](history/verify_split.py) proves
+every import against its pinned source and holds every other path of that tree to the manifest,
+and [carried.py](history/carried.py) holds the same tree to what the two removals deleted.
+While the imports were made it was run at every tip, and each commit kept the manifest in step.
+It is now held at ONE commit, the recorded tip, and at no other: the tree in which every
+sibling pin had moved to a merged upstream commit and both removals' ranges were final.
+
+It cannot be held at every tip for good. The manifest pins the sha256 of every file that is
+not an import's own bytes, so the first commit that changes code fails part E, and a manifest
+rewritten for each day's work would stop being a record of the import. So no row is added to
+it for later work, and a later tip is held to two rules instead, by
+[proof.py](history/proof.py):
+
+1. **The recorded tip is its ancestor.** [recorded-tip.txt](history/recorded-tip.txt), read
+   from the tip that is asked about, names one commit by its full id. That commit must be in
+   the repository and in the tip's history. A history rewritten after the record (a squash, a
+   rebase, a force-push) does not hold it, and fails here.
+2. **The proof passes at the recorded tip**, run by that commit's own copies of the two
+   scripts over that commit's own records. proof.py reads them out of the commit byte for
+   byte, so nothing a later commit does under `docs/history`, and no line-ending setting of a
+   checkout, changes what is proven.
+
+A commit cannot hold its own id. So the recorded tip does not hold recorded-tip.txt: the commit
+after it adds that file, writes the id into the next sentence, and changes nothing else.
+This tree is made to be that tip, and it is proven as one with `--at` (below) before it is recorded.
+
+## Running the proof again
+
+It reads repositories only, and never checks out a file. The clone must hold its whole history
+(the check does not pass in a shallow clone). From the root of a checkout of the recorded tip,
+or of any later tip:
+
+    git init --bare ../connect-src.git
+    git -C ../connect-src.git fetch https://github.com/Ryanmello07/connect.git e449f7d8126c0b5748f5083392a8855bac877b32:refs/heads/main
+    git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git 7ca8e222e3496552146f2d97eb09237401662c99:refs/remotes/upstream/control
+    git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git 847460bba8aa31fb2e86ce007e9d5443d884544b:refs/remotes/removal/merged
+    git init --bare ../sdk-src.git
+    git -C ../sdk-src.git fetch https://github.com/Ryanmello07/urnetwork-sdk.git 6141b98d05bcac98d5ccae11c54c7748919017e6:refs/heads/main
+    git -C ../sdk-src.git fetch https://github.com/urnetwork/sdk.git b8209d9d7f6d858b2171cd92d4203bdadb758260:refs/remotes/removal/merged
+    python3 docs/history/proof.py --connect ../connect-src.git --sdk ../sdk-src.git --controls
+
+It must end with `PASS`. Every fetch names a commit and no command reads a branch, so the
+answer for a tip is the same on any day. At a tip that names a recorded tip the command checks
+rule 1 and then runs rule 2's two scripts at the recorded tip. The recorded tip itself names
+none, so there add `--at HEAD`: that runs the two scripts at the commit given, with that
+commit's copies, and it is how a tip is proven before it is recorded.
+
+`--controls` passes `--controls` to both scripts (below), and then runs proof.py's own on
+histories it builds in a scratch repository that borrows the checkout's objects, so nothing is
+written to the repository measured:
+
+- a later commit that changes an imported file is accepted, and the same commit held to the
+  manifest, the design this replaces, is refused for that file;
+- a later commit that puts a script that passes anything in carried.py's place and empties the
+  manifest is accepted too, and what is run for it is still the recorded tip's copies;
+- a rewritten history is refused: the tip's own tree as one commit on the recorded tip's parent,
+  which is what a squash merge makes. Recovered the way [RELEASING.md](RELEASING.md) gives, by
+  one more merge of the original tip that takes no change, it is accepted again;
+- a record that is a name and not a commit id, a record naming a commit the repository does
+  not hold, and a record naming a commit that holds no proof are each refused, for that reason.
+
+### What verify_split.py proves
 
 [verify_split.py](history/verify_split.py) proves, for every import the tip holds:
 
@@ -274,17 +338,12 @@ name a commit of this repository that changes the path.
   base that the tip holds with other bytes is declared too, and its row names every commit that
   changed it since the base (`LICENSE`, by `b2da8432`).
 
-It reads repositories only, and never checks out a file. From the root of a
-checkout:
+proof.py runs it at the recorded tip, with that tip's copies of the script, of the manifest
+and of the four commit maps:
 
-    git init --bare ../connect-src.git
-    git -C ../connect-src.git fetch https://github.com/Ryanmello07/connect.git e449f7d8126c0b5748f5083392a8855bac877b32:refs/heads/main
-    git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git 7ca8e222e3496552146f2d97eb09237401662c99:refs/remotes/upstream/control
-    git init --bare ../sdk-src.git
-    git -C ../sdk-src.git fetch https://github.com/Ryanmello07/urnetwork-sdk.git 6141b98d05bcac98d5ccae11c54c7748919017e6:refs/heads/main
-    python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol,sdk --connect ../connect-src.git --sdk ../sdk-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt --commit-map connect-core=docs/history/connect-core-commit-map.txt --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt --commit-map sdk=docs/history/sdk-commit-map.txt --manifest docs/history/adaptations.tsv
+    python3 verify_split.py --sides connect-codestyle,connect-core,connect-protocol,sdk --connect ../connect-src.git --sdk ../sdk-src.git --dst . --dst-rev <the recorded tip> --controls --expect-filtered-tips --commit-map connect-codestyle=connect-codestyle-commit-map.txt --commit-map connect-core=connect-core-commit-map.txt --commit-map connect-protocol=connect-protocol-commit-map.txt --commit-map sdk=sdk-commit-map.txt --manifest adaptations.tsv
 
-It must end with `PASS`. `--controls` also runs negative controls that must fire:
+`--controls` also runs negative controls that must fire:
 the source file one change earlier, and synthetic changes to the expected tree. For the
 changed base path it runs part E four more times over the same tip, with the `LICENSE` row
 dropped, with its pin replaced by the base's digest, with `b2da8432` taken out of its reason,
@@ -295,33 +354,50 @@ declaration: `E: LICENSE differs from base and is not declared`.
 import; the sdk side's control is `d20d82c1`, the fork's `beta/message` before its sync, which
 the fetch of `6141b98d` brings with its history.
 
-The removals' deletions, against each removal pull request's base and head. Fetch those into
-the same two repositories first. A removal's base is the upstream `main` commit its branch last
-merged, which is the merge base of its head and `main`. The head to measure is the commit
-[scripts/siblings.txt](../scripts/siblings.txt) pins for that sibling, fetched from the URL
-given there: the owner's fork until the pull request has merged, the urnetwork repository after.
-A removal's branch may have merged `main` again since it was pinned. Its newest head deletes
-the same paths, and can be measured in the pin's place.
+### The removals, as they merged
 
-    git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git main:refs/remotes/upstream/main
-    git -C ../connect-src.git fetch <connect's URL in scripts/siblings.txt> <connect's pin>:refs/remotes/removal/head
-    git -C ../sdk-src.git fetch https://github.com/urnetwork/sdk.git main:refs/remotes/upstream/main
-    git -C ../sdk-src.git fetch <sdk's URL in scripts/siblings.txt> <sdk's pin>:refs/remotes/removal/head
-    python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv --controls \
-        --removal connect=../connect-src.git:$(git -C ../connect-src.git merge-base removal/head upstream/main)..removal/head@upstream/main \
-        --removal sdk=../sdk-src.git:$(git -C ../sdk-src.git merge-base removal/head upstream/main)..removal/head@upstream/main
+[carried.py](history/carried.py) holds the tip to what each removal deleted. Both removals have
+merged, each with a merge commit, and carried.py records the two ranges beside each import's
+source:
 
-It must end with `PASS`. The suffix `@<commit>` on a removal measures the content against that
-upstream commit instead of the removal's base, the newest `main` here, so a change upstream made
-after the removal's base is caught before the removal merges it; a ported.tsv row whose commits
-that upstream does not yet hold is printed as ahead of it. Measured on 2026-10-06 at `a8c84e3c`
-and again on 2026-10-07 at `2406135e`, with the controls: connect `6df2fa87..0f2ff669` (848
-deletions) against `main` at `6edbaa6f`, and sdk `06f33802..0f03e27e` (150 deletions) against
-`main` at `06f33802`, both `PASS`. connect `main` then took `5f5a205d`: against `main` at
-`60f3bd61` the command fails for `CODESTYLE.md` without the port and passes with it. connect's
-`main` also takes an automated data commit about once an hour (ten on 2026-10-06, 31 to 163
-minutes apart), so the commit named here is soon not the newest; the command above measures
-whichever is.
+| Side | Merged as | Base: the merge's first parent | Merge commit | Deleted |
+|---|---|---|---|---|
+| connect | urnetwork/connect pull request 219, 2026-10-09 13:44 UTC | `64e433f47cb5ac9f32e71a5b6d5aff659bc00623` | `847460bba8aa31fb2e86ce007e9d5443d884544b` | 848 imported paths |
+| sdk | urnetwork/sdk pull request 158, 2026-10-09 12:25 UTC | `679a836a21cf2f597b87d3adae6b91bcdf5aabf3` | `b8209d9d7f6d858b2171cd92d4203bdadb758260` | 150 imported paths |
+
+The base is the last commit of that `main` to hold the moved paths, and the content is measured
+there. In both, the pull request's head had merged that same commit and the merge's tree is the
+head's, so the range is what the pull request deleted and nothing else. carried.py holds the
+record to the shape it relies on: each merge is a merge commit, and each base is its first
+parent. proof.py runs it at the recorded tip, with that tip's copies of the script and of
+ported.tsv:
+
+    python3 carried.py --dst . --dst-rev <the recorded tip> --ported ported.tsv --connect ../connect-src.git --sdk ../sdk-src.git --controls
+
+**Why the ranges are recorded, and not computed.** While the removals were under review the
+command took each removal's base and head as arguments. The base was computed as the merge base
+of the removal's head and upstream `main`, and the content was measured at the newest `main` (a
+suffix, `@<commit>`), so that a change upstream made meanwhile was caught before the removal
+merged it. Once a removal has merged, that merge base is the head itself: the range is empty,
+and `main` holds no moved path to measure. At `a0d47bef`, this repository's `main` as pull
+request 2 merged, that command prints `PASS` against upstream as it stood before either removal
+merged, `FAIL (165)` against upstream once urnetwork/sdk had merged its own, and `FAIL (1021)`
+since connect merged too: one tree, three answers. Nothing upstream can change a moved path any
+more, so the ranges are final, and they are commits. The controls run the old form on each
+side, where it must fail on an empty range, and refuse a recorded base that is not its merge's
+first parent. A ported.tsv row whose commits the upstream measured does not hold was printed as
+ahead of it while the ranges moved; it is a row nothing needs now, and fails like one.
+
+### Measured while the removals were under review
+
+Each of these ran the command as it then was, with the ranges as arguments. Measured on
+2026-10-06 at `a8c84e3c` and again on 2026-10-07 at `2406135e`, with the controls: connect
+`6df2fa87..0f2ff669` (848 deletions) against `main` at `6edbaa6f`, and sdk
+`06f33802..0f03e27e` (150 deletions) against `main` at `06f33802`, both `PASS`. connect `main`
+then took `5f5a205d`: against `main` at `60f3bd61` the command fails for `CODESTYLE.md` without
+the port and passes with it. connect's `main` also takes an automated data commit about once an
+hour (ten on 2026-10-06, 31 to 163 minutes apart), so a commit named here was soon not the
+newest; the command measured whichever was.
 
 Measured again on 2026-10-09 (UTC), with connect `main` at `c2833fcb` and sdk `main` at
 `812df82f`. connect `main` had changed `CODESTYLE.md` twice more, and sdk `main` had added 37
@@ -340,6 +416,12 @@ upstream's four commits. At the tip that declares them it passes with the contro
 commits this repository pins (connect `6df2fa87..0f2ff669`, sdk `06f33802..0f03e27e`) and for
 those newer heads (`64e433f4..4bcc5fd8`, `679a836a..0da627ac`): 848 and 150 deletions either
 way.
+
+Measured a fourth time on 2026-10-09, after both removals had merged, with the ranges recorded.
+At `7fa04709`, the commit that moved the last sibling pin to a merged upstream commit,
+carried.py passes with its controls: the same 848 and 150 deletions. Each recorded range is the
+change the third measurement read from the branches' heads, since each merge's tree is its pull
+request's head's.
 
 ## Files in docs/history
 
@@ -367,13 +449,19 @@ way.
 - `sdk-paths.stage3.txt`, `sdk-commit-map.txt`: the same for stage 3.
 - `2a-scope.md`: stage 2a's scope record.
 - `3-scope.md`: stage 3's.
-- `adaptations.tsv`: every path of the tip that is neither imported unchanged nor an
+- `adaptations.tsv`: every path of the recorded tip that is neither imported unchanged nor an
   unchanged path of the base, with its reason and, for a new or edited file, the sha256 of
-  its bytes. It declares itself as `manifest`.
-- `verified-tips.txt`: every tip the verifier passed, oldest first.
-- `carried.py`: the removals' deletions held to this tip (above).
+  its bytes. It declares itself as `manifest`. It is the import's record and ends at the
+  recorded tip: later work adds no row.
+- `verified-tips.txt`: the tips the verifier passed on the way to the recorded tip, oldest
+  first. Part D holds each to being an ancestor of the tip it verifies.
+- `carried.py`: what the removals deleted, as they merged, held to the tip (above).
 - `ported.tsv`: every upstream change after an import's source carried here, every path upstream
   deleted, and every fork-only change, each with its commits.
+- `proof.py`: the check of a tip. The recorded tip is its ancestor, and the proof passes at the
+  recorded tip, by that commit's own scripts and records (above).
+- `recorded-tip.txt`: the recorded tip's id, one line. The recorded tip does not hold it; the
+  commit after it adds it.
 
 ## Changes in connect and the core SDK until the removals merge
 

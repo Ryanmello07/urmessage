@@ -5,12 +5,22 @@ The imports took their paths from a pinned source commit, and verify_split.py pr
 against it. The removal pull requests delete those paths from a LATER commit, their base, and the
 maintainers may change a path in between: urnetwork/connect 54b5b106, e8611390 and f5e1aa1f did,
 after the import's source e449f7d8, and nothing compared the two until review. This is that
-comparison, re-runnable against whatever base each removal pull request finally has, and against
-the newest upstream main besides.
+comparison.
 
-For each side, with S its import source, B and H the removal's base and head, U the upstream commit
-the content is measured against (B, or a later upstream main given as @U), MB the merge base of S
-and U, T this repository's tip, and m() the mechanical import-path rewrite of the path's import:
+BOTH REMOVALS HAVE MERGED (2026-10-09), AND THEIR RANGES ARE RECORDED HERE. While they were under
+review this script took each removal's base and head on the command line, and the documented
+command computed the base as the merge base of the removal's head and upstream main, so that what
+upstream changed meanwhile was measured too. Once a removal has merged, that merge base is the
+head itself: the range is empty, and upstream main holds no moved path to measure. The command
+went red on this repository's own main the hour urnetwork/sdk merged its removal. Nothing upstream
+can change a moved path any more, so the ranges are final, and SIDES records them beside each
+import's source: the merge of the removal's pull request on its upstream main, and that merge's
+first parent, the last commit of main that holds the moved paths. The content is measured at that
+first parent. No branch is read, so the answer for a tip is the same on any day.
+
+For each side, with S its import source, B and H the removal's recorded base and merge, U = B the
+upstream commit the content is measured against, MB the merge base of S and U, T the tip measured,
+and m() the mechanical import-path rewrite of the path's import:
 
   1. every path D the removal deletes (B..H, status D) projects onto a path M of the tip, and T holds
      M (or the tip's manifest declares M deleted), unless ported.tsv declares D not-carried;
@@ -36,8 +46,9 @@ and U, T this repository's tip, and m() the mechanical import-path rewrite of th
   5. a path the import holds that upstream deleted after MB (in MB or S, not in U) is gone from the
      tip, under its name and any name the tip's manifest renamed it to, with a port-delete row
      naming exactly the deleting commits;
-  6. every ported.tsv row is needed, unless its commits are not in U at all: such a row is AHEAD of
-     the upstream measured, it is printed, and it is checked the day U contains it.
+  6. every ported.tsv row is needed. While the ranges moved, a row whose commits the upstream
+     measured did not hold yet was printed as AHEAD of it and checked on a later day; with the
+     ranges recorded there is no later day, and such a row is needed by nothing, like any other.
 
 UPSTREAM MOVES A PATH. urnetwork/sdk a7b5db77 moved cgo/loopback_test_world.go to
 cgo/ctest/testdata/loopback_test_world.go and edited it in the same commit. Path by path that is a
@@ -85,8 +96,12 @@ The complement is printed: what the removal's head still holds under the importe
 changes rather than deletes. Read-only on every repository, like verify_split.py, whose projections,
 mechanical rewrite and git helpers this imports.
 
-  python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv \\
-      --removal connect=<repo>:<B>..<H>[@<U>] --removal sdk=<repo>:<B>..<H>[@<U>] [--controls]
+  python3 docs/history/carried.py --dst . --dst-rev <tip> --ported <that tip's ported.tsv> \\
+      --connect <repo> --sdk <repo> [--controls]
+
+Each <repo> holds its side's import source and its recorded removal; docs/HISTORY.md has the
+fetches. The tip to measure is the recorded tip, and docs/history/proof.py runs this there, with
+that tip's own copy of this script and of ported.tsv: a later tip is not held to these records.
 
 --controls runs the same checks against the tip this branch had before the ports (f3f8f2bd, the tip
 the review measured), where they must fail for exactly the paths the port and port-delete rows
@@ -105,7 +120,11 @@ only the moved files spell, and a name no added line spells, each refused for it
 line planted in upstream's file beside the lines set aside, which the digest must refuse, and
 which rides along unmeasured with the digest unchecked (the design it replaces); and the
 set-aside on inputs written here, where an added block that names no core value and a CHANGED
-line that names one must each stay in the merge.
+line that names one must each stay in the merge. Then the recorded ranges: each side measured the
+way this replaces, its base the merge base of the removal's head and a main that has merged it,
+which is an empty range and must fail; a recorded base that is not its merge's first parent, which
+must be refused; and a row whose commits the upstream measured does not hold, which must be
+needed by nothing where it was once printed as ahead.
 """
 import argparse
 import difflib
@@ -121,13 +140,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.dont_write_bytecode = True  # no __pycache__ beside the files this repository tracks
 import verify_split as vs  # noqa: E402
 
+# Each side's import source, and ITS REMOVAL AS IT MERGED: (base, merge). The merge is the merge
+# commit of the removal's pull request on the side's upstream main; the base is that merge's first
+# parent, the last commit of main that holds the moved paths, and the content is measured there.
+#   connect  urnetwork/connect pull request 219, merged 2026-10-09 13:44 UTC
+#   sdk      urnetwork/sdk pull request 158, merged 2026-10-09 12:25 UTC
+# In both, the pull request's head had merged that same first parent, and the merge's tree is the
+# head's: base..merge is what the pull request deleted, and nothing else.
 SIDES = {
     "connect": dict(
         source="e449f7d8126c0b5748f5083392a8855bac877b32",
+        removal=("64e433f47cb5ac9f32e71a5b6d5aff659bc00623", "847460bba8aa31fb2e86ce007e9d5443d884544b"),
         projectors=[(vs.project_connect_codestyle, None), (vs.project_connect_core, "2a"), (vs.project_connect_protocol, "2b")],
     ),
     "sdk": dict(
         source="6141b98d05bcac98d5ccae11c54c7748919017e6",
+        removal=("679a836a21cf2f597b87d3adae6b91bcdf5aabf3", "b8209d9d7f6d858b2171cd92d4203bdadb758260"),
         projectors=[(vs.project_sdk, "3")],
     ),
 }
@@ -768,20 +796,31 @@ def check_side(side, removal, dst, tip, rows, used, verbose=True, notes=None):
     return fails
 
 
-def unneeded(rows, used, removals):
-    """Rows nothing needed: a failure when their commits are in the upstream measured, and printed as
-    ahead of it otherwise (fork-only and not-carried rows are always failures)."""
-    fails, ahead = [], []
-    for key in sorted(set(rows) - used):
-        side, kind, path = key
-        repo, base, _, upstream = removals[side]
-        measured = vs.rev(repo, upstream or base)
-        commits = rows[key]["commits"]
-        if kind in PORT_KINDS + ("port-delete",) and commits and not all(vs.is_ancestor(repo, c, measured) for c in commits):
-            ahead.append("%s %s %s (%s not in %s)" % (side, kind, path, ", ".join(c[:10] for c in commits), measured[:12]))
-            continue
-        fails.append("ported.tsv: the %s row for %s %s is needed by nothing: delete it" % (kind, side, path))
-    return fails, ahead
+def unneeded(rows, used):
+    """Rows nothing needed, each a failure. While the ranges moved, a row whose commits the upstream
+    measured did not hold was set apart as ahead of it; the recorded ranges have nothing after them."""
+    return ["ported.tsv: the %s row for %s %s is needed by nothing: delete it" % (kind, side, path)
+            for side, kind, path in sorted(set(rows) - used)]
+
+
+def removal_shape(side, repo, base, merge):
+    """A removal's recorded range held to its shape: the merge is a merge commit, and the base is
+    its first parent. So the range is what the side's upstream main lost in that one merge, and
+    the base is the last commit of main that holds the moved paths. Answers every problem."""
+    for name, commit in (("base", base), ("merge", merge)):
+        r = subprocess.run(["git", "--no-optional-locks", "-C", repo, "cat-file", "-e", commit + "^{commit}"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if r.returncode != 0:
+            sys.exit("FATAL: %s does not hold %s, the %s of the %s removal as it merged: fetch it (docs/HISTORY.md has the command)"
+                     % (repo, commit, name, side))
+    parents = vs.git(repo, "log", "-1", "--format=%P", merge).decode().split()
+    if len(parents) < 2:
+        return ["the %s removal is recorded as %s, which is not a merge commit: the range is the merge of the removal's pull request on upstream main"
+                % (side, merge[:12])]
+    if parents[0] != base:
+        return ["the %s removal's base is recorded as %s, and its merge %s has the first parent %s: the base is the commit of main the removal merged into"
+                % (side, base[:12], merge[:12], parents[0][:12])]
+    return []
 
 
 def planted_upstream_file(side, removal, dst, tip, rows, directory):
@@ -807,33 +846,31 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dst", required=True)
     ap.add_argument("--dst-rev", required=True)
-    ap.add_argument("--removal", action="append", default=[], help="side=<repo>:<base>..<head>[@<upstream>]")
+    ap.add_argument("--connect", required=True, help="a repository holding connect's import source and its removal as it merged")
+    ap.add_argument("--sdk", required=True, help="a repository holding the sdk's import source and its removal as it merged")
     ap.add_argument("--ported", required=True)
     ap.add_argument("--controls", action="store_true")
     a = ap.parse_args()
     rows = read_ported(a.ported)
     tip = vs.rev(a.dst, a.dst_rev)
-    removals = {}
-    for spec in a.removal:
-        side, _, rest = spec.partition("=")
-        rest, _, upstream = rest.partition("@")
-        repo, _, span = rest.rpartition(":")
-        base, _, head = span.partition("..")
-        if side not in SIDES or not repo or not base or not head:
-            sys.exit("FATAL: --removal %r must be side=<repo>:<base>..<head>[@<upstream>]" % spec)
-        removals[side] = (repo, base, head, upstream or None)
-    if set(removals) != set(SIDES):
-        sys.exit("FATAL: --removal must name every side: %s" % sorted(SIDES))
+    repos = {"connect": a.connect, "sdk": a.sdk}
+    # a removal is (repository, base, head, the upstream measured or None for the base): the ranges
+    # are SIDES' own, and the controls alone build any other
+    removals = {side: (repos[side],) + SIDES[side]["removal"] + (None,) for side in SIDES}
     print("tip %s" % tip)
-    failures = ["spec: %s" % p for p in spec_problems(a.dst, tip)]
-    print("the projections against the import specs: %s" % ("%d problem(s)" % len(failures) if failures else "every selection line projects where its spec puts it"))
+    failures = []
+    for side in sorted(removals):
+        repo, base, merge, _ = removals[side]
+        problems = removal_shape(side, repo, base, merge)
+        print("the %s removal as it merged, recorded: %s..%s, %s" % (side, base[:12], merge[:12], "a merge and its first parent" if not problems else "NOT one merge of its main"))
+        failures += ["recorded: %s" % p for p in problems]
+    spec = ["spec: %s" % p for p in spec_problems(a.dst, tip)]
+    failures += spec
+    print("the projections against the import specs: %s" % ("%d problem(s)" % len(spec) if spec else "every selection line projects where its spec puts it"))
     used = set()
     for side in sorted(removals):
         failures += ["%s: %s" % (side, msg) for _, msg in check_side(side, removals[side], a.dst, tip, rows, used)]
-    stale, ahead = unneeded(rows, used, removals)
-    failures += stale
-    for line in ahead:
-        print("  AHEAD of the upstream measured, not checked by this run: %s" % line)
+    failures += unneeded(rows, used)
     if a.controls:
         print()
         print("controls:")
@@ -859,18 +896,21 @@ def main():
             print("  control: the %s row for %s dropped -> %s" % (kind, key[2], "reported" if ok else "MISSED"))
             if not ok:
                 failures.append("control: dropping the %s row for %s went unreported" % (kind, key[2]))
-        planted = dict(rows)
         plant = ("connect", "port", "message/record.go")
-        planted[plant] = dict(commits=[], port=None, reason="planted: upstream did not change it")
-        plant_used = set()
-        for side in sorted(removals):
-            check_side(side, removals[side], a.dst, tip, planted, plant_used, verbose=False)
-        plant_stale, _ = unneeded({plant: planted[plant]}, plant_used & {plant}, removals)
-        ok = bool(plant_stale)
-        print("  control: a port row planted for message/record.go, which upstream did not change -> %s"
-              % ("needed by nothing, reported" if ok else "MISSED"))
-        if not ok:
-            failures.append("control: the planted port row was not reported")
+        # the second names a commit the upstream measured does not hold, the removal's own merge:
+        # such a row was printed as ahead of the upstream, and passed, while the ranges moved
+        for commits, title in (([], "which upstream did not change"),
+                               ([removals["connect"][2]], "naming a commit the upstream measured does not hold")):
+            planted = dict(rows)
+            planted[plant] = dict(commits=commits, port=None, reason="planted: upstream did not change it")
+            plant_used = set()
+            for side in sorted(removals):
+                check_side(side, removals[side], a.dst, tip, planted, plant_used, verbose=False)
+            ok = bool(unneeded({plant: planted[plant]}, plant_used & {plant}))
+            print("  control: a port row planted for message/record.go, %s -> %s"
+                  % (title, "needed by nothing, reported" if ok else "MISSED"))
+            if not ok:
+                failures.append("control: the port row planted for message/record.go, %s, was not reported" % title)
         for side in sorted(DIRECTORIES):
             for directory, _, _ in list(DIRECTORIES[side]):
                 found = planted_upstream_file(side, removals[side], a.dst, tip, rows, directory)
@@ -1031,6 +1071,29 @@ def main():
                   % (name, "set aside" if got_aside else "left in the merge", "" if ok else "  <-- BROKEN"))
             if not ok:
                 failures.append("control: the set-aside, %s: kept %r, set aside %r" % (name, got_kept, got_aside))
+        # the recorded ranges. First the form they replace: a removal's base taken as the merge base
+        # of its head and an upstream main, on a day that main has merged it. The head is then its
+        # own base, the range is empty, and main holds no moved path to measure. Then the shape
+        # SIDES is held to: a base that is not the merge's first parent
+        for side in sorted(removals):
+            repo, base, merge, _ = removals[side]
+            head = vs.git(repo, "log", "-1", "--format=%P", merge).decode().split()[1]
+            moving = vs.git(repo, "merge-base", head, merge).decode().strip()
+            notes = {}
+            got = {p for p, _ in check_side(side, (repo, moving, head, merge), a.dst, tip, rows, set(), verbose=False, notes=notes)}
+            ok = moving == head and not notes["deleted"] and bool(got)
+            print("  control: %s with its base taken as the merge base of the removal's head and the main that merged it, the form this replaces -> %s..%s, %d deletion(s), and it fails for %d path(s)%s"
+                  % (side, moving[:12], head[:12], len(notes["deleted"]), len(got), "" if ok else "  <-- BROKEN"))
+            if not ok:
+                failures.append("control: %s measured from a merge base with the main that merged it: want an empty range that fails, got %s..%s with %d deletion(s) and %d failing path(s)"
+                                % (side, moving[:12], head[:12], len(notes["deleted"]), len(got)))
+            earlier = vs.git(repo, "log", "-1", "--format=%P", base).decode().split()[0]
+            problems = removal_shape(side, repo, earlier, merge)
+            ok = len(problems) == 1 and "has the first parent %s" % base[:12] in problems[0]
+            print("  control: %s with its base recorded one commit earlier, %s -> %s"
+                  % (side, earlier[:12], "refused: %s" % problems[0] if ok else "BROKEN: %s" % problems))
+            if not ok:
+                failures.append("control: a recorded base that is not the merge's first parent was not refused for %s: %s" % (side, problems))
     print()
     if failures:
         print("FAIL (%d)" % len(failures))
