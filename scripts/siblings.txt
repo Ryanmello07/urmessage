@@ -28,7 +28,7 @@
 # connect still carrying message.proto would register the schema twice in every binary here, which
 # protobuf refuses at init, and connect main carries it until that pull request merges: until then
 # nothing here is built beside connect main. After the merge: https://github.com/urnetwork/connect.git.
-connect https://github.com/Ryanmello07/connect.git 0f2ff66907f2c5fae735c45f687e598568ae85c4
+connect https://github.com/urnetwork/connect.git 0f2ff66907f2c5fae735c45f687e598568ae85c4
 #
 # sdk: the core SDK. sdk/cgo/compose.sh lays its cgo package main under sdk/cgo to build the one
 # native library both halves ship in, and the record gate (message/record_test.go) scans it whole,
@@ -44,7 +44,7 @@ connect https://github.com/Ryanmello07/connect.git 0f2ff66907f2c5fae735c45f687e5
 # repository takes, made in a commit of its own with the composed .def regenerated and the run that
 # shows the set still passes. compose.sh refuses a core that still carries the messaging half.
 # After the merge: https://github.com/urnetwork/sdk.git.
-sdk https://github.com/Ryanmello07/urnetwork-sdk.git 0f03e27e1482a4e77811c5982005c853b5a7b1ca
+sdk https://github.com/urnetwork/sdk.git 0f03e27e1482a4e77811c5982005c853b5a7b1ca
 #
 # message-server: the server half. sdk/cp3b (the cross-process acceptance suite) and the loopback
 # library (sdk/cgo/loopback.go.mod, run by sdk/cgo/ctest/run.sh) run it in process. Pinned to a
@@ -54,7 +54,7 @@ sdk https://github.com/Ryanmello07/urnetwork-sdk.git 0f03e27e1482a4e77811c598200
 # this pin is the branch as it stood before its own pins were filled; what it has gained since is its
 # pins, its ledger, its README and its workflow, and no Go or module file. After the merge:
 # https://github.com/urnetwork/message-server.git.
-message-server https://github.com/Ryanmello07/urnetwork-message-server.git ee23a490fb615e4a44a626beb87aff81b57bda69
+message-server https://github.com/urnetwork/message-server.git ee23a490fb615e4a44a626beb87aff81b57bda69
 #
 # connect-golden: urnetwork/connect from BEFORE the messaging schema left it (the merge of #217,
 # 2026-10-05 09:10Z; protocol/message.pb.go is the copy this repository's was regenerated from).

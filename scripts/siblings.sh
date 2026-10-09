@@ -48,9 +48,6 @@ pins="${SIBLINGS_FILE:-$here/scripts/siblings.txt}"
 
 # The forks a commit of a pull request under review may be fetched from, one URL per line.
 review_sources="
-https://github.com/Ryanmello07/connect.git
-https://github.com/Ryanmello07/urnetwork-sdk.git
-https://github.com/Ryanmello07/urnetwork-message-server.git
 "
 
 # source_of <url>: prints "upstream" or "fork", or fails for a fetch source this script refuses.
@@ -94,9 +91,14 @@ self_test() {
   else
     echo "  no review source is listed, so none is accepted: every pin is fetched from urnetwork/"
   fi
+  # the three forks this list named until their pull requests merged (2026-10-09), each refused now
+  local former
+  for former in https://github.com/Ryanmello07/connect.git https://github.com/Ryanmello07/urnetwork-sdk.git https://github.com/Ryanmello07/urnetwork-message-server.git; do
+    expect fail "a fork that was a review source until its pull request merged" "fetches from $former, which is neither https://github.com/urnetwork/ nor a listed review source" "one $former $sha"
+  done
   expect fail "another repository of the same owner" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/Ryanmello07/unlisted.git $sha"
   expect fail "another owner's fork of a listed repository" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/someone-else/connect.git $sha"
-  expect fail "a listed review source with a path after it" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/Ryanmello07/connect.git/../../someone-else/connect.git $sha"
+  expect fail "a fork's URL with a path after it" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/Ryanmello07/connect.git/../../someone-else/connect.git $sha"
   expect fail "an urnetwork URL on another host" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com.example.invalid/urnetwork/connect.git $sha"
   expect fail "an urnetwork URL that is not https" "neither https://github.com/urnetwork/ nor a listed review source" "one http://github.com/urnetwork/connect.git $sha"
   expect fail "an urnetwork URL that climbs out" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/urnetwork/../someone-else/connect.git $sha"
