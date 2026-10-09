@@ -1,0 +1,87 @@
+// THE RECEIVE-CALLBACK REGISTRATIONS IN THIS MODULE'S PRODUCTION SOURCE, AS AN AUDITED INVENTORY.
+//
+// Rebuilt from urnetwork/sdk's device_receive_callback_policy_test.go, which held every
+// AddReceiveCallback registration in that SDK, core and URmessage, to an inventory of three. That
+// file is the core SDK's and stays there, holding the core's one; the two URmessage registrations
+// came here, and this is the audit that holds them. The walk and the inventory's spelling are
+// the original's: every non-test .go file under this module's root, nested directories included,
+// each registration written as its file and the callback expression it passes.
+package sdk
+
+import (
+	"bytes"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// TestSdkClientReceiveRegistrationsAreAudited fails when a new subscriber in this module bypasses
+// the nonblocking receive review in connect/CODESTYLE.md.
+func TestSdkClientReceiveRegistrationsAreAudited(t *testing.T) {
+	fileSet := token.NewFileSet()
+	var registrations []string
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != "." && strings.HasPrefix(entry.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		path = filepath.ToSlash(path)
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "AddReceiveCallback" {
+				return true
+			}
+			var callback bytes.Buffer
+			if err := format.Node(&callback, fileSet, call.Args[0]); err != nil {
+				t.Fatalf("format SDK receive callback: %v", err)
+			}
+			registrations = append(registrations, path+":"+callback.String())
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("parse SDK production Go: %v", err)
+	}
+	sort.Strings(registrations)
+	expected := []string{
+		// MessageClient.AddReceiveCallback registers nothing of its own: it forwards the callback it is
+		// handed to the connect.Client it wraps, and the one it is handed is the next.
+		"message_client.go:receiveCallback",
+		// The message-server binding. It never sends. A response goes to a capacity-1 channel with one
+		// sender, the waiter having left the map under the mutex first; a fragment is reassembled in
+		// memory under that mutex; a push runs the OnPush callbacks, which must not block, and the one
+		// in production (urmessage pushInbox.wake) is a select with a default.
+		"message_transport.go:self.receive",
+	}
+	if len(registrations) != len(expected) {
+		t.Fatalf("SDK receive registrations = %v, want %v; audit the new boundary", registrations, expected)
+	}
+	for index := range expected {
+		if registrations[index] != expected[index] {
+			t.Fatalf("SDK receive registrations = %v, want %v; audit the changed boundary", registrations, expected)
+		}
+	}
+}

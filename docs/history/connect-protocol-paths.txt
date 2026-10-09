@@ -1,0 +1,3 @@
+# git-filter-repo --paths-from-file, urnetwork/connect fork main e449f7d8, STAGE 2b (the messaging schema).
+# Exactly the eight protocol/message* files; frame.proto, subprotocol.proto and the Makefile stay out.
+regex:^protocol/message[^/]*$
