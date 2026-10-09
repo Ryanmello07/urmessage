@@ -44,7 +44,7 @@ connect https://github.com/urnetwork/connect.git 0f2ff66907f2c5fae735c45f687e598
 # repository takes, made in a commit of its own with the composed .def regenerated and the run that
 # shows the set still passes. compose.sh refuses a core that still carries the messaging half.
 # After the merge: https://github.com/urnetwork/sdk.git.
-sdk https://github.com/urnetwork/sdk.git 0f03e27e1482a4e77811c5982005c853b5a7b1ca
+sdk https://github.com/urnetwork/sdk.git b8209d9d7f6d858b2171cd92d4203bdadb758260
 #
 # message-server: the server half. sdk/cp3b (the cross-process acceptance suite) and the loopback
 # library (sdk/cgo/loopback.go.mod, run by sdk/cgo/ctest/run.sh) run it in process. Pinned to a
