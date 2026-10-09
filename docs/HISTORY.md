@@ -165,17 +165,21 @@ The merge of connect#216 (`94453d74`) changed no imported path beyond what `e861
 removed: the codec workflow's trigger and its needle. The merge `89f66cda` brought `f5e1aa1f`
 and `03d82b4e` together in connect, and changes `CODESTYLE.md` against each of its parents.
 connect `main` took `5f5a205d` by the merge `60f3bd61`, which changes the file against one
-parent only. `6b86a4c3` and `84fb2386` were made on `main` itself. The connect removal's head
-merges `main` before all three, so it holds the file as it was; the removal does not change
-the file, so its merge leaves `main`'s copy as it is.
+parent only. `6b86a4c3` and `84fb2386` were made on `main` itself. The connect commit pinned
+here, `0f2ff669`, merged `main` before all three, so it holds the file as it was; the removal's
+branch has merged `main` since (to `64e433f4`) and holds `main`'s copy, blob `0feba3df`, which
+is this repository's too. The removal does not change the file, so its merge leaves `main`'s
+copy as it is.
 
-Three upstream changes needed no commit here, and ported.tsv says why each one stands:
+Five upstream changes needed no commit here, and ported.tsv says why each one stands:
 
 | Upstream commit | Path there | Why nothing was carried |
 |---|---|---|
 | sdk `a7b5db77` | `cgo/loopback.go.mod`, `cgo/loopback.go.sum`: three indirect requirements | The import already held them, from the fork's `2dc9bf77` (`port-in-source`). |
 | sdk `06f33802` Product Builder, 2026-10-06, "Generate runtime license JSON to avoid linking the YAML parser" | `message_stream_adapter_test.go`: one row of the value census renamed, `licenseYml` to `licenseJSON` | The row names a core SDK value. The census here holds this package's values alone ([3-scope.md](history/3-scope.md)), so the row is among the lines this repository removed (`port-void`). |
 | sdk `ae5a65fc` Bitprecipice, 2026-10-08, "Preserve regression fixes, memory diagnostics, and test harness evidence" | `message_stream_adapter_test.go`: a census row for the core constant `mobileMemoryTeardownLifetime`, and a new test, `TestStreamAdapterTeardownConstantsHaveCompleteCensus`, 37 lines in all | Both name constants of the core SDK, `mobileMemoryTeardownLifetime` and `mobileMemoryTeardownCapacity`, which its `memory_teardown_observation.go` declares and the sdk removal keeps. This package declares neither, so the lines cannot compile here, and the census here has no core value to hold. carried.py sets them aside by those two names (`port-void`, the same row as `06f33802`). |
+| sdk `80f6e365` Bitprecipice, 2026-10-09, "Send the network credential on the SDK's admin calls" | `message_stream_adapter_test.go`: census rows for `ErrNetworkCredentialRequired`, `apiAdminRouteAccess` and `apiAdminRoutePatterns`, and a non-sentinel ruling for the first, 4 lines | All three are values of the core SDK's API client, declared in its `api_network_credential.go`, which the sdk removal keeps. This package declares none of them. carried.py sets the lines aside by those names (`port-void`, the same row). |
+| sdk `69c49348` Bitprecipice, 2026-10-09, "List the renewal's package values in the value census" | `message_stream_adapter_test.go`: census rows for `closedNetworkRenewerDone` and the four timing constants `networkRenewalMaxRetryJitter`, `networkRenewalMinRetryTimeout`, `networkRenewalRefusedRetryTimeout` and `networkRenewalRetryJitterBase`, 5 lines | All five are values of the core SDK's credential renewer, declared in its `api_network_credential_renewal.go`, which the sdk removal keeps. This package declares none of them. Set aside by name (`port-void`, the same row). |
 
 `a7b5db77` moved the harness, so the gates that skip `testdata` read that one directory by
 name; [3-scope.md](history/3-scope.md), section 5, has each of them before and after.
@@ -239,7 +243,11 @@ design it replaces:
   spells too, a name only the moved file spells, and a name no added line spells are each
   refused, and so is a line planted beside the pinned ones; with the digest unchecked, the
   design it replaces, that planted line is set aside with the rest and nothing reports it. A
-  line upstream changed, rather than added, is never set aside.
+  line upstream changed, rather than added, is never set aside. `80f6e365` and `69c49348` then
+  added nine more lines, for eight more values of the core, all of them among lines this
+  repository removed, where the rule above would have passed them by position. Their values
+  are named in `CORE_SUBJECT` too, ten names and 46 pinned lines in all, so each of the nine
+  is set aside for the value it names, held both ways, and not for where it merges.
 
 The kind of a row is what carried.py measures, not what the row says: an upstream change the
 import's source already held is `port-in-source` and names no commit here, and a `port` row must
@@ -319,6 +327,16 @@ carried, the command fails for those two paths and no other. At the tip that car
 passes with the controls, for the pinned sdk commit (`06f33802..0f03e27e`) and for that newer
 head (`812df82f..af5666ed`): the same 150 deletions either way.
 
+Measured a third time on 2026-10-09, after the import had merged, with connect `main` at
+`64e433f4` and sdk `main` at `679a836a`. sdk `main` had added nine more lines to
+`message_stream_adapter_test.go` (`80f6e365`, `69c49348`), and both removal branches had merged
+`main` again, connect to the head `4bcc5fd8` and sdk to `0da627ac`. At `b2da8432`, `main`
+before those lines were declared, the command fails for that one path: its row names two of
+upstream's four commits. At the tip that declares them it passes with the controls, for the
+commits this repository pins (connect `6df2fa87..0f2ff669`, sdk `06f33802..0f03e27e`) and for
+those newer heads (`64e433f4..4bcc5fd8`, `679a836a..0da627ac`): 848 and 150 deletions either
+way.
+
 ## Files in docs/history
 
 - `verify_split.py`: the verifier, revision 6, sha256
@@ -356,7 +374,7 @@ head (`812df82f..af5666ed`): the same 150 deletions either way.
 ## Changes in connect and the core SDK until the removals merge
 
 An earlier version of this file said the source copies were frozen once imported. Nothing held
-that, and upstream has changed imported paths in 13 commits since the imports' sources (the
+that, and upstream has changed imported paths in 15 commits since the imports' sources (the
 tables above). The
 copies change until the removal pull requests merge, and changes made there have to arrive here:
 carried.py is the check, and ported.tsv the record. After the removals merge, the paths exist
