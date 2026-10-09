@@ -7,8 +7,8 @@
 # fork. This file is on the fork's main only. Dispatch it with the branch (or commit) to test as
 # `ref`; `repository` is the repository that holds it.
 #
-# THERE IS NO CONTROL RUN ON UPSTREAM main. urnetwork/message main is one commit, the LICENSE: it
-# has no test.sh to run, so a failure here cannot be compared against upstream's own.
+# THE CONTROL RUN IS UPSTREAM main: dispatch it with repository urnetwork/message and ref main (or a
+# commit of it), and compare a branch's legs with main's. A failure both show is not the branch's.
 #
 # WHAT IT DOES TO THE REF: nothing. The ref is checked out as `message`, the directory name its
 # modules' relative paths expect, and its own ./test.sh is run unmodified. test.sh clones the
@@ -26,11 +26,27 @@
 #   windows          Windows, core.autocrlf=true: the CRLF checkout the line-ending gates are
 #                    written for, the Windows native library, and the loopback library's C
 #                    consumer, which is a Windows program.
-#   provenance       docs/history/verify_split.py and docs/history/carried.py, with their controls,
-#                    from repositories fetched here: the import sources by commit from the forks
-#                    that hold them, upstream connect and sdk at main, and the two removal heads
-#                    the ref's scripts/siblings.txt pins. Each removal's base is the merge base of
-#                    its head and upstream main, and the content is measured at upstream main.
+#   provenance       the import's proof, with its controls, from repositories fetched here.
+#                    A REF THAT HOLDS docs/history/proof.py is checked in the proof's final form.
+#                    The proof is held at ONE recorded tip, and a later tip is held to two rules:
+#                    the commit its docs/history/recorded-tip.txt names is its ancestor, and the
+#                    proof passes AT that commit, run by that commit's own copies of
+#                    verify_split.py and carried.py over its own records. So this leg passes on a
+#                    branch that changes code, and fails on a history rewritten after the record
+#                    (a squash, a rebase). The fetches are the ones the ref's own docs/HISTORY.md
+#                    gives under "Running the proof again", run as written: each names a commit
+#                    (the import sources on the forks that hold them, and the two removals as they
+#                    merged upstream), and none reads a branch. A ref that names no recorded tip
+#                    is proven at itself (--at HEAD): that is the recorded tip before it is recorded.
+#                    proof.py's own controls run in the same leg, on histories it builds beside
+#                    the checkout: a later commit that changes an imported file must be accepted,
+#                    and a squashed history refused.
+#                    A REF FROM BEFORE THAT FORM (no proof.py) is run the way its own
+#                    docs/HISTORY.md says: verify_split.py at the ref, and carried.py with each
+#                    removal's base taken as the merge base of the commit its scripts/siblings.txt
+#                    pins and upstream main. That command cannot pass once a removal has merged:
+#                    the merge base is the pin, the range is empty, and main holds no moved path.
+#                    It is kept so that such a ref fails for that reason, and says so.
 #
 # Every leg uploads its full log.
 name: Fork CI - a message ref's own test.sh
@@ -181,58 +197,117 @@ jobs:
           log="$PWD/_logs/provenance.log"
           : > "$log"
           result=0
-          # pin <name>: the URL and the commit the ref's scripts/siblings.txt gives a sibling
-          pin() { grep -E "^$1[[:space:]]" message/scripts/siblings.txt | tr -d '\r' | awk '{print $2, $3}'; }
-          read -r connect_url connect_head <<< "$(pin connect)"
-          read -r sdk_url sdk_head <<< "$(pin sdk)"
-          echo "removal heads: connect $connect_head from $connect_url; sdk $sdk_head from $sdk_url" | tee -a "$log"
-          set -e
-          git init -q --bare connect-src.git
-          git -C connect-src.git fetch -q https://github.com/Ryanmello07/connect.git e449f7d8126c0b5748f5083392a8855bac877b32:refs/heads/main
-          git -C connect-src.git fetch -q https://github.com/urnetwork/connect.git 7ca8e222e3496552146f2d97eb09237401662c99:refs/remotes/upstream/control '+refs/heads/main:refs/remotes/upstream/main'
-          git -C connect-src.git fetch -q "$connect_url" "$connect_head:refs/remotes/removal/head"
-          git init -q --bare sdk-src.git
-          git -C sdk-src.git fetch -q https://github.com/Ryanmello07/urnetwork-sdk.git 6141b98d05bcac98d5ccae11c54c7748919017e6:refs/heads/main
-          git -C sdk-src.git fetch -q https://github.com/urnetwork/sdk.git '+refs/heads/main:refs/remotes/upstream/main'
-          git -C sdk-src.git fetch -q "$sdk_url" "$sdk_head:refs/remotes/removal/head"
-          set +e
-          connect_main=$(git -C connect-src.git rev-parse upstream/main)
-          sdk_main=$(git -C sdk-src.git rev-parse upstream/main)
-          connect_base=$(git -C connect-src.git merge-base removal/head upstream/main)
-          sdk_base=$(git -C sdk-src.git merge-base removal/head upstream/main)
-          {
-            echo "upstream connect main $connect_main; the connect removal merges main at $connect_base"
-            echo "upstream sdk main $sdk_main; the sdk removal merges main at $sdk_base"
-          } | tee -a "$log"
-          cd message
-          {
-            echo
-            echo "== verify_split.py"
-            python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol,sdk \
-              --connect ../connect-src.git --sdk ../sdk-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips \
-              --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt \
-              --commit-map connect-core=docs/history/connect-core-commit-map.txt \
-              --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt \
-              --commit-map sdk=docs/history/sdk-commit-map.txt --manifest docs/history/adaptations.tsv
-            echo "verify_split.py exited $?"
-          } 2>&1 | tee -a "$log"
-          tail -n 3 "$log" | grep -q '^verify_split.py exited 0$' || result=1
-          {
-            echo
-            echo "== carried.py"
-            python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv --controls \
-              --removal "connect=../connect-src.git:$connect_base..removal/head@upstream/main" \
-              --removal "sdk=../sdk-src.git:$sdk_base..removal/head@upstream/main"
-            echo "carried.py exited $?"
-          } 2>&1 | tee -a "$log"
-          tail -n 3 "$log" | grep -q '^carried.py exited 0$' || result=1
-          {
-            echo "verify_split.py and carried.py: $([ "$result" = 0 ] && echo both PASS || echo NOT both PASS)"
-            echo
-            echo '```'
-            grep -E '^(removal heads|upstream |verify_split.py exited|carried.py exited|PASS|FAIL)' "$log"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f message/docs/history/proof.py ]; then
+            # ---- THE FINAL FORM: the proof is held at one recorded tip (docs/history/proof.py).
+            # The fetches are the ref's own documented ones, read out of its docs/HISTORY.md and run
+            # as written. Only two shapes of line are run, and a line of any other shape fails the
+            # leg: the init of one of the two mirrors, and the fetch of ONE COMMIT, by its full id,
+            # from a repository on github.com into a ref of a mirror. No branch is fetched.
+            echo "form: final (the ref holds docs/history/proof.py)" | tee -a "$log"
+            init='^git init --bare \.\./(connect|sdk)-src\.git$'
+            fetch='^git -C \.\./(connect|sdk)-src\.git fetch https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git [0-9a-f]{40}:refs/[A-Za-z0-9/_.-]+$'
+            awk '/^## Running the proof again/ {seen = 1; next} seen && /^## / {exit} seen' message/docs/HISTORY.md |
+              tr -d '\r' | sed -n 's/^    \(git .*\)$/\1/p' > _logs/documented-fetches.txt
+            inits=$(grep -cE "$init" _logs/documented-fetches.txt)
+            fetches=$(grep -cE "$fetch" _logs/documented-fetches.txt)
+            other=$(grep -vcE "$init|$fetch" _logs/documented-fetches.txt)
+            echo "the ref's docs/HISTORY.md, 'Running the proof again': $inits init line(s), $fetches fetch line(s) that each name a commit, $other git line(s) of another shape" | tee -a "$log"
+            if [ "$inits" != 2 ] || [ "$fetches" -lt 4 ] || [ "$other" != 0 ]; then
+              echo "the documented fetches are not two mirrors and at least four commits and nothing else: none is run" | tee -a "$log"
+              grep -vE "$init|$fetch" _logs/documented-fetches.txt | sed 's/^/  not run: /' | tee -a "$log"
+              result=1
+            else
+              cd message
+              while IFS= read -r line; do
+                echo "\$ $line" | tee -a "$log"
+                # one of the two shapes above: a git command whose arguments hold no shell syntax
+                if ! $line >> "$log" 2>&1; then echo "FAILED: $line" | tee -a "$log"; result=1; fi
+              done < ../_logs/documented-fetches.txt
+              if [ "$result" = 0 ]; then
+                if git cat-file -e HEAD:docs/history/recorded-tip.txt 2> /dev/null; then
+                  mode=""
+                  echo "the ref names a recorded tip, $(git cat-file blob HEAD:docs/history/recorded-tip.txt | tr -d '\r' | grep -v '^#' | grep . | head -n 1): it must be the ref's ancestor, and the proof must pass there" | tee -a "$log"
+                else
+                  mode="--at HEAD"
+                  echo "the ref names no recorded tip, so the proof is run at the ref itself (--at HEAD): a tip is proven this way before it is recorded" | tee -a "$log"
+                fi
+                {
+                  echo
+                  echo "== python3 docs/history/proof.py --connect ../connect-src.git --sdk ../sdk-src.git $mode --controls"
+                  python3 docs/history/proof.py --connect ../connect-src.git --sdk ../sdk-src.git $mode --controls
+                  echo "proof.py exited $?"
+                } 2>&1 | tee -a "$log"
+                tail -n 3 "$log" | grep -q '^proof.py exited 0$' || result=1
+              fi
+              cd ..
+            fi
+            {
+              echo "the import's proof, final form (docs/history/proof.py): $([ "$result" = 0 ] && echo PASS || echo NOT PASS)"
+              echo
+              echo '```'
+              grep -E '^(form: |the ref|\$ git |FAILED: |tip |recorded tip |the recorded tip |the proof at |== |-- |part D|verify_split.py exited|carried.py exited|proof.py exited|controls, of|  control: (a later|the same commit|a rewritten|that history|the record)|PASS|FAIL|  the recorded tip |  [a-z_.]+\.py does not pass|  docs/history/recorded-tip.txt |  [0-9a-f]+ (names|holds) no )' "$log" | cut -c1-420
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            # ---- A REF FROM BEFORE THE FINAL FORM: the two commands as its own docs/HISTORY.md gave
+            # them. Each removal's base is the merge base of the commit the ref pins and upstream
+            # main, measured at upstream main. Once a removal has merged, that merge base is the pin
+            # itself and the range is empty, so this cannot pass: it is kept to say so.
+            echo "form: before the recorded tip (the ref holds no docs/history/proof.py)" | tee -a "$log"
+            # pin <name>: the URL and the commit the ref's scripts/siblings.txt gives a sibling
+            pin() { grep -E "^$1[[:space:]]" message/scripts/siblings.txt | tr -d '\r' | awk '{print $2, $3}'; }
+            read -r connect_url connect_head <<< "$(pin connect)"
+            read -r sdk_url sdk_head <<< "$(pin sdk)"
+            echo "removal heads: connect $connect_head from $connect_url; sdk $sdk_head from $sdk_url" | tee -a "$log"
+            set -e
+            git init -q --bare connect-src.git
+            git -C connect-src.git fetch -q https://github.com/Ryanmello07/connect.git e449f7d8126c0b5748f5083392a8855bac877b32:refs/heads/main
+            git -C connect-src.git fetch -q https://github.com/urnetwork/connect.git 7ca8e222e3496552146f2d97eb09237401662c99:refs/remotes/upstream/control '+refs/heads/main:refs/remotes/upstream/main'
+            git -C connect-src.git fetch -q "$connect_url" "$connect_head:refs/remotes/removal/head"
+            git init -q --bare sdk-src.git
+            git -C sdk-src.git fetch -q https://github.com/Ryanmello07/urnetwork-sdk.git 6141b98d05bcac98d5ccae11c54c7748919017e6:refs/heads/main
+            git -C sdk-src.git fetch -q https://github.com/urnetwork/sdk.git '+refs/heads/main:refs/remotes/upstream/main'
+            git -C sdk-src.git fetch -q "$sdk_url" "$sdk_head:refs/remotes/removal/head"
+            set +e
+            connect_main=$(git -C connect-src.git rev-parse upstream/main)
+            sdk_main=$(git -C sdk-src.git rev-parse upstream/main)
+            connect_base=$(git -C connect-src.git merge-base removal/head upstream/main)
+            sdk_base=$(git -C sdk-src.git merge-base removal/head upstream/main)
+            {
+              echo "upstream connect main $connect_main; the connect removal merges main at $connect_base"
+              echo "upstream sdk main $sdk_main; the sdk removal merges main at $sdk_base"
+            } | tee -a "$log"
+            cd message
+            {
+              echo
+              echo "== verify_split.py"
+              python3 docs/history/verify_split.py --sides connect-codestyle,connect-core,connect-protocol,sdk \
+                --connect ../connect-src.git --sdk ../sdk-src.git --dst . --dst-rev HEAD --controls --expect-filtered-tips \
+                --commit-map connect-codestyle=docs/history/connect-codestyle-commit-map.txt \
+                --commit-map connect-core=docs/history/connect-core-commit-map.txt \
+                --commit-map connect-protocol=docs/history/connect-protocol-commit-map.txt \
+                --commit-map sdk=docs/history/sdk-commit-map.txt --manifest docs/history/adaptations.tsv
+              echo "verify_split.py exited $?"
+            } 2>&1 | tee -a "$log"
+            tail -n 3 "$log" | grep -q '^verify_split.py exited 0$' || result=1
+            {
+              echo
+              echo "== carried.py"
+              python3 docs/history/carried.py --dst . --dst-rev HEAD --ported docs/history/ported.tsv --controls \
+                --removal "connect=../connect-src.git:$connect_base..removal/head@upstream/main" \
+                --removal "sdk=../sdk-src.git:$sdk_base..removal/head@upstream/main"
+              echo "carried.py exited $?"
+            } 2>&1 | tee -a "$log"
+            tail -n 3 "$log" | grep -q '^carried.py exited 0$' || result=1
+            {
+              echo "verify_split.py and carried.py: $([ "$result" = 0 ] && echo both PASS || echo NOT both PASS)"
+              echo "this ref is from before the proof's final form: its own documented commands were run, which take each removal's range from a merge base with upstream main"
+              echo
+              echo '```'
+              grep -E '^(form: |removal heads|upstream |side |  the removal deletes|verify_split.py exited|carried.py exited|PASS|FAIL)' "$log" | cut -c1-420
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           gzip -k "$log"
           exit "$result"
 
