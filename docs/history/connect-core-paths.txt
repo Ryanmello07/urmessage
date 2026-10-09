@@ -1,0 +1,9 @@
+# git-filter-repo --paths-from-file, urnetwork/connect fork main e449f7d8, STAGE 2a (foundational packages).
+# protocol/message* is deliberately absent: it is stage 2b's own import (connect-protocol-paths.txt).
+# Selection lines first, rename lines after: a rename applies to the path every later line sees.
+message/
+messagegroup/
+mls/
+.gitattributes
+.github/workflows/mls-syntax.yml
+mls/syntax/==>syntax/

@@ -1,0 +1,335 @@
+// rewritepaths: the module-path rewrite for the URmessage extraction (connect/sdk -> urnetwork/message).
+//
+// It edits Go string literals (import specs, fixtures held in strings, path prefixes held in
+// constants) and FULLY QUALIFIED module paths inside comments. Short-form prose ("connect/mls") is
+// never edited, so the relocation commit cannot change a sentence a gate anchors on except where
+// the sentence names a Go import path. Edits are byte-preserving: only the token's span changes,
+// line endings and every other byte stay as they were.
+//
+// Every rule is a fully qualified module path with a boundary: the character after the match must
+// not continue an identifier or a path element, so connect/message never matches inside
+// connect/messagegroup and connect/mls never matches inside connect/mlsx. Rules are tried longest
+// first. A literal that still names github.com/urnetwork/connect after the rules ran is reported as
+// LEFT, and -expect-left pins how many may remain (0 for the foundational packages).
+//
+// Usage:
+//
+//	go run . -root <checkout> -stage 2a -scope message,messagegroup,mls,syntax [-write] [-report out.tsv]
+//	         [-expect R1=111,R2=33,...] [-expect-left 0]
+package main
+
+import (
+	"bytes"
+	"flag"
+	"fmt"
+	"go/scanner"
+	"go/token"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+type rule struct {
+	id, from, to string
+	prefixOnly   bool // the literal ends right after `from` (a prefix constant such as "github.com/urnetwork/connect/)
+	wholeOnly    bool // the literal is exactly `from` (a module constant)
+	commentOnly  bool // prose that names a module path pattern, e.g. github.com/urnetwork/connect/*
+	segmentEnd   bool // the match must end a path: neither a path character nor '/' may follow
+}
+
+var stages = map[string][]rule{
+	// stage 2a: the foundational packages. connect/protocol must not be named by them at all.
+	"2a": {
+		{id: "R1", from: "github.com/urnetwork/connect/mls/syntax", to: "github.com/urnetwork/message/syntax"},
+		{id: "R3", from: "github.com/urnetwork/connect/messagegroup", to: "github.com/urnetwork/message/messagegroup"},
+		{id: "R2", from: "github.com/urnetwork/connect/mls", to: "github.com/urnetwork/message/mls"},
+		{id: "R4", from: "github.com/urnetwork/connect/message", to: "github.com/urnetwork/message/message"},
+		{id: "R6", from: "github.com/urnetwork/connect/", to: "github.com/urnetwork/message/", prefixOnly: true},
+		{id: "R7", from: "github.com/urnetwork/connect", to: "github.com/urnetwork/message", wholeOnly: true},
+		{id: "R6c", from: "github.com/urnetwork/connect/*", to: "github.com/urnetwork/message/*", commentOnly: true},
+	},
+	// stage 2b: the schema. Only the protocol package's own tests name it.
+	"2b": {
+		{id: "R5", from: "github.com/urnetwork/connect/protocol", to: "github.com/urnetwork/message/protocol"},
+	},
+	// stage 3 under descriptor strategy B: the foundational packages move, connect/protocol and the
+	// connect root STAY (they are generic transport, or the schema until the cutover).
+	"3": {
+		{id: "R1", from: "github.com/urnetwork/connect/mls/syntax", to: "github.com/urnetwork/message/syntax"},
+		{id: "R3", from: "github.com/urnetwork/connect/messagegroup", to: "github.com/urnetwork/message/messagegroup"},
+		{id: "R2", from: "github.com/urnetwork/connect/mls", to: "github.com/urnetwork/message/mls"},
+		{id: "R4", from: "github.com/urnetwork/connect/message", to: "github.com/urnetwork/message/message"},
+		{id: "R8", from: "github.com/urnetwork/sdk/urmessage", to: "github.com/urnetwork/message/sdk/urmessage"},
+		// the parent messaging package, imported by urmessage, the native ABI, the probes and cp3b.
+		// A NEW import of the core SDK added by an adaptation commit is spelled with an alias
+		// (coresdk "github.com/urnetwork/sdk") and is not in the source this rule runs over.
+		{id: "R9", from: "github.com/urnetwork/sdk", to: "github.com/urnetwork/message/sdk", segmentEnd: true},
+	},
+	// the schema cutover (stage 2c under strategy B): the application types switch packages.
+	// Only applied to files the cutover PR lists; the import name must then be reviewed by hand
+	// where a file needs both schemas (connectprotocol / messageprotocol).
+	"2c": {
+		{id: "R5", from: "github.com/urnetwork/connect/protocol", to: "github.com/urnetwork/message/protocol"},
+	},
+}
+
+func continues(b byte) bool {
+	return b == '_' || b == '-' || b == '.' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+type hit struct {
+	file  string
+	line  int
+	class string // import | string | comment
+	rule  string
+	text  string
+}
+
+func main() {
+	root := flag.String("root", "", "checkout root")
+	stage := flag.String("stage", "", "2a | 2b | 2c | 3")
+	scope := flag.String("scope", "", "comma separated directories under root to walk (recursively, testdata included)")
+	write := flag.Bool("write", false, "apply the edits (default: dry run)")
+	report := flag.String("report", "", "write every hit as TSV here")
+	expect := flag.String("expect", "", "pinned edit counts per rule over string literals, e.g. R1=111,R2=33")
+	expectLeft := flag.Int("expect-left", -1, "pinned number of string literals still naming github.com/urnetwork/connect after the rules")
+	flag.Parse()
+	rules, ok := stages[*stage]
+	if !ok || *root == "" || *scope == "" {
+		fmt.Fprintln(os.Stderr, "need -root, -scope and -stage in 2a|2b|2c|3")
+		os.Exit(2)
+	}
+	// longest first, independent of declaration order
+	sort.SliceStable(rules, func(i, j int) bool { return len(rules[i].from) > len(rules[j].from) })
+
+	var files []string
+	for _, dir := range strings.Split(*scope, ",") {
+		base := filepath.Join(*root, filepath.FromSlash(strings.TrimSpace(dir)))
+		info, err := os.Stat(base)
+		if err != nil || !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "scope %s is not a directory under the root: %v\n", dir, err)
+			os.Exit(2)
+		}
+		filepath.Walk(base, func(p string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !fi.IsDir() && strings.HasSuffix(p, ".go") {
+				files = append(files, p)
+			}
+			return nil
+		})
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "no .go file under the scope: refusing to report a clean run over nothing")
+		os.Exit(1)
+	}
+
+	var hits []hit
+	edited := map[string]int{}
+	left := 0
+	filesChanged := 0
+	for _, path := range files {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			panic(err)
+		}
+		rel, _ := filepath.Rel(*root, path)
+		rel = filepath.ToSlash(rel)
+		fset := token.NewFileSet()
+		tf := fset.AddFile(rel, -1, len(src))
+		var s scanner.Scanner
+		s.Init(tf, src, func(token.Position, string) {}, scanner.ScanComments)
+		type edit struct {
+			off, n int
+			repl   string
+		}
+		var edits []edit
+		inImport, importParen := false, false
+		for {
+			pos, tok, lit := s.Scan()
+			if tok == token.EOF {
+				break
+			}
+			switch tok {
+			case token.IMPORT:
+				inImport = true
+				continue
+			case token.LPAREN:
+				if inImport {
+					importParen = true
+				}
+			case token.RPAREN:
+				if importParen {
+					inImport, importParen = false, false
+				}
+			case token.SEMICOLON:
+				if inImport && !importParen {
+					inImport = false
+				}
+			}
+			off := tf.Offset(pos)
+			line := tf.Line(pos)
+			class := ""
+			switch {
+			case tok == token.COMMENT:
+				class = "comment"
+			case tok == token.STRING && inImport:
+				class = "import"
+			case tok == token.STRING:
+				class = "string"
+			default:
+				continue
+			}
+			body := lit
+			var out bytes.Buffer
+			changed := false
+			for i := 0; i < len(body); {
+				matched := false
+				for _, r := range rules {
+					if !strings.HasPrefix(body[i:], r.from) {
+						continue
+					}
+					if (class == "comment") != r.commentOnly && (r.commentOnly || r.prefixOnly || r.wholeOnly) {
+						continue
+					}
+					end := i + len(r.from)
+					// the literal's closing delimiter is its last byte
+					atClose := end == len(body)-1
+					if r.wholeOnly && !(i == 1 && atClose) {
+						continue
+					}
+					if r.prefixOnly && !atClose {
+						continue
+					}
+					if !r.prefixOnly && end < len(body) && continues(body[end]) {
+						continue
+					}
+					if r.segmentEnd && end < len(body) && body[end] == '/' {
+						continue
+					}
+					out.WriteString(r.to)
+					hits = append(hits, hit{rel, line, class, r.id, r.from + " -> " + r.to})
+					edited[r.id]++
+					i = end
+					matched, changed = true, true
+					break
+				}
+				if !matched {
+					out.WriteByte(body[i])
+					i++
+				}
+			}
+			after := out.String()
+			if class != "comment" && strings.Contains(after, "github.com/urnetwork/connect") {
+				left++
+				hits = append(hits, hit{rel, line, class, "LEFT", after})
+			}
+			if class != "comment" && strings.Contains(after, "github.com/urnetwork/sdk") {
+				hits = append(hits, hit{rel, line, class, "LEFT-SDK", after})
+			}
+			if class == "comment" && strings.Contains(after, "github.com/urnetwork/connect") {
+				hits = append(hits, hit{rel, line, class, "LEFT-PROSE", after})
+			}
+			if changed {
+				edits = append(edits, edit{off, len(lit), after})
+			}
+		}
+		if len(edits) == 0 {
+			continue
+		}
+		filesChanged++
+		if *write {
+			var b bytes.Buffer
+			last := 0
+			for _, e := range edits {
+				b.Write(src[last:e.off])
+				b.WriteString(e.repl)
+				last = e.off + e.n
+			}
+			b.Write(src[last:])
+			info, _ := os.Stat(path)
+			if err := os.WriteFile(path, b.Bytes(), info.Mode().Perm()); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	if *report != "" {
+		var b bytes.Buffer
+		b.WriteString("file\tline\tclass\trule\ttext\n")
+		for _, h := range hits {
+			fmt.Fprintf(&b, "%s\t%d\t%s\t%s\t%s\n", h.file, h.line, h.class, h.rule, strings.ReplaceAll(h.text, "\n", `\n`))
+		}
+		if err := os.WriteFile(*report, b.Bytes(), 0o644); err != nil {
+			panic(err)
+		}
+	}
+
+	byClass := map[string]map[string]int{}
+	for _, h := range hits {
+		if byClass[h.class] == nil {
+			byClass[h.class] = map[string]int{}
+		}
+		byClass[h.class][h.rule]++
+	}
+	fmt.Printf("stage %s: %d .go files walked under %s; %d files edited%s\n", *stage, len(files), *scope, filesChanged,
+		map[bool]string{true: "", false: " (dry run, nothing written)"}[*write])
+	for _, class := range []string{"import", "string", "comment"} {
+		keys := []string{}
+		for k := range byClass[class] {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := []string{}
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%s=%d", k, byClass[class][k]))
+		}
+		fmt.Printf("  %-8s %s\n", class, strings.Join(parts, " "))
+	}
+	ids := []string{}
+	for k := range edited {
+		ids = append(ids, k)
+	}
+	sort.Strings(ids)
+	parts := []string{}
+	for _, k := range ids {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, edited[k]))
+	}
+	fmt.Printf("  edits    %s\n  left     %d string literal(s) still naming github.com/urnetwork/connect\n", strings.Join(parts, ","), left)
+
+	fail := false
+	if *expect != "" {
+		want := map[string]int{}
+		for _, kv := range strings.Split(*expect, ",") {
+			k, v, _ := strings.Cut(kv, "=")
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				panic(kv)
+			}
+			want[k] = n
+		}
+		for k, n := range want {
+			if edited[k] != n {
+				fmt.Printf("EXPECT FAIL: rule %s edited %d, pinned %d\n", k, edited[k], n)
+				fail = true
+			}
+		}
+		for k, n := range edited {
+			if _, pinned := want[k]; !pinned {
+				fmt.Printf("EXPECT FAIL: rule %s edited %d and is not pinned\n", k, n)
+				fail = true
+			}
+		}
+	}
+	if *expectLeft >= 0 && left != *expectLeft {
+		fmt.Printf("EXPECT FAIL: %d literal(s) still name connect, pinned %d\n", left, *expectLeft)
+		fail = true
+	}
+	if fail {
+		os.Exit(1)
+	}
+}

@@ -1,0 +1,9 @@
+# livepeer is liveprobe's second half -- the other party, in its own process -- and its build output
+# has the same shape and the same 36 MB: README.md tells an operator to `go build -o livepeer.exe .`
+# in this tracked directory, and the two unix names are the ones liveprobe's own build recipe would
+# give it. Ignored before the first `git add .` here rather than after it. Carried from the core
+# SDK's .gitignore (urnetwork/sdk b8e0da26, lines 10-15), whose rules the sdk removal drops with the
+# directory.
+/livepeer
+/livepeer-arm64
+*.exe
