@@ -15,9 +15,12 @@ build and test on their own hardware).
 
 ## Layout and status
 
-Status: stages 1, 2a, 2b and 3 are imported, with their history. The connect and core SDK
-pull requests that remove the moved code from those repositories merge first; see
-[docs/HISTORY.md](docs/HISTORY.md).
+Status: stages 1, 2a, 2b and 3 are imported, with their history. This import merges before
+the connect and core SDK pull requests that remove the moved code from those repositories, so
+the code is in its new home before anything is deleted. Until connect's removal has merged,
+build this repository only beside the connect commit [scripts/siblings.txt](scripts/siblings.txt)
+pins, never beside connect `main`: `main` still registers `message.proto`, and a binary that
+links both copies stops at init. See [docs/HISTORY.md](docs/HISTORY.md).
 
 | Path | Contents | Comes from | Stage |
 |---|---|---|---|
@@ -71,11 +74,12 @@ tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run
 - `./test.sh` runs everything else too, and requires the siblings at the commits
   [scripts/siblings.txt](scripts/siblings.txt) pins, cloning a missing one beside the
   checkout: connect, the core SDK, message-server, connect from before the removal, glog,
-  gvisor and goidenticons. Three of those pins are the heads of the pull requests this
+  gvisor and goidenticons. Three of those pins are commits of the pull requests this
   repository arrives with (the removals from connect and the core SDK, and
-  message-server's switch to these packages). Until each has merged, its commit is
-  fetched from the fork it was pushed to, and the verdict names it; siblings.txt says
-  which urnetwork URL replaces the fork afterwards.
+  message-server's switch to these packages): each is the commit the set was last built
+  and tested at, which a branch that has taken its `main` again since is ahead of. Until
+  each has merged, its commit is fetched from the fork it was pushed to, and the verdict
+  names it; siblings.txt says which urnetwork URL replaces the fork afterwards.
 - It runs every module (the SDK, the commands, the acceptance suite against
   message-server, the native library and its C consumer) with the race detector, the
   wire corpus against the pinned connect, the schema's regeneration, the codec's fuzz

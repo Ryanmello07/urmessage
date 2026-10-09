@@ -269,9 +269,11 @@ the fetch of `6141b98d` brings with its history.
 
 The removals' deletions, against each removal pull request's base and head. Fetch those into
 the same two repositories first. A removal's base is the upstream `main` commit its branch last
-merged, which is the merge base of its head and `main`. Its head is the commit
+merged, which is the merge base of its head and `main`. The head to measure is the commit
 [scripts/siblings.txt](../scripts/siblings.txt) pins for that sibling, fetched from the URL
 given there: the owner's fork until the pull request has merged, the urnetwork repository after.
+A removal's branch may have merged `main` again since it was pinned. Its newest head deletes
+the same paths, and can be measured in the pin's place.
 
     git -C ../connect-src.git fetch https://github.com/urnetwork/connect.git main:refs/remotes/upstream/main
     git -C ../connect-src.git fetch <connect's URL in scripts/siblings.txt> <connect's pin>:refs/remotes/removal/head
@@ -292,6 +294,14 @@ deletions) against `main` at `6edbaa6f`, and sdk `06f33802..0f03e27e` (150 delet
 `main` also takes an automated data commit about once an hour (ten on 2026-10-06, 31 to 163
 minutes apart), so the commit named here is soon not the newest; the command above measures
 whichever is.
+
+Measured again on 2026-10-09 (UTC), with connect `main` at `c2833fcb` and sdk `main` at
+`812df82f`. connect `main` had changed `CODESTYLE.md` twice more, and sdk `main` had added 37
+lines to `message_stream_adapter_test.go` (`ae5a65fc`); the sdk removal's branch had merged
+`main` twice, to the head `af5666ed`. At `4d365abf`, the tip before those changes were
+carried, the command fails for those two paths and no other. At the tip that carries them it
+passes with the controls, for the pinned sdk commit (`06f33802..0f03e27e`) and for that newer
+head (`812df82f..af5666ed`): the same 150 deletions either way.
 
 ## Files in docs/history
 
@@ -331,3 +341,16 @@ copies change until the removal pull requests merge, and changes made there have
 carried.py is the check, and ported.tsv the record. After the removals merge, the paths exist
 only here, except `CODESTYLE.md`, which connect keeps: its two copies stay the maintainers' to
 keep in step.
+
+This import merges before the two removals, so that the code is in its new home before
+anything is deleted. It can, because it builds and tests against the commits
+[scripts/siblings.txt](../scripts/siblings.txt) pins on the removals' branches, not against
+connect or sdk `main`. Two things follow while the removals wait:
+
+- **This repository is not built beside connect `main`.** `main` still registers
+  `message.proto`, so a binary linking both copies stops at init, and it has no
+  `connect.NewOperatorClientSettings`, which `sdk/message_tunnel.go` calls. The pins keep the
+  two apart.
+- **A change upstream makes to a moved path arrives here as a pull request of its own**, a port
+  commit with its row in ported.tsv, as the ports above did. carried.py is run against this
+  repository's `main` and the newest connect and sdk `main` before each removal merges.

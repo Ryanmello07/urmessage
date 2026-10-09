@@ -9,7 +9,7 @@
 # runs, in this order:
 #
 #   1. the siblings beside the repository at the commits scripts/siblings.txt pins (a missing one is
-#      cloned; a pin fetched from a fork, a pull request head, is named in the verdict), the pin
+#      cloned; a pin fetched from a fork, a commit of a pull request, is named in the verdict), the pin
 #      script's own controls, and the checkout's line endings;
 #   2. the module census's own controls and its rows against the tree, and the toolchain check's
 #      own controls;
@@ -144,12 +144,13 @@ sibling_status=$?
 echo "$sibling_report"
 if [ "$sibling_status" = 0 ]; then pass "siblings at their pins"; else fail "siblings at their pins" "see above"; fi
 # What the pinned run is narrower by, named in the verdict: a sibling accepted at some other commit,
-# and a sibling whose pin is a pull request head fetched from a fork (scripts/siblings.sh's review
-# sources), which is a commit the urnetwork repository does not hold until that pull request merges
+# and a sibling whose pin is a commit of a pull request under review, fetched from a fork
+# (scripts/siblings.sh's review sources), which no branch of the urnetwork repository holds until
+# that pull request merges
 while read -r state name rest; do
   if [ "$state" = UNPINNED ]; then narrowings+=("sibling $name is UNPINNED: $rest"); fi
   case "$state $rest" in
-    "PINNED "*" FORK "*) narrowings+=("sibling $name is pinned to ${rest%% *}, a pull request head fetched from a fork (${rest##* FORK }): urnetwork's own repository holds it once that pull request merges") ;;
+    "PINNED "*" FORK "*) narrowings+=("sibling $name is pinned to ${rest%% *}, a commit of a pull request under review, fetched from a fork (${rest##* FORK }): urnetwork's own repository holds it once that pull request merges") ;;
   esac
 done <<< "$sibling_report"
 

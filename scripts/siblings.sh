@@ -21,20 +21,22 @@
 # so no fetch source can change what a pin builds; what the URL rule protects is that the pins can
 # be fetched from the project's own repositories by anyone, for good.
 #
-# REVIEW SOURCES. This repository arrives as one of three pull requests that are built and tested as
-# a set, with a fourth that follows them: the removals from urnetwork/sdk and urnetwork/connect,
-# this import, and message-server's switch to these packages. Each pins the others' heads, and those
-# heads exist on the owner's forks before any of them is merged upstream, so until its pull request
-# merges a head is fetched from the fork it was pushed to. Those forks are named here one by one,
+# REVIEW SOURCES. This repository arrives as one of a set of pull requests that are built and tested
+# together: this import, message-server's switch to these packages, and the removals from
+# urnetwork/sdk and urnetwork/connect. It pins a commit of each of the other three branches, and
+# those commits exist on the owner's forks before any of them is merged upstream, so until its pull
+# request merges a pinned commit is fetched from the fork it was pushed to. A pin is the commit the
+# set was last built and tested at, which need not be the branch's newest: scripts/siblings.txt
+# says when a pin moves. Those forks are named here one by one,
 # and nothing else outside urnetwork/ is accepted: not another repository of the same owner, not
 # another owner's fork of the same repository. --check and --verify print FORK and the URL beside
 # such a pin, and test.sh carries it into its verdict, so a run against a commit the upstream
 # repository does not hold yet says so every time.
 #
-# WHEN A PULL REQUEST MERGES (with a merge commit, so its head stays the commit it was), the pinned
+# WHEN A PULL REQUEST MERGES (with a merge commit, so its commits keep their ids), the pinned
 # commit is in the upstream repository: change that sibling's URL in scripts/siblings.txt back to
-# https://github.com/urnetwork/..., and delete its line here. The list is empty once all four have
-# merged, and --self-test then has no review source to accept.
+# https://github.com/urnetwork/..., and delete its line here. The list is empty once the other three
+# have merged, and --self-test then has no review source to accept.
 #
 # MESSAGE_TEST_UNPINNED, a comma-separated list of names, lets --verify accept those siblings at
 # whatever commit they are checked out at, placeholder pin or not. Each is printed as UNPINNED with
@@ -44,7 +46,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 pins="${SIBLINGS_FILE:-$here/scripts/siblings.txt}"
 
-# The forks a pull request head under review may be fetched from, one URL per line.
+# The forks a commit of a pull request under review may be fetched from, one URL per line.
 review_sources="
 https://github.com/Ryanmello07/connect.git
 https://github.com/Ryanmello07/urnetwork-sdk.git
@@ -88,7 +90,7 @@ self_test() {
   local first
   first=$(printf '%s\n' "$review_sources" | grep . | head -n 1)
   if [ -n "$first" ]; then
-    expect pass "a pull request head on a listed review source" "FORK $first" "one $first $sha"
+    expect pass "a commit of a pull request on a listed review source" "FORK $first" "one $first $sha"
   else
     echo "  no review source is listed, so none is accepted: every pin is fetched from urnetwork/"
   fi
