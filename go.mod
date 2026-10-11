@@ -2,7 +2,7 @@ module github.com/urnetwork/message
 
 go 1.26.3
 
-toolchain go1.26.5
+toolchain go1.27.2
 
 require (
 	golang.org/x/crypto v0.54.0

@@ -1133,9 +1133,7 @@ type ServerKey struct {
 	NotAfterMs    uint64                 `protobuf:"varint,3,opt,name=not_after_ms,json=notAfterMs,proto3" json:"not_after_ms,omitempty"`         // 0 = no announced end
 	SigByPrevious []byte                 `protobuf:"bytes,4,opt,name=sig_by_previous,json=sigByPrevious,proto3" json:"sig_by_previous,omitempty"` // Ed25519 by the outgoing key over
 	// "URmessage/v1/serverkeyrot" ‖ LP(new_pub)
-	//
-	//	‖ u64(not_before_ms) ‖ u64(not_after_ms)
-	//
+	//   ‖ u64(not_before_ms) ‖ u64(not_after_ms)
 	// empty on a key certified directly by the root
 	SigByRoot     []byte `protobuf:"bytes,5,opt,name=sig_by_root,json=sigByRoot,proto3" json:"sig_by_root,omitempty"` // Ed25519 by the FLEET ROOT key over
 	unknownFields protoimpl.UnknownFields
@@ -1214,8 +1212,7 @@ type Capabilities struct {
 	MaxRecordsPerSubmit uint32                 `protobuf:"varint,3,opt,name=max_records_per_submit,json=maxRecordsPerSubmit,proto3" json:"max_records_per_submit,omitempty"` // default 256
 	MaxRecordsPerFetch  uint32                 `protobuf:"varint,4,opt,name=max_records_per_fetch,json=maxRecordsPerFetch,proto3" json:"max_records_per_fetch,omitempty"`    // default 512
 	// ── the three advertised limits (MASTER §12.2). Every group operates inside
-	//
-	//	all three, and the client reads them before it acts.
+	//    all three, and the client reads them before it acts.
 	MediaTtlDefaultSeconds     uint32 `protobuf:"varint,5,opt,name=media_ttl_default_seconds,json=mediaTtlDefaultSeconds,proto3" json:"media_ttl_default_seconds,omitempty"`             // media window default: 2592000 (30 days)
 	MediaTtlMaxSeconds         uint32 `protobuf:"varint,6,opt,name=media_ttl_max_seconds,json=mediaTtlMaxSeconds,proto3" json:"media_ttl_max_seconds,omitempty"`                         // media window cap; policy above it is clamped down
 	DurableRetentionMinSeconds uint32 `protobuf:"varint,7,opt,name=durable_retention_min_seconds,json=durableRetentionMinSeconds,proto3" json:"durable_retention_min_seconds,omitempty"` // text minimum this server promises to honour
@@ -1788,14 +1785,14 @@ type SubmitRequest struct {
 	// AGAINST A COMMIT, THE RULE IS KEYED ON THE ATTACHMENT KIND, and it has to be while Spec
 	// B §5.4's acceptance window is open.
 	//
-	//	a kind 0x0005 commit with NO entry   → REASON_REJECTED. It is an epoch the server
-	//	                                       would install without having been handed what
-	//	                                       opens it.
-	//	a kind 0x0001 commit WITH an entry   → REASON_REJECTED. Its keys are in the
-	//	                                       attachment, so a delivery beside it is a field
-	//	                                       the server would not read and that can
-	//	                                       disagree with the one the write_auth MAC
-	//	                                       covers.
+	//   a kind 0x0005 commit with NO entry   → REASON_REJECTED. It is an epoch the server
+	//                                          would install without having been handed what
+	//                                          opens it.
+	//   a kind 0x0001 commit WITH an entry   → REASON_REJECTED. Its keys are in the
+	//                                          attachment, so a delivery beside it is a field
+	//                                          the server would not read and that can
+	//                                          disagree with the one the write_auth MAC
+	//                                          covers.
 	//
 	// THIS COMMENT READ "and so is a commit with no entry", KIND-FREE, AND THAT FORM IS TRUE
 	// ONLY AFTER THE WINDOW CLOSES. During the window a kind 0x0001 commit legitimately
@@ -3087,8 +3084,7 @@ type RecoveryFetchRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	RecoveryHandle []byte                 `protobuf:"bytes,1,opt,name=recovery_handle,json=recoveryHandle,proto3" json:"recovery_handle,omitempty"` // 16 B
 	Proof          []byte                 `protobuf:"bytes,2,opt,name=proof,proto3" json:"proof,omitempty"`                                         // Ed25519 over "URmessage/v1/recovery" ‖ LP(server_nonce)
-	//	‖ LP(recovery_handle), under recovery_sig_sk.
-	//
+	//   ‖ LP(recovery_handle), under recovery_sig_sk.
 	// Verified against message_recovery.verify_pub (TOFU).
 	Cursor        uint64 `protobuf:"varint,3,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	Limit         uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
