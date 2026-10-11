@@ -30,7 +30,8 @@
 #        loopback    the loopback library, built with its harness, on every host; on Windows also its
 #                    C consumer (sdk/cgo/ctest/run.sh), which is a Windows program;
 #      and the platform builds of the root module (darwin, windows, js/wasm) and the SDK;
-#   5. protocol/message.pb.go regenerated with the pinned protoc 35.1 and protoc-gen-go v1.36.11;
+#   5. protocol/message.pb.go regenerated with the pinned protoc 35.1 and protoc-gen-go v1.36.11, the
+#      generator built under the pinned toolchain;
 #   6. the codec's fuzz targets, 60 s each (a done-when of spec A section 13);
 #   7. the census over what ran: every row's receipts that this host owes.
 #
@@ -388,12 +389,20 @@ regenerate() {
     skip "protocol: regenerate message.pb.go" "no protoc 35.1 on this host (set PROTOC; linux and Windows on x86-64 fetch it)"
     return
   fi
-  for candidate in "$(dirname "$protoc")/protoc-gen-go" "$(dirname "$protoc")/protoc-gen-go.exe" "$(command -v protoc-gen-go 2> /dev/null)" "$cache/gobin/protoc-gen-go" "$cache/gobin/protoc-gen-go.exe"; do
-    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version 2> /dev/null | tr -d '\r' | grep -qxE 'protoc-gen-go(\.exe)? v1\.36\.11'; then gen=$candidate; break; fi
+  # THE GENERATOR IS BUILT UNDER THE PIN TOO. protoc-gen-go formats what it writes with the go/format
+  # it was compiled with, so the file is the compiler's as much as the plugin's: v1.36.11 built under
+  # go1.26.5 and built under go1.27.2 lay out message.proto's indented comment lines differently, and
+  # nothing else. A generator built under some earlier pin and left on PATH or in the cache would
+  # pass or fail this step by whichever pin built it. So a protoc-gen-go is taken only when it
+  # records the pinned toolchain (scripts/toolchain.sh --artefact), and otherwise one is built under
+  # the pin into a cache directory of that pin's own, which another checkout's pin never writes
+  for candidate in "$(dirname "$protoc")/protoc-gen-go" "$(dirname "$protoc")/protoc-gen-go.exe" "$(command -v protoc-gen-go 2> /dev/null)" "$cache/gobin-$pinned_toolchain/protoc-gen-go" "$cache/gobin-$pinned_toolchain/protoc-gen-go.exe"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version 2> /dev/null | tr -d '\r' | grep -qxE 'protoc-gen-go(\.exe)? v1\.36\.11' &&
+      bash scripts/toolchain.sh --artefact "$candidate" > /dev/null 2>&1; then gen=$candidate; break; fi
   done
   if [ -z "$gen" ]; then
-    GOBIN="$cache/gobin" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 || { fail "protocol: install protoc-gen-go v1.36.11"; return; }
-    gen="$cache/gobin/protoc-gen-go"
+    GOBIN="$cache/gobin-$pinned_toolchain" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 || { fail "protocol: install protoc-gen-go v1.36.11"; return; }
+    gen="$cache/gobin-$pinned_toolchain/protoc-gen-go"
     [ -x "$gen" ] || gen="$gen.exe"
   fi
   mkdir -p "$work/protoc"
