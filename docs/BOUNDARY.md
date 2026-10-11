@@ -48,10 +48,10 @@ hardening change, not part of the move.
 
 The schema moved whole at stage 2b: `message/protocol` holds `message.proto`, whose protobuf
 package, message names and field numbers are those of connect's copy, with only `go_package`
-changed, and the connect removal pull request deletes connect's copy. A binary that linked a
-connect still carrying it would register the same names twice, and the protobuf runtime panics
-at startup; `TestOneCopyOfMessageProtoIsRegistered` is the check that runs in this repository
-(B9). The carrier is unchanged: connect's `Frame` with the MessageType code points 1000-1003,
+changed, and the connect removal deleted connect's copy when it merged (urnetwork/connect
+`847460bb`, 2026-10-09). A binary that linked a connect still carrying it would register the
+same names twice, and the protobuf runtime panics at startup;
+`TestOneCopyOfMessageProtoIsRegistered` is the check that runs in this repository (B9). The carrier is unchanged: connect's `Frame` with the MessageType code points 1000-1003,
 whose numbers stay in connect's `frame.proto` and whose names are held here against
 `message/protocol`'s messages.
 

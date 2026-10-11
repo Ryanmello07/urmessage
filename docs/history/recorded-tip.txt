@@ -1,0 +1,7 @@
+# recorded-tip.txt: the ONE commit the import's proof is held at (docs/HISTORY.md, "The recorded tip").
+# docs/history/proof.py reads this file from the tip it is asked about. That tip must have this
+# commit in its history, and the proof must pass at this commit, run by this commit's own copies
+# of verify_split.py and carried.py over its own records. One line, a full commit id: a branch or a
+# short id would name another commit another day. The commit named here does not hold this file,
+# because no commit can hold its own id; the commit after it added it.
+7a33917306ae39a2e8675f92b6639e4e7153f30c

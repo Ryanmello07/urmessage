@@ -21,22 +21,24 @@
 # so no fetch source can change what a pin builds; what the URL rule protects is that the pins can
 # be fetched from the project's own repositories by anyone, for good.
 #
-# REVIEW SOURCES. This repository arrived as one of a set of pull requests that are built and tested
-# together: its import, which merged first (2026-10-09), message-server's switch to these packages,
-# and the removals from urnetwork/sdk and urnetwork/connect. It pins a commit of each of the other
-# three branches, and those commits exist on the owner's forks before any of them is merged
-# upstream, so until its pull request merges a pinned commit is fetched from the fork it was pushed
-# to. A pin is the commit the set was last built and tested at, which need not be the branch's
-# newest: scripts/siblings.txt says when a pin moves. Those forks are named here one by one,
-# and nothing else outside urnetwork/ is accepted: not another repository of the same owner, not
-# another owner's fork of the same repository. --check and --verify print FORK and the URL beside
-# such a pin, and test.sh carries it into its verdict, so a run against a commit the upstream
-# repository does not hold yet says so every time.
+# REVIEW SOURCES. A set of pull requests that must be built and tested together pins commits of
+# one another's branches, and those commits exist on a fork before any of them is merged upstream.
+# Such a fork is named in the list below, exactly, and nothing else outside urnetwork/ is accepted:
+# not another repository of the same owner, not another owner's fork of the same repository.
+# --check and --verify print FORK and the URL beside such a pin, and test.sh carries it into its
+# verdict, so a run against a commit the upstream repository does not hold yet says so every time.
+#
+# THE LIST IS EMPTY. This repository arrived as one of such a set: its import, message-server's
+# switch to these packages, and the removals from urnetwork/sdk and urnetwork/connect. Three forks
+# were listed here until the set merged, all of it on 2026-10-09, each pull request with a merge
+# commit (urnetwork/message 07704991, urnetwork/message-server e9eae67a, urnetwork/sdk b8209d9d,
+# urnetwork/connect 847460bb). The three pins are those merge commits now, every pin is fetched
+# from urnetwork/, and --self-test holds each of the three former sources to being refused.
 #
 # WHEN A PULL REQUEST MERGES (with a merge commit, so its commits keep their ids), the pinned
 # commit is in the upstream repository: change that sibling's URL in scripts/siblings.txt back to
-# https://github.com/urnetwork/..., and delete its line here. The list is empty once the other three
-# have merged, and --self-test then has no review source to accept.
+# https://github.com/urnetwork/..., and delete its line here. With no line left, --self-test has no
+# review source to accept, and says so.
 #
 # MESSAGE_TEST_UNPINNED, a comma-separated list of names, lets --verify accept those siblings at
 # whatever commit they are checked out at, placeholder pin or not. Each is printed as UNPINNED with
@@ -46,11 +48,8 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 pins="${SIBLINGS_FILE:-$here/scripts/siblings.txt}"
 
-# The forks a commit of a pull request under review may be fetched from, one URL per line.
+# The forks a commit of a pull request under review may be fetched from, one URL per line. None today.
 review_sources="
-https://github.com/Ryanmello07/connect.git
-https://github.com/Ryanmello07/urnetwork-sdk.git
-https://github.com/Ryanmello07/urnetwork-message-server.git
 "
 
 # source_of <url>: prints "upstream" or "fork", or fails for a fetch source this script refuses.
@@ -94,9 +93,14 @@ self_test() {
   else
     echo "  no review source is listed, so none is accepted: every pin is fetched from urnetwork/"
   fi
+  # the three forks this list named until their pull requests merged (2026-10-09), each refused now
+  local former
+  for former in https://github.com/Ryanmello07/connect.git https://github.com/Ryanmello07/urnetwork-sdk.git https://github.com/Ryanmello07/urnetwork-message-server.git; do
+    expect fail "a fork that was a review source until its pull request merged" "fetches from $former, which is neither https://github.com/urnetwork/ nor a listed review source" "one $former $sha"
+  done
   expect fail "another repository of the same owner" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/Ryanmello07/unlisted.git $sha"
   expect fail "another owner's fork of a listed repository" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/someone-else/connect.git $sha"
-  expect fail "a listed review source with a path after it" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/Ryanmello07/connect.git/../../someone-else/connect.git $sha"
+  expect fail "a fork's URL with a path after it" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/Ryanmello07/connect.git/../../someone-else/connect.git $sha"
   expect fail "an urnetwork URL on another host" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com.example.invalid/urnetwork/connect.git $sha"
   expect fail "an urnetwork URL that is not https" "neither https://github.com/urnetwork/ nor a listed review source" "one http://github.com/urnetwork/connect.git $sha"
   expect fail "an urnetwork URL that climbs out" "neither https://github.com/urnetwork/ nor a listed review source" "one https://github.com/urnetwork/../someone-else/connect.git $sha"
