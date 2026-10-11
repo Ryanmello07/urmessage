@@ -1334,14 +1334,15 @@ func proposalGeneratorTemptations() []proposalGeneratorTemptation {
 			refusal: ErrRemoveNonMember,
 			tempt: func(t *testing.T, parts *proposalGenerationParts) (CachedProposal, func() ([]byte, error)) {
 				beyond := LeafIndex(parts.group.tree.LeafWidth())
-				return CachedProposal{
-						Proposal: Proposal{ProposalType: ProposalTypeRemove,
-							Remove: &Remove{Removed: beyond}},
-						Sender:  parts.group.OwnLeafIndex(),
-						ByValue: true,
-					}, func() ([]byte, error) {
-						return parts.group.ProposeRemove(beyond)
-					}
+				proposal := CachedProposal{
+					Proposal: Proposal{ProposalType: ProposalTypeRemove,
+						Remove: &Remove{Removed: beyond}},
+					Sender:  parts.group.OwnLeafIndex(),
+					ByValue: true,
+				}
+				return proposal, func() ([]byte, error) {
+					return parts.group.ProposeRemove(beyond)
+				}
 			},
 		},
 		{
@@ -1404,14 +1405,15 @@ func proposalGeneratorTemptations() []proposalGeneratorTemptation {
 				outside := append(slices.Clone(parts.published),
 					Extension{ExtensionType: ExtensionTypeApplicationId,
 						ExtensionData: []byte{0x01}})
-				return CachedProposal{
-						Proposal: Proposal{ProposalType: ProposalTypeGroupContextExtensions,
-							GroupContextExtensions: &GroupContextExtensions{Extensions: outside}},
-						Sender:  parts.group.OwnLeafIndex(),
-						ByValue: true,
-					}, func() ([]byte, error) {
-						return parts.group.ProposeGroupContextExtensions(outside)
-					}
+				proposal := CachedProposal{
+					Proposal: Proposal{ProposalType: ProposalTypeGroupContextExtensions,
+						GroupContextExtensions: &GroupContextExtensions{Extensions: outside}},
+					Sender:  parts.group.OwnLeafIndex(),
+					ByValue: true,
+				}
+				return proposal, func() ([]byte, error) {
+					return parts.group.ProposeGroupContextExtensions(outside)
+				}
 			},
 		},
 		{
@@ -1429,14 +1431,15 @@ func proposalGeneratorTemptations() []proposalGeneratorTemptation {
 						found, err)
 				}
 				doubled := append(slices.Clone(parts.published), entry)
-				return CachedProposal{
-						Proposal: Proposal{ProposalType: ProposalTypeGroupContextExtensions,
-							GroupContextExtensions: &GroupContextExtensions{Extensions: doubled}},
-						Sender:  parts.group.OwnLeafIndex(),
-						ByValue: true,
-					}, func() ([]byte, error) {
-						return parts.group.ProposeGroupContextExtensions(doubled)
-					}
+				proposal := CachedProposal{
+					Proposal: Proposal{ProposalType: ProposalTypeGroupContextExtensions,
+						GroupContextExtensions: &GroupContextExtensions{Extensions: doubled}},
+					Sender:  parts.group.OwnLeafIndex(),
+					ByValue: true,
+				}
+				return proposal, func() ([]byte, error) {
+					return parts.group.ProposeGroupContextExtensions(doubled)
+				}
 			},
 		},
 	}
