@@ -27,26 +27,51 @@
 #                    written for, the Windows native library, and the loopback library's C
 #                    consumer, which is a Windows program.
 #   provenance       the import's proof, with its controls, from repositories fetched here.
-#                    A REF THAT HOLDS docs/history/proof.py is checked in the proof's final form.
-#                    The proof is held at ONE recorded tip, and a later tip is held to two rules:
-#                    the commit its docs/history/recorded-tip.txt names is its ancestor, and the
-#                    proof passes AT that commit, run by that commit's own copies of
-#                    verify_split.py and carried.py over its own records. So this leg passes on a
-#                    branch that changes code, and fails on a history rewritten after the record
-#                    (a squash, a rebase). The fetches are the ones the ref's own docs/HISTORY.md
-#                    gives under "Running the proof again", run as written: each names a commit
-#                    (the import sources on the forks that hold them, and the two removals as they
-#                    merged upstream), and none reads a branch. A ref that names no recorded tip
-#                    is proven at itself (--at HEAD): that is the recorded tip before it is recorded.
-#                    proof.py's own controls run in the same leg, on histories it builds beside
-#                    the checkout: a later commit that changes an imported file must be accepted,
-#                    and a squashed history refused.
-#                    A REF FROM BEFORE THAT FORM (no proof.py) is run the way its own
-#                    docs/HISTORY.md says: verify_split.py at the ref, and carried.py with each
-#                    removal's base taken as the merge base of the commit its scripts/siblings.txt
-#                    pins and upstream main. That command cannot pass once a removal has merged:
-#                    the merge base is the pin, the range is empty, and main holds no moved path.
-#                    It is kept so that such a ref fails for that reason, and says so.
+#                    A REF THAT HOLDS docs/history/proof.py, or that is not in the recorded tip's
+#                    history, is checked in the proof's final form.
+#                    The proof is held at ONE recorded tip, and THIS FILE PINS IT, by its full id:
+#                    7a33917306ae39a2e8675f92b6639e4e7153f30c, the head of the pins switch. The ref
+#                    is not asked which commit that is, and after it the ref's scripts are not run:
+#                    a ref could otherwise replace them with ones that pass anything and move its
+#                    record to a commit of its own making. A new record is a change to this file.
+#                    Where the ref stands to the recorded tip decides what is run:
+#                      AFTER IT (the recorded tip is a proper ancestor): the ref's own
+#                        docs/history/recorded-tip.txt must name exactly the recorded tip, or the
+#                        leg fails and says why. The proof is then run by the RECORDED TIP'S OWN
+#                        proof.py, read out of that commit with git show into a file outside the
+#                        checkout, in its normal mode: it holds the ref to two rules, that the
+#                        recorded tip is its ancestor and that the proof passes AT the recorded
+#                        tip, run by that commit's own copies of verify_split.py and carried.py
+#                        over its own records. proof.py reads the checkout through --dst and
+#                        --dst-rev, and no file through its own path. So this leg passes on a
+#                        branch that changes code, and a branch that rewrites docs/history does
+#                        not change what is run.
+#                      THE RECORDED TIP ITSELF: its proof.py, read out the same way, at it (--at HEAD).
+#                      BEFORE IT (a proper ancestor that already holds proof.py): the ref's own
+#                        proof.py at the ref (--at HEAD), the way a tip was proven before it was
+#                        recorded. Every such commit is already in the recorded tip's history.
+#                      ANYTHING ELSE fails: the recorded tip is not in the ref's history (a squash,
+#                        a rebase, a branch cut beside it). A repository with no branch that holds
+#                        the recorded tip gets that one commit by its id from urnetwork/message, so
+#                        that a ref from before it is told from one beside it.
+#                    The fetches are the ones the ref's own docs/HISTORY.md gives under "Running
+#                    the proof again", run as written: each names one commit by its full id (the
+#                    import sources on the forks that hold them, and the two removals as they
+#                    merged upstream), and none reads a branch. So the ref chooses where a commit
+#                    comes from, never what it is, and the commits the proof needs are named in
+#                    the scripts it runs. --controls is passed in every case: to verify_split.py
+#                    and carried.py, and, for a ref after the recorded tip, to proof.py's own,
+#                    on histories it builds beside the checkout: a later commit that changes an
+#                    imported file must be accepted, and a squashed history refused.
+#                    A REF FROM BEFORE THAT FORM (no proof.py, and in the recorded tip's history)
+#                    is run the way its own docs/HISTORY.md says: verify_split.py at the ref, and
+#                    carried.py with each removal's base taken as the merge base of the commit its
+#                    scripts/siblings.txt pins and upstream main. That command cannot pass once a
+#                    removal has merged: the merge base is the pin, the range is empty, and main
+#                    holds no moved path. It is kept so that such a ref fails for that reason, and
+#                    says so. It runs the ref's own scripts, so no other ref takes it: whether a ref
+#                    holds proof.py is the ref's to choose, and one after or beside the recorded tip
+#                    that deleted it would otherwise be judged by scripts of its own.
 #
 # Every leg uploads its full log.
 name: Fork CI - a message ref's own test.sh
@@ -197,62 +222,140 @@ jobs:
           log="$PWD/_logs/provenance.log"
           : > "$log"
           result=0
-          if [ -f message/docs/history/proof.py ]; then
+          # THE RECORDED TIP IS PINNED HERE, by its full id, and the ref is not asked which it is.
+          # Where the ref stands to it decides what is run (the header says why). A repository with
+          # no branch that holds it gets that one commit by its id, so that a ref from before it is
+          # told from one beside it.
+          recorded=7a33917306ae39a2e8675f92b6639e4e7153f30c
+          echo "the recorded tip, as this workflow pins it: $recorded" | tee -a "$log"
+          if ! git -C message cat-file -e "$recorded^{commit}" 2> /dev/null; then
+            echo "the recorded tip is on no branch of $MESSAGE_REPOSITORY: it is fetched by its id from urnetwork/message" | tee -a "$log"
+            git -C message fetch -q --no-tags https://github.com/urnetwork/message.git "$recorded" >> "$log" 2>&1
+          fi
+          head=$(git -C message rev-parse HEAD)
+          if [ "$head" = "$recorded" ]; then
+            stand=at
+          elif git -C message merge-base --is-ancestor "$recorded" "$head" 2> /dev/null; then
+            stand=after
+          elif git -C message merge-base --is-ancestor "$head" "$recorded" 2> /dev/null; then
+            stand=before
+          else
+            stand=beside
+          fi
+          # Only a ref from before the recorded tip may take the older path below, and only when it
+          # holds no proof.py: whether a ref holds that file is the ref's to choose, its history is not
+          if [ -f message/docs/history/proof.py ] || [ "$stand" != before ]; then
             # ---- THE FINAL FORM: the proof is held at one recorded tip (docs/history/proof.py).
-            # The fetches are the ref's own documented ones, read out of its docs/HISTORY.md and run
-            # as written. Only two shapes of line are run, and a line of any other shape fails the
-            # leg: the init of one of the two mirrors, and the fetch of ONE COMMIT, by its full id,
-            # from a repository on github.com into a ref of a mirror. No branch is fetched.
-            echo "form: final (the ref holds docs/history/proof.py)" | tee -a "$log"
-            init='^git init --bare \.\./(connect|sdk)-src\.git$'
-            fetch='^git -C \.\./(connect|sdk)-src\.git fetch https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git [0-9a-f]{40}:refs/[A-Za-z0-9/_.-]+$'
-            awk '/^## Running the proof again/ {seen = 1; next} seen && /^## / {exit} seen' message/docs/HISTORY.md |
-              tr -d '\r' | sed -n 's/^    \(git .*\)$/\1/p' > _logs/documented-fetches.txt
-            inits=$(grep -cE "$init" _logs/documented-fetches.txt)
-            fetches=$(grep -cE "$fetch" _logs/documented-fetches.txt)
-            other=$(grep -vcE "$init|$fetch" _logs/documented-fetches.txt)
-            echo "the ref's docs/HISTORY.md, 'Running the proof again': $inits init line(s), $fetches fetch line(s) that each name a commit, $other git line(s) of another shape" | tee -a "$log"
-            if [ "$inits" != 2 ] || [ "$fetches" -lt 4 ] || [ "$other" != 0 ]; then
-              echo "the documented fetches are not two mirrors and at least four commits and nothing else: none is run" | tee -a "$log"
-              grep -vE "$init|$fetch" _logs/documented-fetches.txt | sed 's/^/  not run: /' | tee -a "$log"
-              result=1
+            # After the recorded tip, the recorded tip's own proof.py is run, read out of that commit
+            # into a file outside the checkout, once the ref's record names exactly that commit; at the
+            # recorded tip, the same proof.py at it; before it, the ref's own proof.py at it; beside
+            # it, nothing: the leg fails. A ref that has failed here fetches nothing and runs nothing.
+            if [ -f message/docs/history/proof.py ]; then
+              echo "form: final (the ref holds docs/history/proof.py)" | tee -a "$log"
             else
-              cd message
-              while IFS= read -r line; do
-                echo "\$ $line" | tee -a "$log"
-                # one of the two shapes above: a git command whose arguments hold no shell syntax
-                if ! $line >> "$log" 2>&1; then echo "FAILED: $line" | tee -a "$log"; result=1; fi
-              done < ../_logs/documented-fetches.txt
-              if [ "$result" = 0 ]; then
-                if git cat-file -e HEAD:docs/history/recorded-tip.txt 2> /dev/null; then
-                  mode=""
-                  echo "the ref names a recorded tip, $(git cat-file blob HEAD:docs/history/recorded-tip.txt | tr -d '\r' | grep -v '^#' | grep . | head -n 1): it must be the ref's ancestor, and the proof must pass there" | tee -a "$log"
+              echo "form: final (the ref holds no docs/history/proof.py, and it is not from before the recorded tip, so it is held to the recorded tip all the same)" | tee -a "$log"
+            fi
+            by=""
+            where=""
+            if [ "$stand" = at ]; then
+              echo "the ref is the recorded tip itself: the recorded tip's proof.py is run at it (--at HEAD)" | tee -a "$log"
+              by=recorded
+              where="--dst . --at HEAD"
+            elif [ "$stand" = after ]; then
+              echo "the ref is after the recorded tip, $(git -C message rev-list --count "$recorded..$head") commit(s) after it: its docs/history/recorded-tip.txt must name the recorded tip, and the recorded tip's own proof.py is run" | tee -a "$log"
+              if ! git -C message cat-file -e HEAD:docs/history/recorded-tip.txt 2> /dev/null; then
+                echo "the ref holds no docs/history/recorded-tip.txt, and a ref after the recorded tip must name it there: FAIL, and no proof is run" | tee -a "$log"
+                result=1
+              else
+                # the record's one line, read the way proof.py reads it: no comment, no blank line, no
+                # surrounding space. proof.py then reads it again, and must find the same commit
+                names=$(git -C message cat-file blob HEAD:docs/history/recorded-tip.txt | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^#' | grep .)
+                if [ "$names" != "$recorded" ]; then
+                  echo "the ref's docs/history/recorded-tip.txt names $(printf '%s' "${names:-nothing}" | tr '\n' ' ' | cut -c1-200), not the recorded tip, $recorded: FAIL, and no proof is run" | tee -a "$log"
+                  result=1
                 else
-                  mode="--at HEAD"
-                  echo "the ref names no recorded tip, so the proof is run at the ref itself (--at HEAD): a tip is proven this way before it is recorded" | tee -a "$log"
+                  echo "the ref's docs/history/recorded-tip.txt names the recorded tip, and nothing else" | tee -a "$log"
+                  by=recorded
+                  where="--dst . --dst-rev HEAD"
                 fi
-                {
-                  echo
-                  echo "== python3 docs/history/proof.py --connect ../connect-src.git --sdk ../sdk-src.git $mode --controls"
-                  python3 docs/history/proof.py --connect ../connect-src.git --sdk ../sdk-src.git $mode --controls
-                  echo "proof.py exited $?"
-                } 2>&1 | tee -a "$log"
-                tail -n 3 "$log" | grep -q '^proof.py exited 0$' || result=1
               fi
-              cd ..
+            elif [ "$stand" = before ]; then
+              echo "the ref is before the recorded tip, $(git -C message rev-list --count "$head..$recorded") commit(s) before it: its own proof.py is run at it (--at HEAD), the way a tip was proven before it was recorded" | tee -a "$log"
+              by=ref
+              where="--at HEAD"
+            else
+              echo "the recorded tip is not in this ref's history, and the ref is not before it (a squash, a rebase, a branch cut beside it): FAIL, and no proof is run" | tee -a "$log"
+              result=1
+            fi
+            if [ "$result" = 0 ]; then
+              # The fetches are the ref's own documented ones, read out of its docs/HISTORY.md and run
+              # as written. Only two shapes of line are run, and a line of any other shape fails the
+              # leg: the init of one of the two mirrors, and the fetch of ONE COMMIT, by its full id,
+              # from a repository on github.com into a ref of a mirror. No branch is fetched.
+              init='^git init --bare \.\./(connect|sdk)-src\.git$'
+              fetch='^git -C \.\./(connect|sdk)-src\.git fetch https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git [0-9a-f]{40}:refs/[A-Za-z0-9/_.-]+$'
+              awk '/^## Running the proof again/ {seen = 1; next} seen && /^## / {exit} seen' message/docs/HISTORY.md |
+                tr -d '\r' | sed -n 's/^    \(git .*\)$/\1/p' > _logs/documented-fetches.txt
+              inits=$(grep -cE "$init" _logs/documented-fetches.txt)
+              fetches=$(grep -cE "$fetch" _logs/documented-fetches.txt)
+              other=$(grep -vcE "$init|$fetch" _logs/documented-fetches.txt)
+              echo "the ref's docs/HISTORY.md, 'Running the proof again': $inits init line(s), $fetches fetch line(s) that each name a commit, $other git line(s) of another shape" | tee -a "$log"
+              if [ "$inits" != 2 ] || [ "$fetches" -lt 4 ] || [ "$other" != 0 ]; then
+                echo "the documented fetches are not two mirrors and at least four commits and nothing else: none is run" | tee -a "$log"
+                grep -vE "$init|$fetch" _logs/documented-fetches.txt | sed 's/^/  not run: /' | tee -a "$log"
+                result=1
+              else
+                cd message
+                while IFS= read -r line; do
+                  echo "\$ $line" | tee -a "$log"
+                  # one of the two shapes above: a git command whose arguments hold no shell syntax
+                  if ! $line >> "$log" 2>&1; then echo "FAILED: $line" | tee -a "$log"; result=1; fi
+                done < ../_logs/documented-fetches.txt
+                script=docs/history/proof.py
+                if [ "$result" = 0 ] && [ "$by" = recorded ]; then
+                  # the recorded tip's proof.py, byte for byte, alone in a new directory outside the checkout
+                  blob=$(git rev-parse "$recorded:docs/history/proof.py")
+                  script="$(mktemp -d "${RUNNER_TEMP:-/tmp}/recorded-tip.XXXXXX")/proof.py"
+                  git show "$recorded:docs/history/proof.py" > "$script"
+                  if [ -n "$blob" ] && [ "$(git hash-object --no-filters "$script")" = "$blob" ]; then
+                    echo "the recorded tip's proof.py, blob $blob, is run from $script, outside the checkout" | tee -a "$log"
+                  else
+                    echo "the recorded tip's proof.py could not be written byte for byte to $script: FAIL" | tee -a "$log"
+                    result=1
+                  fi
+                fi
+                if [ "$result" = 0 ]; then
+                  {
+                    echo
+                    echo "== python3 $script --connect ../connect-src.git --sdk ../sdk-src.git $where --controls"
+                    python3 "$script" --connect ../connect-src.git --sdk ../sdk-src.git $where --controls
+                    echo "proof.py exited $?"
+                  } 2>&1 | tee -a "$log"
+                  tail -n 3 "$log" | grep -q '^proof.py exited 0$' || result=1
+                  # for a ref after the recorded tip, or the tip itself: the proof was run AT the recorded
+                  # tip. grep -c reads to the end: grep -q would stop early, and under pipefail the SIGPIPE
+                  # that tr would then take on a long log would fail the leg
+                  if [ "$by" = recorded ] && [ "$(tr -d '\r' < "$log" | grep -cxF "== the proof at $recorded, by that commit's own scripts and records")" = 0 ]; then
+                    echo "the recorded tip's proof.py did not run the proof at the recorded tip, $recorded: FAIL" | tee -a "$log"
+                    result=1
+                  fi
+                fi
+                cd ..
+              fi
             fi
             {
               echo "the import's proof, final form (docs/history/proof.py): $([ "$result" = 0 ] && echo PASS || echo NOT PASS)"
               echo
               echo '```'
-              grep -E '^(form: |the ref|\$ git |FAILED: |tip |recorded tip |the recorded tip |the proof at |== |-- |part D|verify_split.py exited|carried.py exited|proof.py exited|controls, of|  control: (a later|the same commit|a rewritten|that history|the record)|PASS|FAIL|  the recorded tip |  [a-z_.]+\.py does not pass|  docs/history/recorded-tip.txt |  [0-9a-f]+ (names|holds) no )' "$log" | cut -c1-420
+              grep -E '^(form: |the ref|\$ git |FAILED: |tip |recorded tip |the recorded tip|the proof at |== |-- |part D|verify_split.py exited|carried.py exited|proof.py exited|controls, of|  control: (a later|the same commit|a rewritten|that history|the record)|PASS|FAIL|  the recorded tip |  [a-z_.]+\.py does not pass|  docs/history/recorded-tip.txt |  [0-9a-f]+ (names|holds) no )' "$log" | cut -c1-420
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            # ---- A REF FROM BEFORE THE FINAL FORM: the two commands as its own docs/HISTORY.md gave
-            # them. Each removal's base is the merge base of the commit the ref pins and upstream
-            # main, measured at upstream main. Once a removal has merged, that merge base is the pin
-            # itself and the range is empty, so this cannot pass: it is kept to say so.
+            # ---- A REF FROM BEFORE THE FINAL FORM (no proof.py, and in the recorded tip's history):
+            # the two commands as its own docs/HISTORY.md gave them. Each removal's base is the merge
+            # base of the commit the ref pins and upstream main, measured at upstream main. Once a
+            # removal has merged, that merge base is the pin itself and the range is empty, so this
+            # cannot pass: it is kept to say so.
             echo "form: before the recorded tip (the ref holds no docs/history/proof.py)" | tee -a "$log"
             # pin <name>: the URL and the commit the ref's scripts/siblings.txt gives a sibling
             pin() { grep -E "^$1[[:space:]]" message/scripts/siblings.txt | tr -d '\r' | awk '{print $2, $3}'; }
