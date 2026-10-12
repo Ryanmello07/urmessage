@@ -57,3 +57,19 @@ the history with one more merge:
 
 A rebase merge also leaves rewritten copies of the commits on `main`. They stay:
 removing them would need a force push.
+
+## Before a release: the vulnerability scan
+
+`./test.sh` does not read the Go vulnerability database. Its verdict is a
+statement about a tree, and the database moves with no commit here. Before a
+tag, run the scan by hand, on linux with gcc so that the native library is
+scanned as well:
+
+    MESSAGE_TEST_VULNCHECK=1 ./test.sh    # the whole run, the scan last
+    bash scripts/vulncheck.sh             # the scan alone
+
+It prints the tree's commit and the database's own modified time, counts the Go
+files it reads in every module before it reads them, and fails if a module hands
+it none. A finding in the standard library is closed by moving the pinned
+toolchain, the `toolchain` line of the root `go.mod`, with `mls/pins_test.go`'s literal, which is a reviewed change of
+its own: the cryptographic code is reviewed under one compiler.
