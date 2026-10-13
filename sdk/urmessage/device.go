@@ -282,6 +282,16 @@ type Device struct {
 	mutex  sync.Mutex
 	groups map[string]*Group
 
+	// admitMutex is held by every call that puts a group onto this device -- [Device.Join],
+	// [Device.CreateGroup] and [Device.Restore] -- from the question "does this device hold that
+	// group" to the hold that answers it. Without it two admissions of one group id overlap, both
+	// read "not held", and the second replaces the first. It is taken before [Device.mutex] and
+	// never while that one is held.
+	admitMutex sync.Mutex
+	// unrestored is the groups the last [Device.Restore] found on the disk and could not bring
+	// back, by id. Guarded by mutex. It is what [Device.ForgetGroup] reads to leave one of them.
+	unrestored map[string]bool
+
 	// §4.3.5's pushes and the replaced-session flag: see [pushInbox], which is what the transport's
 	// callbacks hold instead of this device.
 	inbox *pushInbox
@@ -450,6 +460,7 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		random:           random,
 		commitAuthorizer: config.CommitAuthorizer,
 		groups:           map[string]*Group{},
+		unrestored:       map[string]bool{},
 		inbox:            inbox,
 	}, nil
 }
@@ -902,10 +913,4 @@ func (self *Device) createMlsGroup(groupId []byte) (messagegroup.GroupHandle, er
 		return nil, fmt.Errorf("urmessage: CreateGroup: %w", err)
 	}
 	return handle, nil
-}
-
-func (self *Device) hold(group *Group) {
-	self.mutex.Lock()
-	defer self.mutex.Unlock()
-	self.groups[string(group.id)] = group
 }

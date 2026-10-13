@@ -3,6 +3,7 @@ package urmessage
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 
 	"github.com/urnetwork/message/messagegroup"
@@ -206,6 +207,10 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	if !durable {
 		return nil, ErrNoDeviceStore
 	}
+	// ONE ADMISSION AT A TIME: a Join or a CreateGroup of a group this call is about to restore
+	// waits for it and reads the answer it leaves. See [Device.admitMutex].
+	self.admitMutex.Lock()
+	defer self.admitMutex.Unlock()
 	// A LEAVE THAT DID NOT FINISH ERASING IS FINISHED FIRST, and before the nonce is asked for: it
 	// needs no connection, and a device that cannot connect should still not keep a group it left
 	// on the disk. A group being left is never restored ([DurableStateStore.GroupRecords] skips
@@ -224,18 +229,39 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	if err != nil {
 		return nil, err
 	}
+	// ONE RECORD THAT DOES NOT READ DOES NOT COST THE OTHERS. The list answers every record that
+	// reads, and reports the ones that do not beside it ([ErrGroupRecordDamaged]). This call used
+	// to return on that report, before its loop, so one damaged file left a device with none of
+	// its groups. It goes on now: the others are restored, and the damaged record is this call's
+	// first failure, answered inside [ErrRestore] like any other group that did not come back.
+	// It is named by the store's name for it and not by a group id, which the store cannot give
+	// (see [DurableStateStore.GroupRecords]); [Device.ForgetGroup] leaves it by its id.
 	records, err := store.GroupRecords()
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrGroupRecordDamaged) {
 		return nil, err
 	}
 	restored := []*Group{}
 	var firstFailure error
+	if err != nil {
+		firstFailure = fmt.Errorf("%w: %w", ErrRestore, err)
+	}
 	for _, record := range records {
 		if self.holdsGroup(record.GroupId) {
 			continue
 		}
 		group, err := self.restoreOne(store, record, nonce, nonceEpoch)
+		if err == nil {
+			// THE HOLD IS HERE AND NOT IN restoreOne: this loop is the admission, under the mutex
+			// and after the question, and restoreOne only rebuilds.
+			if err = self.hold(group); err != nil {
+				group.Close()
+				err = fmt.Errorf("%w: group %x: %w", ErrRestore, record.GroupId, err)
+			}
+		}
 		if err != nil {
+			// REMEMBERED, so that [Device.ForgetGroup] can leave a group that will not come back:
+			// its record is still on the disk, and a join into it is refused while it is.
+			self.noteUnrestored(record.GroupId)
 			if firstFailure == nil {
 				firstFailure = err
 			}
@@ -473,7 +499,6 @@ func (self *Device) restoreOne(store DeviceStore, record *GroupRecord, nonce []b
 			restored.peerHeads[ladder] = head.Head
 		}
 	}
-	self.hold(restored)
 	return restored, nil
 }
 

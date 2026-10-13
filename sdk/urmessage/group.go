@@ -1294,7 +1294,15 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 	if len(groupId) != GroupIdBytes {
 		return nil, fmt.Errorf("urmessage: a group id is %d octets and this one is %d", GroupIdBytes, len(groupId))
 	}
+	// ONE ADMISSION AT A TIME, from the question below to the hold: see [Device.admitMutex].
+	self.admitMutex.Lock()
+	defer self.admitMutex.Unlock()
 	if err := self.finishLeaveBefore(groupId); err != nil {
+		return nil, err
+	}
+	// NOTHING IS FOUNDED UNDER AN ID THIS DEVICE HOLDS: see [Device.foundOverHeldGroup]. It is asked
+	// before the MLS group is made, because making it writes an epoch-zero state under that id.
+	if err := self.foundOverHeldGroup(groupId); err != nil {
 		return nil, err
 	}
 	nonce, nonceEpoch, err := self.nonce()
@@ -1353,7 +1361,10 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 		ownFloorHeld: true,
 	}
 	group.initTables()
-	self.hold(group)
+	if err := self.hold(group); err != nil {
+		group.Close()
+		return nil, err
+	}
 	// NOTHING IS PERSISTED HERE AND THAT IS DELIBERATE. A group at epoch zero with no second
 	// member cannot be restored into anything a caller can use -- [Group.AddMember] needs the
 	// founding session, which is not persisted, and [Group.Open] needs the commit AddMember
@@ -1377,10 +1388,20 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (*Group, error) {
 	if err := invite.check(); err != nil {
 		return nil, err
 	}
+	// ONE ADMISSION AT A TIME, FROM THE HELD-GROUP GATE TO THE HOLD: see [Device.admitMutex]. The
+	// gate's answer is only worth the time it stays true for, so everything from the question to
+	// the map entry is one critical section.
+	self.admitMutex.Lock()
+	defer self.admitMutex.Unlock()
 	if err := self.finishLeaveBefore(invite.GroupId); err != nil {
 		return nil, err
 	}
 	nonce, nonceEpoch, err := self.nonce()
+	if err != nil {
+		return nil, err
+	}
+	// THE HELD-GROUP GATE, before the join code is touched: see [Device.joinOverHeldGroup].
+	replaces, readd, removedEpoch, err := self.joinOverHeldGroup(invite.GroupId)
 	if err != nil {
 		return nil, err
 	}
@@ -1392,6 +1413,11 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (*Group, error) {
 		handle.Close()
 		return nil, fmt.Errorf("urmessage: the welcome joined group %x and the invite names %x",
 			handle.GroupId(), invite.GroupId)
+	}
+	if readd && handle.Epoch() <= removedEpoch {
+		handle.Close()
+		return nil, fmt.Errorf("%w: the welcome stands at epoch %d and this device was removed at epoch %d",
+			ErrReaddStale, handle.Epoch(), removedEpoch)
 	}
 	session, err := messagegroup.NewGroupSession(handle, invite.PqSecret, invite.GroupHandleKey,
 		self.reserver, self.nowMs, nonce)
@@ -1459,7 +1485,11 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (*Group, error) {
 		return nil, fmt.Errorf(
 			"urmessage: this group joined and its record could not be persisted, so a restart would not come back into it: %w", err)
 	}
-	self.hold(group)
+	if err := self.holdReplacing(group, replaces); err != nil {
+		session.Close()
+		handle.Close()
+		return nil, err
+	}
 	return group, nil
 }
 

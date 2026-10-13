@@ -728,6 +728,22 @@ var (
 	// already left, or closed under it.
 	ErrGroupNotHeld = errors.New("urmessage: this device holds no such group")
 
+	// [Device.ForgetGroup] was asked to leave a group that is on this device's disk and that no
+	// [Device.Restore] has tried to bring back since this process started. Restore first: a group
+	// that comes back is left like any other, the owner's refusal included, and one that does not
+	// come back is left by calling ForgetGroup again.
+	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back, ForgetGroup leaves it")
+
+	// A group's record is on this device's disk and DOES NOT READ: its checksum does not hold, it
+	// does not decode, it names another group, or the file under its name cannot be had. It is
+	// ONE GROUP'S damage and never the device's. [DeviceStore.GroupRecord] answers it for that one
+	// group; [DeviceStore.GroupRecords] answers it BESIDE the list of every record that does read,
+	// so [Device.Restore] brings the others back and reports this one; and an invite into any
+	// other group joins. A record that does not read can never be restored, so
+	// [Device.ForgetGroup] leaves its group without a Restore having tried, and without the
+	// owner's question, which is asked of a roster this group no longer has.
+	ErrGroupRecordDamaged = errors.New("urmessage: a group record on this device's disk does not read, so that group cannot be restored; ForgetGroup leaves it, and it can then be joined again")
+
 	// [Device.ForgetGroup] LEFT the group -- it is closed, its keys are gone from memory, and this
 	// device no longer holds it -- but the erase of its copy on the disk did not finish. The leave
 	// mark stands, so the next [Device.Restore] finishes the erase, and so does ForgetGroup again.
@@ -741,4 +757,20 @@ var (
 	// or added back. MASTER §11: "the leave action is refused for an OWNER until ownership has been
 	// transferred". Nothing changed: the group is open, and every file of it is still on the disk.
 	ErrOwnerMustTransfer = errors.New("urmessage: you own this group and somebody else is in it, so hand it over first with TransferOwnership; leaving now would leave them with an owner nobody can remove")
+
+	// [Device.Join] was handed an invite into a group this device ALREADY HOLDS, live in memory or
+	// as a record on its disk, and that group is not one a commit removed this device from. A join
+	// writes an epoch state, a record and a map entry under the group's id, so a join over a held
+	// group is that group replaced by whatever the invite carries, and an invite authenticates
+	// nobody. Nothing was written and the join code is not spent. The one join over a held id that
+	// is honoured is the re-add of a device a commit removed. A group that went dark or halted, one
+	// a restore could not bring back, and one whose record does not read ([ErrGroupRecordDamaged],
+	// which this then carries as well) is joined again by leaving it first, with
+	// [Device.ForgetGroup]. [Device.CreateGroup] answers it too, for an id this device holds
+	// anything under.
+	ErrGroupAlreadyHeld = errors.New("urmessage: this device already holds this group, so an invite into it is refused; leave it first with ForgetGroup to join it again")
+
+	// The re-add of a device a commit removed named an epoch at or below the one it was removed at.
+	// A real re-add is a later commit, so its Welcome stands above that epoch.
+	ErrReaddStale = errors.New("urmessage: this invite adds this device back at an epoch at or below the one it was removed at")
 )

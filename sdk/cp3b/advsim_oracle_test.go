@@ -470,3 +470,27 @@ func advRemoveEpochStates(stateDir string, groupId []byte) error {
 		return nil
 	})
 }
+
+// advDamageRecord cuts the record a durable store holds for one group to half its length, and
+// leaves everything else of the group: what "one file on the disk does not read" is. The device
+// must be stopped first, because its store holds the directory while it runs.
+func advDamageRecord(t *testing.T, stateDir string, groupId []byte) {
+	t.Helper()
+	sum := sha256.Sum256(groupId)
+	marker := "/" + hex.EncodeToString(sum[:]) + "/meta"
+	cut := 0
+	err := filepath.WalkDir(stateDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !bytes.HasSuffix([]byte(filepath.ToSlash(path)), []byte(marker)) {
+			return err
+		}
+		record, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		cut += 1
+		return os.WriteFile(path, record[:len(record)/2], 0o600)
+	})
+	if err != nil || cut != 1 {
+		advHarness(t, "cutting the group's record under %s to half its length: %d file(s) cut, %v", stateDir, cut, err)
+	}
+}

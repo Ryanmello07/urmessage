@@ -321,9 +321,10 @@ var pqSecretSinks = map[string]pqSecretSink{
 		carries: []string{"invite.PqSecret"},
 		why:     "the joiner's session, built over the secret of the epoch it is admitted at.",
 	},
-	"Join|call self.hold": {
+	"Join|call self.holdReplacing": {
 		carries: []string{"group"},
-		why:     "the group going onto the device.",
+		why: "the group going onto the device, in place of the one a commit removed this device from " +
+			"when the join is a re-add. The replaced group is closed, which erases its own table.",
 	},
 	"Join|call self.persistGroup": {
 		carries: []string{"group"},
@@ -854,10 +855,6 @@ var pqSecretSinks = map[string]pqSecretSink{
 		why: "the restored table going to the one question a restarted device can answer about it: are " +
 			"there two different values in it.",
 	},
-	"restoreOne|call self.hold": {
-		carries: []string{"restored"},
-		why:     "the restored group going onto the device.",
-	},
 	"restoreOne|call session.InstallPqSecret": {
 		carries: []string{"row", "row.secret"},
 		why: "EACH PAST EPOCH GOING BACK INTO CONNECT'S TABLE. It carries the row's epoch and the " +
@@ -1030,7 +1027,7 @@ var pqSecretAccumulatorSites = map[string]string{
 	"Encode|accumulate writer.WriteOpaqueLP": "THE INVITE'S BUFFER. The secret goes into the syntax writer and the walk does not follow " +
 		"it into that object; it comes back out as the encoded invite, which is the out-of-band " +
 		"value by design.",
-	"Join|accumulate self.hold": "the same, for a joiner.",
+	"Join|accumulate self.holdReplacing": "the same, for a joiner.",
 	"Join|accumulate self.persistGroup": "THE DISK, one frame out. [Device.persistGroup] hands the record to the store, whose own " +
 		"write path IS censused -- PutGroupRecord, and the two calls under it -- so the blindness " +
 		"here is bounded by one function body.",
@@ -1058,7 +1055,6 @@ var pqSecretAccumulatorSites = map[string]string{
 		"keeps nothing and it derives nothing; its whole body is a ConstantTimeCompare of the " +
 		"candidate against rows of a table this census already covers, and what it answers is an " +
 		"epoch number and a bool. Its header carries why the subject is the whole table.",
-	"restoreOne|accumulate self.hold":                        "the same, for a restored group.",
 	"sealEpochWrapLocked|accumulate self.session.SealRecord": "the session's sealer, taking the wrap body that is already a ciphertext of the secret.",
 	"writeRecord|accumulate temp.Write": "THE DISK. What happens to those octets after this call is the filesystem's and not a " +
 		"value any walk over this package's names can follow. It is the honest end of this census " +
