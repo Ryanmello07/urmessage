@@ -89,6 +89,15 @@ Nothing below is decided and this package must not decide it.
 4. **Whose obligation it is**, and this item takes no position: the ruling may put it on `sdk`,
    on the application, or on a new method of section 6.
 
+### The second door carries the same obligation
+
+`GroupEngine.JoinFromWelcomeInto` is the sixth engine method, added by the hardening program's
+held-group gate. It is `JoinFromWelcome` with the group id its caller means to join, matched
+inside `mls` ahead of the persist, so that the id a caller judged ("do I already hold this group?")
+is the id that gets written. **It authenticates nobody, exactly as the first door**: a group id is
+public, and a forged Welcome naming the id its target expects passes the match. Everything this
+item says of `JoinFromWelcome` is said of both, and a ruling that closes it closes it at both.
+
 ### Why it is not closed here
 
 An anchoring mechanism chosen in an adapter is a security argument taken by the layer with the

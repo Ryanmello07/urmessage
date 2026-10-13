@@ -177,6 +177,10 @@ var (
 	// on the type, and the only place the difference can survive is the message. The taxonomy
 	// that would let the type tell them apart is owed by whoever owns the store interface.
 	ErrEngineNoKeyPackageForWelcome = errors.New("messagegroup: no key package this store holds is addressed by this welcome")
+	// Fires when JoinFromWelcomeInto is handed an empty group id. That door is for a caller that
+	// knows which group it means to join, and an empty id is the one value that turns the intent
+	// match off inside connect/mls and makes this door JoinFromWelcome under another name.
+	ErrEngineJoinGroupId = errors.New("messagegroup: JoinFromWelcomeInto names the group it joins, and the group id it was given is empty")
 	// Fires when MemberAt is asked for an ordinal the membership does not have. It is a
 	// refusal and not a zero member because the two are told apart by nothing downstream: a
 	// projection that dropped mls.MemberAt's second result would turn a missing member into

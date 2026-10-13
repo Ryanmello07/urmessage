@@ -42,8 +42,9 @@ import (
 // GroupEngine is the factory half of section 6: everything a caller needs in order to obtain a
 // GroupHandle, and nothing about a group it already holds.
 //
-// Five methods. Four are transcribed from section 6's block and the fifth is LoadGroup, which is a
-// section 6 AMENDMENT and is documented as one at its declaration below. JoinFromWelcome is HERE
+// Six methods. Four are transcribed from section 6's block; the fifth is LoadGroup and the sixth
+// is JoinFromWelcomeInto, and each of those two is a section 6 AMENDMENT, documented as one at its
+// declaration below. JoinFromWelcome is HERE
 // and not on GroupHandle, which is worth stating because the other factories are obviously
 // factories and this one reads like a group operation: a member joining from a Welcome has no
 // handle yet, and putting it on the handle would require one to exist before the join that
@@ -104,6 +105,24 @@ type GroupEngine interface {
 	LoadGroup(groupId []byte, epoch uint64) (GroupHandle, error)
 
 	JoinFromWelcome(welcome []byte, ratchetTree []byte) (GroupHandle, error)
+
+	// JoinFromWelcomeInto is JoinFromWelcome for a caller that KNOWS WHICH GROUP IT MEANS TO JOIN.
+	// IT IS THE SIXTH METHOD, an amendment made for the hardening program's held-group gate, and
+	// the one thing it adds is the group id.
+	//
+	// THE GROUP ID IS THE CALLER'S AND IS MATCHED BEFORE THE JOINED EPOCH IS PERSISTED.
+	// JoinFromWelcome leaves connect/mls's intent match off, because section 6 gave it no group id
+	// to intend. Its caller in the sdk compared the id AFTERWARDS, which was after mls had
+	// persisted the joined epoch under the id THE WELCOME named: an invite naming one group and
+	// carrying a Welcome for a group the device already held replaced that group's epoch state and
+	// was only then refused. Measured, in sdk/cp3b, before this method existed. Through this door a
+	// Welcome describing any group but groupId is refused inside mls, ahead of its persist, and the
+	// key package goes back as it does on every other refusal.
+	//
+	// IT AUTHENTICATES NOBODY, exactly as JoinFromWelcome: a group id is public, and a forged
+	// Welcome naming the id its target expects passes the match. What the match buys is that the
+	// id a caller judged -- is this a group I already hold? -- is the id that gets written.
+	JoinFromWelcomeInto(welcome []byte, ratchetTree []byte, groupId []byte) (GroupHandle, error)
 }
 
 // GroupHandle is the entire MLS surface the storage layer is allowed to see.
@@ -611,7 +630,7 @@ func NewConnectMlsEngine(crypto mls.CryptoProvider, store mls.StateStore,
 // Zeroize erases the identity signing key this engine holds a copy of.
 //
 // NOTHING IN THIS PACKAGE CALLS IT, and that is a gap in section 6 rather than an oversight here:
-// GroupEngine has five methods and none of them is a lifecycle method, so an engine has no
+// GroupEngine has six methods and none of them is a lifecycle method, so an engine has no
 // documented end. mls.Group clones the same signer into every group this device founds and erases
 // its own copy at Close; this copy has no Close to be erased at. The erase is declared so the
 // obligation sits on the type that holds the octets -- which is where connect/mls's erase reading
@@ -811,6 +830,21 @@ func (self *connectMlsEngine) LoadGroup(groupId []byte, epoch uint64) (GroupHand
 // two apart even though a caller matching on the type cannot. The taxonomy that would let the type
 // tell them apart is owed by whoever owns the store interface.
 func (self *connectMlsEngine) JoinFromWelcome(welcome []byte, ratchetTree []byte) (GroupHandle, error) {
+	return self.joinFromWelcome(welcome, ratchetTree, nil)
+}
+
+// JoinFromWelcomeInto is JoinFromWelcome with connect/mls's intent match on: see the interface.
+func (self *connectMlsEngine) JoinFromWelcomeInto(welcome []byte, ratchetTree []byte, groupId []byte) (GroupHandle, error) {
+	if len(groupId) == 0 {
+		return nil, ErrEngineJoinGroupId
+	}
+	return self.joinFromWelcome(welcome, ratchetTree, groupId)
+}
+
+// joinFromWelcome is the body both doors share: the key package refs a Welcome names, the take,
+// the join over the one taken entry, and the put-back on every failure after the take. groupId is
+// nil through JoinFromWelcome and the caller's own through JoinFromWelcomeInto.
+func (self *connectMlsEngine) joinFromWelcome(welcome []byte, ratchetTree []byte, groupId []byte) (GroupHandle, error) {
 	parsed, err := mls.ParseMLSMessage(welcome)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %d octets do not decode as an MLSMessage: %w",
@@ -830,7 +864,7 @@ func (self *connectMlsEngine) JoinFromWelcome(welcome []byte, ratchetTree []byte
 			continue
 		}
 		handle, joinErr := self.joinWithTakenKeyPackage(welcome, ratchetTree, encoded,
-			initPrivate, encryptPrivate)
+			initPrivate, encryptPrivate, groupId)
 		if joinErr != nil {
 			// the put-back, on EVERY failure after the take rather than on a named list of
 			// them: an allow-list of failure reasons is the shape that fails open the day
@@ -877,7 +911,7 @@ func (self *connectMlsEngine) JoinFromWelcome(welcome []byte, ratchetTree []byte
 // header. Rejected: not calling Zeroize at all, which leaves the two HPKE halves in the heap and
 // buys nothing.
 func (self *connectMlsEngine) joinWithTakenKeyPackage(welcome []byte, ratchetTree []byte,
-	encoded []byte, initPrivate []byte, encryptPrivate []byte) (GroupHandle, error) {
+	encoded []byte, initPrivate []byte, encryptPrivate []byte, groupId []byte) (GroupHandle, error) {
 
 	var keyPackage mls.KeyPackage
 	if err := syntax.Unmarshal(encoded, &keyPackage); err != nil {
@@ -895,16 +929,21 @@ func (self *connectMlsEngine) joinWithTakenKeyPackage(welcome []byte, ratchetTre
 	defer keys.Zeroize()
 	// THE CONFIG CARRIES ONLY WHAT THE JOIN READS. mls.JoinFromWelcome's body reads Crypto,
 	// Store, Profile -- defaulted if nil -- and GroupId, and GroupId ONLY as an intent match the
-	// caller opts into. Section 6's signature gives this engine no group id to intend, so it is
-	// left unset: a config that guessed one would refuse every legitimate Welcome, and a config
-	// that recovered one from the message it is about to judge would turn an intent match into a
-	// tautology, which is worse than leaving it unset because it reads like a check. Suite,
-	// Extensions, RequiredCaps and LeafKeys are the four CreateGroup sets and this must not --
-	// they are unread on this path, because required capabilities come off the Welcome's own
-	// GroupInfo.
+	// caller opts into. Suite, Extensions, RequiredCaps and LeafKeys are the four CreateGroup sets
+	// and this must not -- they are unread on this path, because required capabilities come off
+	// the Welcome's own GroupInfo.
+	//
+	// THE GROUP ID IS THE CALLER'S OR IT IS ABSENT, AND IT IS NEVER THIS ENGINE'S GUESS. Through
+	// JoinFromWelcome it is nil, section 6's signature having given that door no group id to
+	// intend, and mls reads an empty one as "no intent stated". Through JoinFromWelcomeInto it is
+	// the id the caller was told it is joining -- for the sdk, the one an invite names beside its
+	// Welcome -- so the match is between two things the caller was handed. A config that guessed
+	// one would refuse every legitimate Welcome, and one that recovered it from the Welcome it is
+	// about to judge would turn the intent match into a tautology that reads like a check.
 	group, err := mls.JoinFromWelcome(&mls.GroupConfig{
-		Crypto: self.crypto,
-		Store:  self.store,
+		Crypto:  self.crypto,
+		Store:   self.store,
+		GroupId: groupId,
 	}, welcome, ratchetTree, keys)
 	if err != nil {
 		return nil, err
