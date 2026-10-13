@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 
 	messageprotocol "github.com/urnetwork/message/protocol"
@@ -144,5 +147,52 @@ func TestNoGroupIsFoundedUnderAnIdThisDeviceHolds(t *testing.T) {
 	// THE CONTROL: any other id founds
 	if _, err := device.CreateGroup(ctx, bytes.Repeat([]byte{0x48}, GroupIdBytes)); err != nil {
 		t.Fatalf("CONTROL FAILED: founding under an id the device does not hold answered %v", err)
+	}
+}
+
+// PRODUCTION JOINS ONLY THROUGH THE BOUND DOOR. [messagegroup.GroupEngine] keeps JoinFromWelcome,
+// which states no group id and so cannot refuse a Welcome for another group before mls has written
+// its state; the tests of three packages join through it, and may. No production file of this
+// package does.
+//
+// THE SUBJECT is every call in this package's production sources whose selector is one of the
+// engine's two joining doors, read off the syntax tree. THE OTHER HALF IS ASSERTED AND NOT ONLY
+// PRINTED: the bound door is called exactly once, so a gate that had stopped seeing calls at all
+// fails on its control and does not pass on nothing.
+//
+// WHAT WOULD GO RED: have Join call JoinFromWelcome again and compare the group id afterwards,
+// which is the join this package made until the held-group gate.
+func TestProductionJoinsOnlyThroughTheBoundDoor(t *testing.T) {
+	files := token.NewFileSet()
+	unbound, bound := []string{}, []string{}
+	for _, name := range stateTestProductionSources(t) {
+		parsed, err := parser.ParseFile(files, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			call, isCall := node.(*ast.CallExpr)
+			if !isCall {
+				return true
+			}
+			selector, isSelector := call.Fun.(*ast.SelectorExpr)
+			if !isSelector {
+				return true
+			}
+			switch selector.Sel.Name {
+			case "JoinFromWelcome":
+				unbound = append(unbound, files.Position(call.Pos()).String())
+			case "JoinFromWelcomeInto":
+				bound = append(bound, files.Position(call.Pos()).String())
+			}
+			return true
+		})
+	}
+	t.Logf("calls of JoinFromWelcomeInto in production: %v; calls of JoinFromWelcome: %v", bound, unbound)
+	if len(bound) != 1 {
+		t.Errorf("production calls the bound door %d time(s) %v, want exactly once, from Join: a count of none is this gate reading nothing", len(bound), bound)
+	}
+	if len(unbound) != 0 {
+		t.Errorf("production calls the unbound JoinFromWelcome at %v: a join that states no group id is refused, if at all, after mls has written the joined state", unbound)
 	}
 }

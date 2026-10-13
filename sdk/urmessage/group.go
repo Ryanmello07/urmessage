@@ -1405,9 +1405,11 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (*Group, error) {
 	if err != nil {
 		return nil, err
 	}
-	handle, err := self.engine.JoinFromWelcome(invite.Welcome, invite.RatchetTree)
+	// THE JOIN IS BOUND TO THE GROUP THE INVITE NAMES. A Welcome for any other group is refused
+	// inside the engine, before a state is written, and the join code is put back.
+	handle, err := self.engine.JoinFromWelcomeInto(invite.Welcome, invite.RatchetTree, invite.GroupId)
 	if err != nil {
-		return nil, fmt.Errorf("urmessage: JoinFromWelcome: %w", err)
+		return nil, fmt.Errorf("urmessage: JoinFromWelcomeInto: %w", err)
 	}
 	if !bytes.Equal(handle.GroupId(), invite.GroupId) {
 		handle.Close()
