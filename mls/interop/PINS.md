@@ -1,8 +1,11 @@
-<!-- connect/mls/interop/PINS.md -->
+<!-- mls/interop/PINS.md -->
 # Pinned external references
 
 This is the one pin file for the whole slice. Bumping any line here is a pull request that must show
-a green interop matrix and a green `vectors` job. Nothing in this file enters `go.mod`.
+`./test.sh` green. Its `mls` leg checks each of the 16 vendored vector files against the digest in
+`testdata/vectors/VECTORS.sha256`, and verifies every family that has a runner installed in the
+manifest of `vectors_test.go`. The families with no runner yet are the ones that file lists as
+`expectedPendingFamilies`: they are pinned and not yet run. Nothing in this file enters `go.mod`.
 
 The commit lines are machine-readable and are grepped by other plans' tasks; keep the
 `key=<40-char sha>` shape exactly.
@@ -16,16 +19,16 @@ xwing=9b6ce9e614811dba8d46841052f3883cbc4c1a65
 
 | What | Pin | Why |
 |---|---|---|
-| mlswg/mls-implementations | the `mlswg=` line above | the 16 vector families **and** the gRPC test runner, pinned together so the runner and the vectors never disagree |
-| openmls/openmls | the `openmls=` line above | the differential oracle and the 9 fuzz targets; built out of process in CI, never linked |
-| `ghcr.io/urnetwork/mls-peer-openmls` | digest `sha256:<...>` | interop peer |
-| `ghcr.io/urnetwork/mls-peer-mlspp` | digest `sha256:<...>` | interop peer |
-| `ghcr.io/urnetwork/mls-peer-mls-rs` | digest `sha256:<...>` | interop peer |
+| mlswg/mls-implementations | the `mlswg=` line above | the 16 vector families. The gRPC test runner at the same commit is NOT USED: nothing here runs it |
+| openmls/openmls | the `openmls=` line above | the differential oracle this package is to be held against. Nothing builds or links OpenMLS today |
+| the openmls peer | none | NOT BUILT. No image and no digest exists; it is planned as a binary built from the `openmls=` pin |
+| the mlspp peer | none | NOT BUILT, deferred |
+| the mls-rs peer | none | NOT BUILT, deferred |
 | `testdata/vectors/rfc/hpke-rfc9180-x25519.json` | the `hpke=` line above, filtered; sha256 `3cc5f951dea0b7dbe80419215e64c810498ee4dd76c376763bbe6860c346b11a` | the RFC 9180 base-mode known answers that hold the HPKE instantiation to the RFC rather than to itself; see the section below |
 | `../../messagegroup/testdata/vectors/rfc/xwing-draft10.json` | the `xwing=` line above, whole; sha256 `409efe197550b22985b4a0419418a0c5f2c2b193426c55bd998399ec8d3e614d` | the three draft-connolly-cfrg-xwing-kem known answers that hold the X-Wing combiner, its label position and the seed expansion to the draft rather than to themselves; see the section below |
 
-Peer images are prebuilt and pushed to GHCR by the weekly `peer-image-bump` job, which opens a
-digest-bump PR. CI never compiles Rust or C++ on a per-commit path.
+No interop peer is built, by anything, on any schedule. This repository has no CI service:
+`./test.sh` is the whole run, and it compiles Go only.
 
 ## testdata/vectors/rfc/hpke-rfc9180-x25519.json
 
@@ -121,8 +124,8 @@ the smudge. `TestXwingVectorFileWasNotSmudgedOnTheWayIn` refuses a carriage retu
 all, and `TestXwingVectorDirectoryDisablesGitsTextConversion` reads the attributes file itself so the rule
 going missing fails on the commit that removes it rather than on the next person's fresh clone.
 
-Every value above is pinned a second time in `messagegroup/xwing_vectors_test.go` — the vendored digest as
-`xwingVectorSha256`, the repository, commit, path and vector count as the constants beside it — and
+Every value above is pinned a second time in `messagegroup/xwing_vectors_test.go` -- the vendored digest as
+`xwingVectorSha256`, the repository, commit, path and vector count as the constants beside it -- and
 `TestXwingVectorProvenanceIsRecordedInThePinFile` compares the two copies field by field, parsing this
 section's table rather than grepping the file, for the reason the section above records: the commit appears
 in the fence, in the table and in the fetch url, so a `strings.Contains` over the whole file is answered by

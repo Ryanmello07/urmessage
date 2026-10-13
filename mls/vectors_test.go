@@ -92,22 +92,22 @@ var vectorManifest = baseVectorManifest()
 // 5 and 6 because p4 tasks 17 and 16 register them from key_schedule_kat_test.go,
 // 10 and 11 because p5 tasks 24 and 25 register them from tree_kat_test.go,
 // 7 because p4 task 20 registers it from transcript_kat_test.go, and 3 because p4 task 25
-// registers it from secret_tree_kat_test.go. 16 is still
-// here even though package syntax ships a working runner for it: that runner is not
-// installed in this manifest, and a family verified somewhere this registry cannot see is,
-// as far as this gate is concerned, a family nothing runs. p8 task 8 is the shim.
+// registers it from secret_tree_kat_test.go. 16 left this list when deserialization_kat_test.go
+// installed package syntax's runner in this manifest: until then that runner ran, and a family
+// verified somewhere this registry cannot see is, as far as this gate is concerned, a family
+// nothing runs.
 //
 // 1 left this list when tree_math_kat_test.go landed, and the reason it was still HERE is
 // worth recording, because it is the failure mode this gate has: p3's tree math shipped onto
 // this branch with its corpus vendored and pinned and nothing running it, and this list --
 // written when that code was elsewhere -- reported the family as pending and passed. A family
 // whose implementation has landed is not pending, it is uncovered, and the two are
-// indistinguishable from here. Families 2 and 16 are in that position today: crypto-basics
-// covers RefHash, ExpandWithLabel, DeriveSecret, DeriveTreeSecret, SignWithLabel and
-// EncryptWithLabel, all of which this package declares, and 16's runner exists in package
-// syntax and is not installed here. Both are owned by tasks that are not this one, and both
-// are named here so that "pending" cannot go on meaning two different things silently.
-var expectedPendingFamilies = []int{2, 8, 9, 13, 14, 15, 16}
+// indistinguishable from here. Family 2 is in that position today: crypto-basics covers
+// RefHash, ExpandWithLabel, DeriveSecret, DeriveTreeSecret, SignWithLabel and
+// EncryptWithLabel, all of which this package declares. It is owned by a task that is not
+// this one, and it is named here so that "pending" cannot go on meaning two different things
+// silently.
+var expectedPendingFamilies = []int{2, 8, 9, 13, 14, 15}
 
 // RegisterVectorFamily installs a family runner. Registering a number twice, or a number
 // outside 1 to 16, is a programming error rather than a condition to report: both mean the
