@@ -864,3 +864,100 @@ device wrap and did not reach any of the three code points; ruling 36's own sent
 post-quantum gate cannot be discharged by a carrier whose confidentiality rests on the MLS exporter*
 — is what makes this door load-bearing rather than optional, so the encodings it needs are now on
 the critical path of the removal track rather than of a later slice.
+
+---
+
+## MG-8 — a device added back after a removal answers "a record ciphertext did not authenticate" for history it cannot open by design
+
+**Status: OPEN. Filed 2026-10-09 by the hardening program's held-group gate, which measured it and
+does not change it. The mechanism is the healing track's to rule and to build.**
+
+### The property
+
+`ErrRecordAeadOpen` is this package's one answer for a record whose ciphertext does not
+authenticate under the key, the nonce and the aad it was opened with. Whoever is handed it has one
+reading: the record was altered, or it was sealed by somebody who does not hold the key. **It must
+not also be the answer for history a device cannot open by design.** A signal that fires on an
+honest group says nothing on the day it matters.
+
+A device that is removed from a group and added back joins at the epoch of the re-add. What was
+sealed before that epoch is history. It either renders as a gap, which is the answer for any epoch
+a member holds no state for, or it opens, if the device kept what opens it. Measured, it does
+neither.
+
+### What this tree already says about it, and what is new
+
+Part of this is already measured, as a COST and not as a defect. The header of
+`urmessage.ErrRemovedFromGroup` prices the one repair a removal names, which is being added back,
+and `urmessage.TestTheOnlyRepairTheRemovedSentinelNamesIsBeingAddedBackAndItCostsThreeWalksAndTheHistory`
+holds it: a re-added device's OWN lines from before the removal cost `maxRecordAttempts` failed
+walks each and are then lost, because the device "holds state from its admission on".
+
+Three things are added here.
+
+1. **A reading of that cost.** The answer on those walks is `ErrRecordAeadOpen`, and it reaches
+   the caller of `Receive`. That is the signal for tampering, given on an honest group.
+2. **It is not only the device's own lines** (measured, and not in that case). A record of ANOTHER
+   member, sealed before the removal, answers it too.
+3. **The failed walks come from what the first membership left on the disk** (measured, and not in
+   that case). With the epoch states of the first membership gone, the same history comes back as
+   gaps and `Receive` answers no error: no failed walk, and nothing abandoned. The history is lost
+   either way. The failed walks and the wrong answer are not owed.
+
+### The reproduction
+
+`TestADeviceAddedBackAnswersAnAuthenticationFailureForHistoryItCannotOpen`, in
+`sdk/cp3b/readdhistory_test.go`: real devices against the real server, in one process. A device
+joins at the founding and sends there; a second member is added; the founder removes the first
+device, adds it back, and sends one line.
+
+- The re-added device's first `Receive` hands back the founder's new line. **It also answers
+  `urmessage.ErrRecordOpen` carrying `ErrRecordAeadOpen`**, for a record the FOUNDER sealed before
+  the removal.
+- **The control, in the same case:** the same device, having left the group with `ForgetGroup`
+  before it was added back, so that nothing of its first membership is on its disk. The same
+  history comes back as gaps and `Receive` answers no error.
+- **The narrower control, in the same case:** ONLY the epoch states of the first membership are
+  removed from its disk before the re-add; its record and everything else of it stay. Again gaps,
+  and no error.
+
+So the precondition is on the device's own disk, and it is exactly this: an epoch state of the
+FIRST membership, still there beside the state the re-add writes.
+
+Measured once more in the lab on 2026-10-09 and NOT held by the case: with only the copy of a line
+the device sent removed, or only its head table, the failure is as it was; the same error comes
+back on the second `Receive`, the third answers `urmessage.ErrRecordAbandoned`, and from the fourth
+on `Receive` answers nothing; and a device that joined by a later add, and never held the founding
+epoch, read the same history as gaps with no error.
+
+It is in the tree as it stood before the held-group gate and is the same after it. The gate
+honours a re-add, which is the repair `ErrRemovedFromGroup` itself names, and writes nothing a
+join did not write before.
+
+### What a ruling has to choose
+
+Nothing below is decided, and this package must not decide it.
+
+1. **Whether a re-added device reads the history of its first membership at all.** It held those
+   epochs once, and the removal was a decision to cut it off. MLS's own answer for a member
+   admitted later is a gap.
+2. **If it does not, what makes that history a gap.** Either the re-add discards the epoch states
+   the first membership left, which the narrower control shows is enough and which `ForgetGroup`
+   does among other things, or the walk tells an epoch from before this membership from an epoch
+   of it before any key is tried.
+3. **If it does, what it opens that history with.** The record a re-add writes carries the secrets
+   of the epoch it joined at and of no epoch before it.
+4. **What must not change, whichever way it is ruled.** A record of a current epoch that does not
+   authenticate goes on answering `ErrRecordAeadOpen`, and so does a record of a past epoch the
+   device does hold the keys for. "Answer a gap for anything old that does not open" is not the
+   repair: it is the tampering signal switched off for every past epoch, and the case that
+   reproduces this item is written to fail on it by name.
+5. **What the tree's own sentences say afterwards.** `ErrRemovedFromGroup`'s header and the case
+   it names price failed walks as the cost of being added back. A ruling here changes that price,
+   and both move with it.
+
+### What is owed elsewhere
+
+The healing track of the hardening program, whose plan takes this item, and a `SPEC-LEDGER.md`
+number from whoever owns that register. Until one exists, `errors.go` cites this row beside the
+sentence it is about.

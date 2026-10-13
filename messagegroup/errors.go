@@ -35,6 +35,7 @@ var (
 	// Fires when a record ciphertext does not authenticate under the key, the nonce and the
 	// aad it was opened with. It carries no plaintext with it and never a partial one: the
 	// only thing an unauthenticated ciphertext yields is the refusal.
+	// Open item MG-8: a device added back after a removal also reaches this, for history.
 	ErrRecordAeadOpen = errors.New("messagegroup: a record ciphertext did not authenticate")
 	// Fires when a group handle key is not the thirty two octets HKDF-Expand(storage_root[0],
 	// "gh/v1", 32) produces. A handle derived from a truncated key is a well formed handle,
