@@ -292,6 +292,12 @@ type Device struct {
 	// back, by id. Guarded by mutex. It is what [Device.ForgetGroup] reads to leave one of them.
 	unrestored map[string]bool
 
+	// joinStage is the store the engine was built over: [Device.stateStore] with one join at a time
+	// staged in memory until [Device.Join] has finished judging it. A join holds admitMutex from
+	// before it begins the stage to after it closes it, so there is never a second one to stage.
+	// See [joinStage].
+	joinStage *joinStage
+
 	// §4.3.5's pushes and the replaced-session flag: see [pushInbox], which is what the transport's
 	// callbacks hold instead of this device.
 	inbox *pushInbox
@@ -437,7 +443,11 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	// What a member reads off MemberAt is therefore exactly "the leaf that signs", and MG-1's
 	// obligation -- that a joiner must decide whether it expected THAT identity -- is the
 	// caller's and is not met here.
-	engine, err := messagegroup.NewConnectMlsEngine(crypto, stateStore, signer,
+	// THE ENGINE IS BUILT OVER THE JOIN STAGE AND NOT OVER THE STORE. Everything the engine reads
+	// and writes still reaches stateStore, call for call; what the stage adds is that a join's
+	// first epoch state waits in memory until [Device.Join] commits it. See [joinStage].
+	stage := newJoinStage(stateStore)
+	engine, err := messagegroup.NewConnectMlsEngine(crypto, stage, signer,
 		mls.BasicCredential(signerPub), leafKeys)
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: the mls engine: %w", err)
@@ -461,6 +471,7 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		commitAuthorizer: config.CommitAuthorizer,
 		groups:           map[string]*Group{},
 		unrestored:       map[string]bool{},
+		joinStage:        stage,
 		inbox:            inbox,
 	}, nil
 }

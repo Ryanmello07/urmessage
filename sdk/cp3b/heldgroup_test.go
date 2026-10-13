@@ -282,7 +282,8 @@ func TestAFoundingThatOverlapsAJoinWaitsForItAndFindsTheGroupHeld(t *testing.T) 
 // in the way of it, and this rule is the only thing that refuses it.
 //
 // WHAT WOULD GO RED: drop the comparison of the joined epoch with the removal's, and the stale
-// invitation joins and replaces the removed group.
+// invitation joins and replaces the removed group; or join in one phase, and the refused
+// invitation leaves an epoch state behind that the re-added device then reads history with.
 func TestAReaddBelowTheRemovalIsRefusedAndTheRealReaddStillJoins(t *testing.T) {
 	scene := advFounding(t, true)
 	carol := scene.world.newPersona(t, "carol")
@@ -315,6 +316,12 @@ func TestAReaddBelowTheRemovalIsRefusedAndTheRealReaddStillJoins(t *testing.T) {
 			t.Errorf("the refused invitation changed %s of the removed group", name)
 		}
 	}
+	// AND IT LEFT NOTHING BEHIND. Until the join was staged, this refusal came after the engine had
+	// written the second founder's epoch-1 state beside the removed group's own, and the real
+	// re-add below then opened the real group's epoch-1 records with it and failed to.
+	if len(after) != len(before) {
+		t.Errorf("the refused invitation left %d file(s) under the group where there were %d", len(after), len(before))
+	}
 	held := carol.device.Groups()
 	if len(held) != 1 || held[0] != carolGroup {
 		t.Fatalf("carol holds %d group(s) after the refused invitation, and the removed group is not the one she holds", len(held))
@@ -331,6 +338,8 @@ func TestAReaddBelowTheRemovalIsRefusedAndTheRealReaddStillJoins(t *testing.T) {
 	if _, removal := rejoined.Removal(); removal != nil {
 		t.Fatalf("the re-added group still reads as removed: %v", removal)
 	}
+	canary := scene.say(t, "alice", scene.aliceGroup)
+	gcReceiveText(t, scene.ctx, "carol", rejoined, canary)
 }
 
 // FORGETGROUP OVER A GROUP THAT IS ON THE DISK AND NOT IN MEMORY ANSWERS BY WHAT RESTORE SAID. A

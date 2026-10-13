@@ -773,4 +773,43 @@ var (
 	// The re-add of a device a commit removed named an epoch at or below the one it was removed at.
 	// A real re-add is a later commit, so its Welcome stands above that epoch.
 	ErrReaddStale = errors.New("urmessage: this invite adds this device back at an epoch at or below the one it was removed at")
+
+	// [Device.Join] would have written the epoch state of a group and epoch this device's store
+	// already holds a state for, or could not read whether it does. A join creates a group's state
+	// and leaves one that is already there alone. The store is as it was and the join code is not
+	// spent.
+	ErrJoinWouldOverwrite = errors.New("urmessage: this device's store already holds a state for the group and epoch this invite joins, so the invite is refused and the store is left as it was")
+
+	// EVERY REFUSAL [Device.Join] MAKES INSIDE ITS WINDOW BEGINS WITH THIS SENTENCE, whatever the
+	// cause it wraps: the invite was judged after the engine took the join code and before
+	// anything reached the store, and it was refused there, so nothing was written and the join
+	// code went back. It is one fixed sentence because the C ABI carries sentences and not types:
+	// an app tells "your join code is still good" from [ErrJoinCodeSpent] by this prefix alone, and
+	// does not have to know every cause. ONE REFUSAL INSIDE THE WINDOW DOES NOT CARRY IT, because
+	// of it this sentence would be false: [ErrNoJoinCodeForInvite].
+	ErrJoinRefused = errors.New("urmessage: this invite was refused before anything was written, and the join code is not spent")
+
+	// [Device.Join] was handed an invite that NO JOIN CODE THIS DEVICE HOLDS WAS MADE FOR: the
+	// engine found no key package in this device's store that the Welcome is addressed to. The
+	// commonest cause is a join code that is ALREADY GONE. An earlier join of this same invite
+	// spent it ([ErrJoinCodeSpent], which was said once, to that call), or the process died inside
+	// a join's window, where nobody was told. An invite made for another device answers it too.
+	//
+	// IT IS REFUSED INSIDE THE WINDOW AND NOTHING WAS WRITTEN, AND IT DOES NOT BEGIN WITH
+	// [ErrJoinRefused]'s SENTENCE. That sentence says the join code is not spent, and an app turns
+	// it into "your join code is still good: ask for the invitation to be sent again". Here there
+	// is no join code for that to be true of, and pasting the same invite again can never work. A
+	// refusal says what it cost; this one says what is missing, and the remedy.
+	//
+	// WHAT IT CANNOT TELL APART is the engine's to tell and the engine says it cannot: its refusal
+	// is the same one for a Welcome addressed to nobody here and for a store that would not read
+	// the join code it holds (messagegroup.ErrEngineNoKeyPackageForWelcome, whose message carries
+	// the store's last refusal verbatim, as this one does behind it).
+	ErrNoJoinCodeForInvite = errors.New("urmessage: this device holds no join code this invitation was made for; make a new join code")
+
+	// THE ONE REFUSAL OF [Device.Join] THAT COSTS THE JOIN CODE. Every check a join makes runs
+	// before the joined state reaches the store, and a refusal there puts the join code back. This
+	// is what is left: the store would not take the join code back, or the joined state was
+	// written and the group's record then could not be. Make a new join code and be added again.
+	ErrJoinCodeSpent = errors.New("urmessage: this join did not complete and its join code is spent; make a new join code and ask to be added again")
 )

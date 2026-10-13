@@ -1381,7 +1381,15 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 // Welcome names a group and a membership, JoinFromWelcome joins it, and the identity a caller would
 // read off the membership afterwards is whatever the Welcome's author put there. Deciding that is
 // the contact card's job and contact cards are out of scope.
-func (self *Device) Join(ctx context.Context, invite *Invite) (*Group, error) {
+//
+// WHAT A REFUSAL COSTS, WHICH IS NOTHING BUT ONCE. Before the window nothing has been touched. A
+// refusal inside the window answers [ErrJoinRefused] wrapping its cause: nothing was written and
+// the join code is not spent, so the honest invite, pasted again, still joins. The one refusal that
+// costs the join code is [ErrJoinCodeSpent]. And an invite that no join code of this device was
+// made for, which is what the same invite is once its join code has gone, answers
+// [ErrNoJoinCodeForInvite] and not the window's sentence: nothing was written, and there is no
+// join code for "not spent" to be true of.
+func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, err error) {
 	if invite == nil {
 		return nil, fmt.Errorf("urmessage: no invite")
 	}
@@ -1405,35 +1413,80 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (*Group, error) {
 	if err != nil {
 		return nil, err
 	}
-	// THE JOIN IS BOUND TO THE GROUP THE INVITE NAMES. A Welcome for any other group is refused
-	// inside the engine, before a state is written, and the join code is put back.
-	handle, err := self.engine.JoinFromWelcomeInto(invite.Welcome, invite.RatchetTree, invite.GroupId)
+
+	// ── THE WINDOW ─────────────────────────────────────────────────────────────────────────────
+	// From here to the commit below, the joined epoch state is STAGED in memory and the join code
+	// the engine took is remembered, so every refusal in between leaves the store as it was and
+	// the join code unspent. See [joinStage].
+	if err := self.joinStage.begin(invite.GroupId); err != nil {
+		return nil, err
+	}
+	var handle messagegroup.GroupHandle
+	var session *messagegroup.GroupSession
+	committed := false
+	// THE WINDOW HAS ONE EXIT, AND IT IS THIS DEFERRED CALL. Every return below this line and above
+	// the commit is a refusal, written as a plain return of its cause; this is where the group it
+	// built is closed, what was staged is erased, the join code goes back, and the cause is given
+	// the one sentence every refusal inside the window begins with (all but one: see below). A
+	// refusal added tomorrow is
+	// therefore closed and worded like every other, because there is nothing for it to forget.
+	// After the commit the stage is already closed and this does nothing.
+	defer func() {
+		abortErr := self.joinStage.abort()
+		if committed {
+			return
+		}
+		// the session owns the handle once it exists
+		if session != nil {
+			session.Close()
+		} else if handle != nil {
+			handle.Close()
+		}
+		if abortErr != nil {
+			joined, err = nil, fmt.Errorf("%w: %w, and the join code could not be put back: %w", ErrJoinCodeSpent, err, abortErr)
+			return
+		}
+		// THE ONE REFUSAL IN HERE THAT DOES NOT CARRY THE WINDOW'S SENTENCE: the engine found no
+		// join code of this device that the invite was made for. "The join code is not spent" is
+		// not true of a join code that is not there. See [ErrNoJoinCodeForInvite].
+		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) {
+			joined, err = nil, fmt.Errorf("%w: %w", ErrNoJoinCodeForInvite, err)
+			return
+		}
+		joined, err = nil, fmt.Errorf("%w: %w", ErrJoinRefused, err)
+	}()
+	// BOUND TO THE GROUP THE INVITE NAMES. A Welcome that describes any other group is refused
+	// inside mls, ahead of its persist, and the engine puts the join code back itself.
+	handle, err = self.engine.JoinFromWelcomeInto(invite.Welcome, invite.RatchetTree, invite.GroupId)
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: JoinFromWelcomeInto: %w", err)
 	}
 	if !bytes.Equal(handle.GroupId(), invite.GroupId) {
-		handle.Close()
-		return nil, fmt.Errorf("urmessage: the welcome joined group %x and the invite names %x",
-			handle.GroupId(), invite.GroupId)
+		return nil, fmt.Errorf("%w: the welcome joined group %x and the invite names %x",
+			ErrInviteDamaged, handle.GroupId(), invite.GroupId)
 	}
 	if readd && handle.Epoch() <= removedEpoch {
-		handle.Close()
 		return nil, fmt.Errorf("%w: the welcome stands at epoch %d and this device was removed at epoch %d",
 			ErrReaddStale, handle.Epoch(), removedEpoch)
 	}
-	session, err := messagegroup.NewGroupSession(handle, invite.PqSecret, invite.GroupHandleKey,
+	session, err = messagegroup.NewGroupSession(handle, invite.PqSecret, invite.GroupHandleKey,
 		self.reserver, self.nowMs, nonce)
 	if err != nil {
-		handle.Close()
 		return nil, fmt.Errorf("urmessage: the session at epoch %d: %w", handle.Epoch(), err)
 	}
 	// the door to prior epochs, ledger item 241. A member admitted here holds state from its
 	// admission on, so every epoch before it answers not-found through this door and renders as
 	// a gap; that is MLS's own answer for a later member and item 241 rules it stays that way.
 	if err := session.InstallPastEpochLoader(self.pastEpochLoader(invite.GroupId)); err != nil {
-		session.Close()
 		return nil, fmt.Errorf("urmessage: the past epoch loader: %w", err)
 	}
+	// THE COMMIT, CREATE-ONLY: the joined state reaches the store only if the store holds none for
+	// this group and epoch. It is the last thing that can refuse without costing the join code.
+	if err := self.joinStage.commit(); err != nil {
+		return nil, err
+	}
+	committed = true
+	// ── THE WINDOW IS CLOSED ───────────────────────────────────────────────────────────────────
 	group := &Group{
 		device:         self,
 		id:             append([]byte(nil), invite.GroupId...),
@@ -1485,7 +1538,7 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (*Group, error) {
 		session.Close()
 		handle.Close()
 		return nil, fmt.Errorf(
-			"urmessage: this group joined and its record could not be persisted, so a restart would not come back into it: %w", err)
+			"%w: this group joined and its record could not be persisted, so a restart would not come back into it: %w", ErrJoinCodeSpent, err)
 	}
 	if err := self.holdReplacing(group, replaces); err != nil {
 		session.Close()
