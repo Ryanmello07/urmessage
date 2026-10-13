@@ -33,7 +33,10 @@
 #   5. protocol/message.pb.go regenerated with the pinned protoc 35.1 and protoc-gen-go v1.36.11, the
 #      generator built under the pinned toolchain;
 #   6. the codec's fuzz targets, 60 s each (a done-when of spec A section 13);
-#   7. the census over what ran: every row's receipts that this host owes.
+#   7. the census over what ran: every row's receipts that this host owes;
+#   8. ONLY WHEN ASKED FOR (MESSAGE_TEST_VULNCHECK=1): govulncheck over every module
+#      (scripts/vulncheck.sh). It is off by default because its verdict moves when the vulnerability
+#      database does, with no commit here, and every step above is a statement about the tree.
 #
 # THE WHOLE RUN IS UNDER THE PINNED TOOLCHAIN, whatever go command the host has. The cryptographic
 # code is reviewed under one compiler, the `toolchain` line of go.mod (mls/pins_test.go holds every
@@ -58,6 +61,8 @@
 #                          Each worker is a process of its own: a 24-core Windows host whose page
 #                          file could not grow ran out of commit memory in a fuzz leg
 #   MESSAGE_TEST_TIMEOUT   per go test invocation (default 3h)
+#   MESSAGE_TEST_VULNCHECK 1 runs step 8, the vulnerability scan; it needs the network. It is run by
+#                          hand before a release (docs/RELEASING.md)
 #   PROTOC                 a protoc 35.1 binary, when none is on PATH (linux and Windows on x86-64
 #                          fetch the pinned release by digest themselves)
 #   WARP_VERSION           the SDK version the native library reports (default 0.0.0-test)
@@ -541,6 +546,11 @@ native
 
 # ---------------------------------------------------------------- 7. the census over what ran
 run "module census: every row's receipts" bash scripts/module-census.sh --receipts "$receipts"
+
+# ---------------------------------------------------------------- 8. opt-in: the vulnerability scan
+if [ "${MESSAGE_TEST_VULNCHECK:-}" = 1 ]; then
+  run "the vulnerability scan (scripts/vulncheck.sh, asked for by MESSAGE_TEST_VULNCHECK=1)" bash scripts/vulncheck.sh
+fi
 
 # ---------------------------------------------------------------- the verdict
 echo
