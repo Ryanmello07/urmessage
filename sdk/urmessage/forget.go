@@ -72,11 +72,14 @@ import (
 // group with others in it, without the owner's question; refused, the same leave asked again once
 // the file reads is asked it.
 //
-// ONE CALLER AT A TIME PER GROUP. A [Device.Restore] or [Device.Join] of the same group on another
-// goroutine, between the map drop and the erase, is not guarded against: Restore skips a marked
-// group, but a Join would build a group the erase then deletes under it. Every caller this package
-// has drives a device from one worker.
+// IT IS AN ADMISSION'S PEER, UNDER [Device.admitMutex] (Task 57, F6). A Join, a CreateGroup or a
+// Restore of the same group on another goroutine waits for the leave, and the leave for it: a Join
+// between this call's map drop and its erase would build a group the erase then deletes under it,
+// and a leave between a Join's commit and its hold made that hold refuse after the join code was
+// spent. The mutex covers local work only, as for the admissions.
 func (self *Device) ForgetGroup(groupId []byte) error {
+	self.admitMutex.Lock()
+	defer self.admitMutex.Unlock()
 	store, durable := self.stateStore.(DeviceStore)
 	self.mutex.Lock()
 	group, held := self.groups[string(groupId)]

@@ -284,7 +284,8 @@ type Device struct {
 
 	// admitMutex is held by every call that puts a group onto this device -- [Device.Join],
 	// [Device.CreateGroup] and [Device.Restore] -- from the question "does this device hold that
-	// group" to the hold that answers it. Without it two admissions of one group id overlap, both
+	// group" to the hold that answers it, and by the one that takes a group off it,
+	// [Device.ForgetGroup] (Task 57, F6). Without it two admissions of one group id overlap, both
 	// read "not held", and the second replaces the first. It is taken before [Device.mutex] and
 	// never while that one is held.
 	admitMutex sync.Mutex

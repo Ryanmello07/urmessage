@@ -1571,7 +1571,9 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 			"%w: this group joined and its record could not be persisted, so a restart would not come back into it: %w", ErrJoinCodeSpent, err))
 	}
 	if err := self.holdReplacing(group, replaces); err != nil {
-		return nil, self.abandonJoined(group, readd, err)
+		// past the commit, so the join code is spent here too (Task 57, F6)
+		return nil, self.abandonJoined(group, readd, fmt.Errorf(
+			"%w: this group joined and could not be filed on this device: %w", ErrJoinCodeSpent, err))
 	}
 	return group, nil
 }
@@ -1591,12 +1593,14 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 // that group's history; they are not this join's to take. A store with no single-epoch erase is
 // asked for everything below the joined epoch's successor only when the join was not a re-add.
 //
+// THE GROUP IS CLOSED WITH [Group.Close] AND NOT PIECE BY PIECE (Task 57, F6). Closing its session
+// and its handle left the group's own copy of the join epoch's pq_secret in its table, never erased;
+// Close erases the table first, whatever else fails, and then closes the session and the handle in
+// that order.
+//
 // An erase that fails is said in the answer, after the cause, and does not replace it.
 func (self *Device) abandonJoined(group *Group, readd bool, cause error) error {
-	// the session first and the handle after it, which is [Group.Close]'s own order: the
-	// session owns the loop that the handle is reached through.
-	group.session.Close()
-	group.handle.Close()
+	group.Close()
 	if err := self.eraseJoinedState(group.id, group.epoch, readd); err != nil {
 		return fmt.Errorf("%w, and the joined epoch state could not be erased: %w", cause, err)
 	}
