@@ -764,7 +764,11 @@ var (
 	// come back because it is damaged is left by calling ForgetGroup again. A group the last
 	// Restore could not READ is not answered this: it is answered [ErrGroupRecordNotReadNow] or
 	// [ErrGroupReadUnproven], which say what is true of it (R29, the second review's W2).
-	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back, ForgetGroup leaves it")
+	//
+	// ITS REMEDY IS SCOPED TO DAMAGE (R33's X3): a Restore that cannot READ the group answers one
+	// of the two not-read sentinels instead, and the leave of that group is refused until it reads,
+	// so "if it does not come back, ForgetGroup leaves it" was not true of every group it was said of.
+	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back because it is damaged, ForgetGroup leaves it")
 
 	// A group's record is on this device's disk and DOES NOT READ: its checksum does not hold, it
 	// does not decode, or it names another group. It is ONE GROUP'S damage and never the
@@ -793,11 +797,13 @@ var (
 	ErrGroupRecordNotReadNow = errors.New("urmessage: a file of a group on this device's disk could not be read just now, so that group was not restored this time; nothing of it was changed, and the next Restore tries it again")
 
 	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ FOR A REASON THIS BUILD
-	// CANNOT CLASSIFY (R29, R30): [classifyRead]'s unproven class -- a permission refused, the
-	// medium, a failure of the store's with no errno, an errno in neither of its lists (too many
-	// open files, out of memory, a device not ready), or a failure that is not the store's. A
-	// permission and a medium are facts about the environment, which can change while the data
-	// is intact, so fixing the folder's access is the way through. The erase without the owner's question needs
+	// CANNOT CLASSIFY (R29, R30, R33): [classifyRead]'s unproven class -- a file gone missing, a
+	// permission refused, the medium, a failure of the store's with no errno, an errno in neither
+	// of its lists (too many open files, out of memory, a device not ready), or a failure that is
+	// not the store's. A missing file, a permission and a medium are facts about the environment,
+	// which can change while the data is intact -- an antivirus quarantine, a sync tool or a
+	// backup tool moves a file away and back -- so fixing the folder's access, or putting back what
+	// was moved out of it, is the way through. The erase without the owner's question needs
 	// PROOF that the group can never be read, and this is not proof, so the group is treated as
 	// [ErrGroupRecordNotReadNow] is: not restored, nothing changed, and [Device.ForgetGroup] of it
 	// refused ("so nothing was left"). It is left once a Restore reads it, or finds it damaged.
@@ -862,15 +868,17 @@ var (
 	// is no join code for that to be true of, and pasting the same invite again can never work. A
 	// refusal says what it cost; this one says what is missing, and the remedy.
 	//
-	// WHICH OF THE THREE SENTENCES A FAILED TAKE GETS (Task 57, F4; R26, V3). The engine's refusal
-	// (messagegroup.ErrEngineNoKeyPackageForWelcome) is the same one for a Welcome addressed to
-	// nobody here and for a store that would not hand over the join code it holds, and it carries
-	// the store's last refusal WRAPPED. A store that failed to read the join code FOR A MOMENT
-	// ([classifyRead]'s transient class: another process held the file) gets [ErrJoinRefused]'s, which is then
-	// true: the join code is still there, and the same invite joins once the store reads it. A
-	// take that removed the file and then failed gets [ErrJoinCodeSpent]'s. Everything else gets
-	// this one: no join code at all, a join code whose octets are damaged, or a read that failed
-	// for good. None of those will ever join.
+	// WHICH OF THE THREE SENTENCES A FAILED TAKE GETS (Task 57, F4; R26, V3; R33's X1). The
+	// engine's refusal (messagegroup.ErrEngineNoKeyPackageForWelcome) is the same one for a
+	// Welcome addressed to nobody here and for a store that would not hand over the join code it
+	// holds, and it carries the store's last refusal WRAPPED. A take the store REFUSED for any
+	// reason [classifyRead] cannot prove permanent -- another process held the file for a moment,
+	// a permission refused, the medium, a failure it cannot classify -- removed nothing, and gets
+	// [ErrJoinRefused]'s, which is then true: the join code is still there, and the same invite
+	// joins once the store reads it. A take that removed the file and then failed gets
+	// [ErrJoinCodeSpent]'s. Everything else gets this one: a store that holds no such join code
+	// (an absence answers "nothing is there", and erases nothing), or a join code whose octets
+	// are damaged or whose path is of the wrong type. None of those will ever join.
 	ErrNoJoinCodeForInvite = errors.New("urmessage: this device holds no join code this invitation was made for; make a new join code")
 
 	// THE ONE REFUSAL OF [Device.Join] THAT COSTS THE JOIN CODE. Every check a join makes runs

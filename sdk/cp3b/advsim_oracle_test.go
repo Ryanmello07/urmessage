@@ -552,6 +552,31 @@ func advRemoveEpochStates(stateDir string, groupId []byte) error {
 	})
 }
 
+// advDamageEpochStates cuts every epoch state a durable store holds for one group to half its
+// length, and leaves its record: what "the group's MLS state does not read" is on the disk -- bytes
+// the store reads and finds wrong, which is proof that they never will (R33), where a file removed
+// is not. The device must be stopped first, because its store holds the directory while it runs.
+func advDamageEpochStates(t *testing.T, stateDir string, groupId []byte) {
+	t.Helper()
+	sum := sha256.Sum256(groupId)
+	marker := "/" + hex.EncodeToString(sum[:]) + "/epoch/"
+	cut := 0
+	err := filepath.WalkDir(stateDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !bytes.Contains([]byte(filepath.ToSlash(path)), []byte(marker)) {
+			return err
+		}
+		state, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		cut += 1
+		return os.WriteFile(path, state[:len(state)/2], 0o600)
+	})
+	if err != nil || cut == 0 {
+		advHarness(t, "cutting the group's epoch states under %s to half their length: %d file(s) cut, %v", stateDir, cut, err)
+	}
+}
+
 // advDamageRecord cuts the record a durable store holds for one group to half its length, and
 // leaves everything else of the group: what "one file on the disk does not read" is. The device
 // must be stopped first, because its store holds the directory while it runs.

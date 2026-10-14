@@ -187,10 +187,11 @@ func TestARecordAnotherProcessHoldsIsNotDamageAndTheOwnerIsStillAsked(t *testing
 // alice's group is held while she restores, in the app's own order (restore, then leave). The
 // Restore reports the group as not read now; once the files are released, the leave tries the
 // group's restore again (R30), which brings it back, and the leave is the ordinary one: the owner's
-// question is asked and nothing is written. THIS CASE HAS CHANGED TWICE, each time truthfully: it
-// first asserted ErrGroupNotRestored after the release, whose remedy looped while a hold lasted
-// (R29's W2 replaced it with the not-read refusal), and R30's fresh attempt then replaced that with
-// the owner's question itself.
+// question is asked and nothing is written. THIS CASE HAS CHANGED THREE TIMES, each time
+// truthfully: it first asserted ErrGroupNotRestored after the release, whose remedy looped while a
+// hold lasted (R29's W2 replaced it with the not-read refusal); R30's fresh attempt then replaced
+// that with the owner's question itself; and R33's X2 replaced "the group is live and held after
+// the refused leave" with what is true now: it is not held, and the next Restore hands it back.
 //
 // WHAT WOULD GO RED: note any restore failure as "will not come back", and the leave after the
 // release erases the owner's group, with bob in it, unasked -- measured, 3 files to 0.
@@ -230,7 +231,10 @@ func TestAnEpochStateAnotherProcessHoldsDuringRestoreIsNotDamageAndTheOwnerIsSti
 	if after := len(advGroupFiles(t, alice.stateDir, groupId)); after != before {
 		t.Fatalf("the owner's group lost files: %d before, %d after", before, after)
 	}
-	if held := len(alice.device.Groups()); held != 1 {
-		t.Errorf("after the leave's fresh restore alice holds %d group(s), want the group live", held)
+	if held := len(alice.device.Groups()); held != 0 {
+		t.Errorf("after the refused leave alice holds %d group(s), and she held none before it", held)
+	}
+	if restored, err := alice.device.Restore(ctx); err != nil || len(restored) != 1 {
+		t.Errorf("the Restore after the refused leave answered %d group(s), %v, want the group handed back", len(restored), err)
 	}
 }

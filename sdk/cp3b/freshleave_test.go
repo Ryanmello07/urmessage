@@ -20,9 +20,27 @@ import (
 // case between one call and the next.
 type freshLeaveStore struct {
 	*urmessage.DurableStateStore
-	mutex    sync.Mutex
-	groupId  []byte
-	failWith error
+	mutex     sync.Mutex
+	groupId   []byte
+	failWith  error
+	markFails error
+}
+
+// armMark makes the leave mark's write fail with markFails, writing nothing, while it is set.
+func (self *freshLeaveStore) armMark(markFails error) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	self.markFails = markFails
+}
+
+func (self *freshLeaveStore) MarkGroupForgetting(groupId []byte) error {
+	self.mutex.Lock()
+	fail := self.markFails
+	self.mutex.Unlock()
+	if fail != nil {
+		return fail
+	}
+	return self.DurableStateStore.MarkGroupForgetting(groupId)
 }
 
 func (self *freshLeaveStore) arm(groupId []byte, failWith error) {
@@ -96,6 +114,17 @@ func freshLeaveRead(windows syscall.Errno, other syscall.Errno) error {
 // connected, not yet restored; and the group's files on her disk, as they were.
 func freshLeaveOwner(t *testing.T) (*persona, *freshLeaveStore, []byte, map[string][]byte) {
 	t.Helper()
+	return freshLeavePair(t, false)
+}
+
+// freshLeaveMember is the same pair with BOB restarted that way: a member, not the owner.
+func freshLeaveMember(t *testing.T) (*persona, *freshLeaveStore, []byte, map[string][]byte) {
+	t.Helper()
+	return freshLeavePair(t, true)
+}
+
+func freshLeavePair(t *testing.T, member bool) (*persona, *freshLeaveStore, []byte, map[string][]byte) {
+	t.Helper()
 	world := newWorld(t)
 	alice := world.newPersona(t, "alice")
 	bob := world.newPersona(t, "bob")
@@ -106,8 +135,12 @@ func freshLeaveOwner(t *testing.T) (*persona, *freshLeaveStore, []byte, map[stri
 	}
 	groupId := newGroupId(t)
 	openPair(t, t.Context(), alice, bob, groupId)
-	alice, wrapper := world.freshLeaveRestart(t, alice)
-	return alice, wrapper, groupId, advGroupFiles(t, alice.stateDir, groupId)
+	who := alice
+	if member {
+		who = bob
+	}
+	who, wrapper := world.freshLeaveRestart(t, who)
+	return who, wrapper, groupId, advGroupFiles(t, who.stateDir, groupId)
 }
 
 // freshLeaveUnchanged fails the case if any file of the group changed or went.
@@ -135,7 +168,10 @@ func freshLeaveUnchanged(t *testing.T, alice *persona, groupId []byte, before ma
 //     will not come back -- then nothing in the way at the leave: the fresh restore brings it back,
 //     and the leave asks the owner's question instead of erasing it on the note.
 //
-// In every round nothing of the group changes. THE R9 CONTROL is the next case.
+// In every round nothing of the group changes, and after the refused leave alice holds no group, as
+// before it: the next Restore hands the group back. THIS CASE WAS CHANGED BY R33's X2, TRUTHFULLY:
+// it asserted that the leave's fresh restore left the group live and held, which was the defect.
+// THE R9 CONTROL is the next case.
 //
 // WHAT WOULD GO RED: a leave that decides on the startup note -- measured by the Task 58 writer on a
 // runner: a deny ACL at startup, lifted, a lock at the press, and the group was erased -- or a
@@ -175,8 +211,67 @@ func TestAStaleNoteIsNeverTheReasonForAnErase(t *testing.T) {
 				t.Errorf("the leave with nothing in the way answered %v, want the owner's question", err)
 			}
 			freshLeaveUnchanged(t, alice, groupId, before)
-			if held := len(alice.device.Groups()); held != 1 {
-				t.Errorf("after the leave's fresh restore alice holds %d group(s), want the group live", held)
+			if held := len(alice.device.Groups()); held != 0 {
+				t.Errorf("after the refused leave alice holds %d group(s), and she held none before it", held)
+			}
+			if restored, err := alice.device.Restore(ctx); err != nil || len(restored) != 1 {
+				t.Errorf("the Restore after the refused leave answered %d group(s), %v, want the group handed back", len(restored), err)
+			}
+		})
+	}
+}
+
+// A LEAVE REFUSED AFTER ITS FRESH RESTORE CHANGES NOTHING, WHATEVER REFUSED IT, AND THE NEXT RESTORE
+// HANDS THE GROUP BACK (R33's X2). The startup Restore is refused a permission on the group's epoch
+// state, so the group is in the not-read set. With nothing in the way any more, the leave tries the
+// restore again (R30), which succeeds, and the leave is then refused by each refusal closeToForget
+// can give that a test can drive:
+//   - alice, the OWNER, is asked the owner's question;
+//   - bob, a member, cannot have his leave recorded: the mark's write fails and nothing stands.
+//
+// Either way that refusal changed nothing: the device holds no group after it, as it held none
+// before it, no file of the group changed, and the next Restore hands the group back, live.
+//
+// WHAT WOULD GO RED: the fresh restore's group HELD by the leave, which a refusal then leaves in the
+// map -- measured by the round-3 review: held 0 -> 1, and the next Restore handed back nothing,
+// because it skips a group already held, while the export says a refused leave changed nothing.
+func TestALeaveRefusedAfterItsFreshRestoreChangesNothingAndRestoreHandsTheGroupBack(t *testing.T) {
+	ctx := t.Context()
+	for _, one := range []struct {
+		name   string
+		member bool
+		want   string
+	}{
+		{"the owner's question", false, "hand it over first"},
+		{"a leave that could not be recorded", true, "the leave could not be recorded on the disk, so nothing was left"},
+	} {
+		t.Run(one.name, func(t *testing.T) {
+			who, wrapper, groupId, before := freshLeavePair(t, one.member)
+			wrapper.arm(groupId, freshLeaveRead(5, syscall.EACCES))
+			restored, err := who.device.Restore(ctx)
+			if len(restored) != 0 || !errors.Is(err, urmessage.ErrGroupReadUnproven) {
+				t.Fatalf("CONTROL FAILED: the startup Restore answered %d group(s), %v, want none and ErrGroupReadUnproven", len(restored), err)
+			}
+			wrapper.arm(nil, nil)
+			if one.member {
+				wrapper.armMark(errors.New("the store this case sits on refused the leave mark"))
+			}
+			err = who.device.ForgetGroup(groupId)
+			t.Logf("the leave after the fresh restore: %v", err)
+			if err == nil || !strings.Contains(err.Error(), one.want) {
+				t.Fatalf("the leave answered %v, want the refusal %q", err, one.want)
+			}
+			if held := len(who.device.Groups()); held != 0 {
+				t.Errorf("after the refused leave the device holds %d group(s), and it held none before it", held)
+			}
+			freshLeaveUnchanged(t, who, groupId, before)
+			wrapper.armMark(nil)
+			restored, err = who.device.Restore(ctx)
+			if err != nil || len(restored) != 1 {
+				t.Fatalf("the Restore after the refused leave answered %d group(s), %v, want the group handed back", len(restored), err)
+			}
+			if held := who.device.Groups(); len(held) != 1 || held[0] != restored[0] {
+				t.Errorf("after that Restore the device holds %d group(s), want the one it handed back", len(held))
 			}
 		})
 	}

@@ -107,29 +107,33 @@ func tooManyOpenFiles() syscall.Errno {
 }
 
 // ONLY AN ALLOW-LISTED FAILURE IS PROVEN PERMANENT, AND ONLY A FACT ABOUT THE DATA IS ON THE LIST
-// (R29, amended by R30). [classifyRead] is held over its three classes, both ways, against lists
-// written out here and not read from the code: R30's proven-permanent errnos (a required file
-// absent, a path of the wrong type) and sentinels are permanent; R26's sharing and lock violations
-// are transient; and everything else is UNPROVEN -- a permission refused and the medium, which are
-// facts about the environment, a store error with no errno, an errno in neither list (too many open
-// files, out of memory, no system resources), a permanent-looking errno the store did not carry, a
-// cancelled context, an engine refusal, nil.
+// (R29, amended by R30 and R33). [classifyRead] is held over its three classes, both ways, against
+// lists written out here and not read from the code: R33's proven-permanent errnos (a path of the
+// wrong type, unambiguously) and sentinels are permanent; R26's sharing and lock violations are
+// transient; and everything else is UNPROVEN -- an absence, a permission refused and the medium,
+// which are facts about the environment, a store error with no errno, an errno in neither list (too
+// many open files, out of memory, no system resources), a permanent-looking errno the store did not
+// carry, a cancelled context, an engine refusal, nil.
 //
-// THIS CASE WAS CHANGED BY R30: it held EACCES, EPERM, EIO and Windows 5, 23, 27 and 30 as proven
-// permanent, which R29 had ruled and R30 withdrew. They are held as unproven now.
+// THIS CASE WAS CHANGED TWICE, TRUTHFULLY. R30 moved EACCES, EPERM, EIO and Windows 5, 23, 27 and 30
+// from proven permanent to unproven. R33 moved an absence there too: ErrStateNotFound, ENOENT,
+// Windows 2, 3 (which is also package syscall's ENOTDIR on Windows) and 53.
 //
 // WHAT WOULD GO RED: a classifier that answers "permanent" by default, which is the fail-open rule
 // that leaked three times; one that drops a class R30 proves permanent, and that group can no longer
 // be left; or one that calls a refused permission damage, and intact data is erased because of the
 // environment.
 func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
-	permanentByErrno := []syscall.Errno{syscall.ENOENT, syscall.EISDIR, syscall.ENOTDIR, syscall.ELOOP}
+	permanentByErrno := []syscall.Errno{syscall.EISDIR, syscall.ELOOP}
 	unprovenByErrno := []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOMEM,
-		syscall.EACCES, syscall.EPERM, syscall.EIO}
+		syscall.EACCES, syscall.EPERM, syscall.EIO, syscall.ENOENT}
 	if runtime.GOOS == "windows" {
-		permanentByErrno = append(permanentByErrno, 2, 3, 1, 267, 1921)
-		// too many open files, no memory, no resources, not ready; access denied; the medium
-		unprovenByErrno = append(unprovenByErrno, 4, 8, 1450, 21, 5, 23, 27, 30)
+		permanentByErrno = append(permanentByErrno, 1, 267, 1921)
+		// too many open files, no memory, no resources, not ready; access denied; the medium; the
+		// three absences (ENOTDIR is 3 here, and so is a missing path)
+		unprovenByErrno = append(unprovenByErrno, 4, 8, 1450, 21, 5, 23, 27, 30, 2, 3, 53, syscall.ENOTDIR)
+	} else {
+		permanentByErrno = append(permanentByErrno, syscall.ENOTDIR)
 	}
 	for _, errno := range permanentByErrno {
 		if got := classifyRead(asStoreRead(errno)); got != readPermanent {
@@ -156,7 +160,7 @@ func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
 	}{
 		{"a checksum or format verdict", fmt.Errorf("%w: the record's checksum is not the hash of the record", ErrStateStoreFormat), readPermanent},
 		{"a record that does not name its group", fmt.Errorf("%w: %w: the record in x does not name its own group", ErrGroupRecordDamaged, ErrStateStoreFormat), readPermanent},
-		{"a required file absent", fmt.Errorf("%w: 0000000000000001", ErrStateNotFound), readPermanent},
+		{"a required file absent", fmt.Errorf("%w: 0000000000000001", ErrStateNotFound), readUnproven},
 		{"an epoch state that does not decode", fmt.Errorf("mls: the state: %w", syntax.ErrTruncated), readPermanent},
 		{"an epoch state with bytes after it", fmt.Errorf("mls: the state: %w", syntax.ErrTrailingBytes), readPermanent},
 		{"a group founded before the join seal", fmt.Errorf("%w: group x at epoch 1: %w", ErrRestore, ErrGroupPredatesJoinSeal), readPermanent},
@@ -173,11 +177,13 @@ func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
 }
 
 // A RESTORE FAILURE THIS BUILD CANNOT CLASSIFY IS NOT NOTED, AND THE LEAVE IS REFUSED (R29, (a) to
-// (c); R30, (e) and (f)). Failures of one group's epoch-state read, none of which proves the group
-// can never be read: (a) a store error that carries no errno, (b) this platform's
+// (c); R30, (e) and (f); R33, (g) and (h)). Failures of one group's epoch-state read, none of which
+// proves the group can never be read: (a) a store error that carries no errno, (b) this platform's
 // too-many-open-files errno, (c) a failure that is not the store's at all, (e) a permission refused
 // and (f) the medium, the two R30 took off the proven list because they are facts about the
-// environment. For each, the failure lasting through the leave's own fresh attempt: Restore reports the group under
+// environment, and (g) the store's "holds no such value" and (h) the platform's not-found errno, the
+// absences R33 took off it because a file moved away can come back. For each, the failure lasting
+// through the leave's own fresh attempt: Restore reports the group under
 // [ErrGroupReadUnproven] and not as damage, notes it nowhere as a group that will not come back,
 // and the leave of it is refused with that same sentence and "so nothing was left", with every
 // file of the group unchanged.
@@ -195,6 +201,8 @@ func TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused(t 
 		{"(c) a failure that is not the store's", fmt.Errorf("the engine could not load the group: %w", context.Canceled)},
 		{"(e) a permission refused", asStoreRead(syscall.EACCES)},
 		{"(f) the medium", asStoreRead(syscall.EIO)},
+		{"(g) the store holds no such value", fmt.Errorf("%w: 0000000000000001", ErrStateNotFound)},
+		{"(h) the platform's not-found errno", asStoreRead(syscall.ENOENT)},
 	} {
 		dir, groupId := failClosedScene(t)
 		store, device := failClosedRestart(t, dir, groupId, one.failWith)
@@ -232,11 +240,13 @@ func TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused(t 
 }
 
 // EVERY PROVEN-PERMANENT RESTORE FAILURE IS STILL LEFT (R29, (d), the control). R9's choice stands
-// for proof: the same scene, failing the same read with each of R29's proven-permanent classes --
-// a format verdict, a required file absent, an epoch state that does not decode, a group founded
-// before the join seal, and every errno on this platform's allow-list -- is noted as a group that
-// will not come back, and the leave of it goes through without the owner's question and takes the
-// group's directory.
+// for proof: the same scene, failing the same read with each of the proven-permanent classes -- a
+// format verdict, an epoch state that does not decode, a group founded before the join seal, and
+// every errno on this platform's allow-list -- is noted as a group that will not come back, and the
+// leave of it goes through without the owner's question and takes the group's directory.
+//
+// THIS CASE WAS CHANGED BY R33, TRUTHFULLY: it held "a required file absent" as proven, and an
+// absence is no longer proof of anything. That row is (g) of the unproven case above now.
 //
 // WHAT WOULD GO RED: a classifier that drops a proven class, and that group can never be left,
 // restored or joined again.
@@ -247,7 +257,6 @@ func TestEveryProvenPermanentRestoreFailureIsStillLeft(t *testing.T) {
 		failWith error
 	}{
 		{"a format verdict", fmt.Errorf("%w: the record's checksum is not the hash of the record", ErrStateStoreFormat)},
-		{"a required file absent", fmt.Errorf("%w: 0000000000000001", ErrStateNotFound)},
 		{"an epoch state that does not decode", fmt.Errorf("mls: the persisted state: %w", syntax.ErrTruncated)},
 		{"a group founded before the join seal", fmt.Errorf("urmessage: the group's context: %w", ErrGroupPredatesJoinSeal)},
 	}

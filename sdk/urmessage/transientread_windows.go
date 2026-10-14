@@ -12,13 +12,23 @@ var transientErrnos = []syscall.Errno{
 }
 
 // permanentErrnos is [classifyRead]'s allow-list of errnos that PROVE a read will never succeed on
-// Windows, and each is a fact about the DATA (R29, amended by R30): a required file absent, or a path
-// of the wrong type. The numbered ones are what the OS answers; the named ones are the values package
-// syscall defines on Windows, which package os itself returns, each meaning what its name says
-// (ENOENT is 2 and ENOTDIR is 3 there). A permission refused (5) and the medium (23, 27, 30) are NOT
-// here: they are facts about the environment, which can change while the data is intact.
+// Windows, and each is a fact about the DATA (R29, amended by R30 and R33): a path of the wrong type,
+// unambiguously. The numbered ones are what the OS answers; the named ones are the values package
+// syscall defines on Windows, which package os itself returns, each meaning what its name says.
+//
+// NOT HERE, AND WHY. A permission refused (5) and the medium (23, 27, 30) are facts about the
+// environment, which can change while the data is intact (R30). And AN ABSENCE IS NEVER PROOF (R33):
+// ERROR_FILE_NOT_FOUND (2), ERROR_PATH_NOT_FOUND (3) and ERROR_BAD_NETPATH (53) are what a file
+// moved away by an antivirus quarantine, a sync tool or a backup tool answers, and the file can come
+// back. Package syscall's ENOENT is 2 and its ENOTDIR is 3 on this platform, so neither is here
+// either: a listing of a regular file answers 3 as well, and [stateNotADirectory] is the unambiguous
+// spelling this store uses once an Lstat has said which it was.
 var permanentErrnos = []syscall.Errno{
-	2, 3, // ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND: a required file absent
 	1, 267, 1921, // ERROR_INVALID_FUNCTION, ERROR_DIRECTORY, ERROR_CANT_RESOLVE_FILENAME: the wrong type
-	syscall.ENOENT, syscall.EISDIR, syscall.ENOTDIR, syscall.ELOOP,
+	syscall.EISDIR, syscall.ELOOP,
 }
+
+// stateNotADirectory is the errno this store carries for a path its Lstat found NOT to be a
+// directory where it keeps one: ERROR_DIRECTORY, "the directory name is invalid", which nothing on
+// this platform answers for an absence.
+const stateNotADirectory syscall.Errno = 267
