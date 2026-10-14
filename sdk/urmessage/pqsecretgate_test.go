@@ -383,10 +383,6 @@ var pqSecretSinks = map[string]pqSecretSink{
 		why: "the one-row table a five-part CALLER's record is turned into before it is written, so " +
 			"part six is never absent.",
 	},
-	"PutGroupRecord|return": {
-		carries: []string{"record.PqSecret", "table"},
-		why:     "that write's own error.",
-	},
 	"decodePqSecretTable|call append": {
 		carries: []string{"rows"},
 		why:     "one decoded row being collected.",

@@ -208,20 +208,27 @@ func TestATruthfulClampIsCaughtAndALyingOneIsNot(t *testing.T) {
 // same guarantee; one that batched would be reporting a value durable before it is; and one that
 // flushed on a READ would be measuring calls rather than writes. All three move this number and
 // all three are held below.
+//
+// THIS CASE WAS CHANGED BY R33, TRUTHFULLY: the first state of a group is TWO values now, because
+// the call that creates the group's directory names its `pending` mark first. A state written into
+// the directory that stands is one, and so is every other write.
 func TestEveryValueTheDurableStoreNamesWasFlushedFirst(t *testing.T) {
 	store := openTestStore(t, t.TempDir())
 	if store.flushCount() != 0 {
 		t.Fatalf("a freshly opened store has already flushed %d time(s)", store.flushCount())
 	}
-	for at, one := range []struct {
-		name string
-		call func() error
+	named := 0
+	for _, one := range []struct {
+		name   string
+		values int
+		call   func() error
 	}{
-		{"PutGroupState", func() error { return store.PutGroupState(testGroupId, 0, testState) }},
-		{"PutPrivateKey", func() error { return store.PutPrivateKey(testPub, testPriv) }},
-		{"PutKeyPackage", func() error { return store.PutKeyPackage(testRef, testKp, testInit, testEnc) }},
-		{"PutDeviceIdentity", func() error { return store.PutDeviceIdentity(testPub, testPriv, testKp, testWrapSeed) }},
-		{"PutGroupRecord", func() error {
+		{"PutGroupState creating the group's directory", 2, func() error { return store.PutGroupState(testGroupId, 0, testState) }},
+		{"PutGroupState into the directory that stands", 1, func() error { return store.PutGroupState(testGroupId, 1, testState) }},
+		{"PutPrivateKey", 1, func() error { return store.PutPrivateKey(testPub, testPriv) }},
+		{"PutKeyPackage", 1, func() error { return store.PutKeyPackage(testRef, testKp, testInit, testEnc) }},
+		{"PutDeviceIdentity", 1, func() error { return store.PutDeviceIdentity(testPub, testPriv, testKp, testWrapSeed) }},
+		{"PutGroupRecord", 1, func() error {
 			return store.PutGroupRecord(&GroupRecord{
 				GroupId: testGroupId, PqSecret: testPriv, GroupHandleKey: testPub, Epoch: 0,
 			})
@@ -230,9 +237,10 @@ func TestEveryValueTheDurableStoreNamesWasFlushedFirst(t *testing.T) {
 		if err := one.call(); err != nil {
 			t.Fatalf("%s: %v", one.name, err)
 		}
-		if flushes := store.flushCount(); flushes != at+1 {
-			t.Fatalf("after %d writes ending in %s the store has performed %d value flush(es)",
-				at+1, one.name, flushes)
+		named += one.values
+		if flushes := store.flushCount(); flushes != named {
+			t.Fatalf("after the writes ending in %s, which name %d value(s) in all, the store has performed %d value flush(es)",
+				one.name, named, flushes)
 		}
 	}
 	// and a READ flushes nothing, which is what says the number counts writes rather than calls

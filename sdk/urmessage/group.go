@@ -1590,8 +1590,9 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 // group is closed, and the epoch state the commit wrote is erased (Task 57, F3).
 //
 // WHY THE STATE GOES. It is the joined leaf's private keys and its path-secret ladder. With no
-// record beside it, nothing lists it, no Restore restores it and no ForgetGroup reaches it (it
-// answers [ErrGroupNotHeld]), while the adder's group keeps the leaf and goes on wrapping to this
+// record beside it, nothing lists it, no Restore restores it and no ForgetGroup leaves it (it
+// answers that the directory stands with no record in it), while the adder's group keeps the leaf
+// and goes on wrapping to this
 // device. A later thief of the disk could follow that group for as long as the leaf stands, in a
 // group the person was told they never joined. The join code is spent either way, so erasing it
 // costs nothing that was not already lost.

@@ -141,3 +141,148 @@ func TestAnEpochStateMovedAwayIsNeverTheReasonForAnErase(t *testing.T) {
 		t.Errorf("the sweep erased %v after the epoch state came back", erased)
 	}
 }
+
+// A RECORD MOVED AWAY IS NEVER THE REASON FOR AN ERASE, AND THE GROUP COMES BACK WITH IT (R33,
+// (7)(a): the round-3 review's worst form, made real with a rename on every platform). Alice owns a
+// group bob is in. She restarts, and her record of the group is moved out of its folder. A plain
+// Restore -- no press at all -- erases nothing: the group's directory holds no `pending` mark, and
+// the sweep erases on that mark alone. Her leave while the record is away is refused as unproven,
+// "so nothing was left": a record absent from a directory that stands is a file gone missing, not
+// "nothing is here". The record is put back: the next Restore brings the group back, and her leave
+// is the owner's question, with nothing of the group changed.
+//
+// WHAT WOULD GO RED: the sweep of 907109f, which erased every epoch state of a directory with no
+// record in it -- measured: Restore answered nothing and erased them all, and the record that came
+// back named epochs that were gone.
+func TestARecordMovedAwayIsNeverTheReasonForAnErase(t *testing.T) {
+	ctx := t.Context()
+	alice, groupId, dir, before := quarantineOwner(t)
+	if len(before["meta"]) == 0 {
+		t.Fatalf("CONTROL FAILED: alice's group has no record on her disk, so nothing below moves one")
+	}
+	epochs := 0
+	for name := range before {
+		if strings.HasPrefix(name, "epoch/") {
+			epochs += 1
+		}
+	}
+	if epochs == 0 {
+		t.Fatalf("CONTROL FAILED: alice's group has no epoch state, so there is nothing a sweep could erase")
+	}
+	putBack := quarantine(t, dir, "meta")
+
+	restored, err := alice.device.Restore(ctx)
+	t.Logf("Restore while the record is away: %d group(s), %v", len(restored), err)
+	if len(restored) != 0 {
+		t.Errorf("Restore while the record is away answered %d group(s)", len(restored))
+	}
+	if erased := alice.stateStore.ErasedWithNoRecord(); len(erased) != 0 {
+		t.Errorf("the sweep erased %v while the record was away", erased)
+	}
+	quarantineUnchanged(t, alice, groupId, before, "meta")
+	err = alice.device.ForgetGroup(groupId)
+	t.Logf("the owner's leave while the record is away: %v", err)
+	if !errors.Is(err, urmessage.ErrGroupReadUnproven) || !strings.Contains(err.Error(), "so nothing was left") {
+		t.Errorf("the leave while the record is away answered %v, want ErrGroupReadUnproven and that nothing was left", err)
+	}
+	quarantineUnchanged(t, alice, groupId, before, "meta")
+
+	// PUT BACK
+	putBack()
+	restored, err = alice.device.Restore(ctx)
+	t.Logf("Restore after the record is back: %d group(s), %v", len(restored), err)
+	if err != nil || len(restored) != 1 {
+		t.Fatalf("Restore after the record is back answered %d group(s), %v, want the group back", len(restored), err)
+	}
+	err = alice.device.ForgetGroup(groupId)
+	t.Logf("the owner's leave after it is back: %v", err)
+	if !errors.Is(err, urmessage.ErrOwnerMustTransfer) {
+		t.Errorf("the owner's leave after the record is back answered %v, want the owner's question", err)
+	}
+	quarantineUnchanged(t, alice, groupId, before)
+}
+
+// A LIVE GROUP WHOSE RECORD IS MOVED AWAY GETS NO MARK, AND NOTHING OF IT IS SWEPT (R33, (2) and
+// (7): the hole's case). The `pending` mark is written when a call CREATES a group's directory, and
+// never on "the record is absent". Alice owns a LIVE group bob is in, and her record of it is moved
+// out of its folder. She sends a line: the seal persists the group's epoch state into the directory
+// that stands -- the one write a live group makes there with no record written after it (a commit
+// writes its record next, and so would take any mark away again). No mark is written. She restarts
+// and restores: nothing of the group is swept, and no mark is written then either. The record is put
+// back, and the group restores and the owner is asked.
+//
+// WHAT WOULD GO RED: a mark written on "no record" instead of on the directory's creation -- the
+// state the seal wrote would carry the mark, and the next Restore would sweep a live group whose
+// record a quarantine holds, taking the epoch state the seal had just spent a generation of.
+func TestALiveGroupWhoseRecordIsMovedAwayGetsNoMarkAndNothingIsSwept(t *testing.T) {
+	ctx := t.Context()
+	world := newWorld(t)
+	alice := world.newPersona(t, "alice")
+	bob := world.newPersona(t, "bob")
+	for _, who := range []*persona{alice, bob} {
+		if err := who.device.Connect(ctx); err != nil {
+			t.Fatalf("%s's Connect: %v", who.name, err)
+		}
+	}
+	groupId := newGroupId(t)
+	aliceGroup, _ := openPair(t, ctx, alice, bob, groupId)
+	sum := sha256.Sum256(groupId)
+	dir := filepath.Join(alice.stateDir, "state", "group", hex.EncodeToString(sum[:]))
+	before := advGroupFiles(t, alice.stateDir, groupId)
+	if len(before["meta"]) == 0 {
+		t.Fatalf("CONTROL FAILED: alice's live group has no record on her disk, so nothing below moves one")
+	}
+	if _, marked := before["pending"]; marked {
+		t.Fatalf("CONTROL FAILED: alice's opened group still carries its creation mark, so nothing below is about a mark written later")
+	}
+	putBack := quarantine(t, dir, "meta")
+
+	if _, err := aliceGroup.Send(ctx, "a line sealed while the record is away"); err != nil {
+		t.Fatalf("alice's Send while her record is away: %v", err)
+	}
+	during := advGroupFiles(t, alice.stateDir, groupId)
+	rewritten := 0
+	for name, content := range during {
+		if strings.HasPrefix(name, "epoch/") && !bytes.Equal(before[name], content) {
+			rewritten += 1
+		}
+	}
+	if rewritten == 0 {
+		t.Fatalf("CONTROL FAILED: the seal wrote no epoch state into the directory, so nothing below is about a write into it")
+	}
+	if _, back := during["meta"]; back {
+		t.Fatalf("CONTROL FAILED: the send wrote the record again, so the record is not away")
+	}
+	if _, marked := during["pending"]; marked {
+		t.Errorf("the store marked a live group's directory pending when a state was written into it with its record away")
+	}
+
+	alice = world.restart(t, alice)
+	if err := alice.device.Connect(ctx); err != nil {
+		t.Fatalf("the restarted alice's Connect: %v", err)
+	}
+	restored, err := alice.device.Restore(ctx)
+	t.Logf("Restore after the restart, with the record away: %d group(s), %v", len(restored), err)
+	if erased := alice.stateStore.ErasedWithNoRecord(); len(erased) != 0 {
+		t.Errorf("the sweep erased %v, a live group whose record is away", erased)
+	}
+	after := advGroupFiles(t, alice.stateDir, groupId)
+	for name, content := range during {
+		if !bytes.Equal(after[name], content) {
+			t.Errorf("%s of the live group changed or went at the Restore", name)
+		}
+	}
+	if _, marked := after["pending"]; marked {
+		t.Errorf("the Restore left a creation mark in a live group's directory")
+	}
+
+	putBack()
+	restored, err = alice.device.Restore(ctx)
+	t.Logf("Restore after the record is back: %d group(s), %v", len(restored), err)
+	if err != nil || len(restored) != 1 {
+		t.Fatalf("Restore after the record is back answered %d group(s), %v, want the group back", len(restored), err)
+	}
+	if err := alice.device.ForgetGroup(groupId); !errors.Is(err, urmessage.ErrOwnerMustTransfer) {
+		t.Errorf("the owner's leave after the record is back answered %v, want the owner's question", err)
+	}
+}

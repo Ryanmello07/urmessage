@@ -231,6 +231,10 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	// device holds is skipped, because a group founded here has no record until it is opened, and
 	// so is anything with a record or a leave mark. What was erased is
 	// [DurableStateStore.ErasedWithNoRecord]; an erase that fails is tried again next time.
+	//
+	// AND ONLY WHERE THE STORE MARKED THE DIRECTORY'S CREATION ITSELF (R33): a record that is
+	// absent proves nothing, because a quarantine can move it away and back, so the erase is
+	// decided on the store's own `pending` mark ([DurableStateStore.pendingPath]).
 	if sweeper, sweeps := store.(interface {
 		eraseGroupsWithNoRecord(held [][]byte) ([]string, error)
 	}); sweeps {

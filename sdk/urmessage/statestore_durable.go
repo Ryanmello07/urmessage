@@ -850,6 +850,7 @@ const (
 	stateKindSentRecord     byte = 6
 	stateKindPeerHeads      byte = 7
 	stateKindForgetting     byte = 8
+	stateKindPending        byte = 9
 )
 
 // encodeStateRecord frames one record: magic, version, kind, the parts each length-prefixed, and
@@ -1165,6 +1166,19 @@ func (self *DurableStateStore) forgettingPath(groupId []byte) string {
 	return filepath.Join(self.groupDir(groupId), "forgetting")
 }
 
+// pendingPath is the mark [DurableStateStore.PutGroupState] writes when THAT CALL CREATES a group's
+// directory, before the first epoch state in it, and that [DurableStateStore.PutGroupRecord] takes
+// away once the group's record is on the disk (R33). It is the store's own observation that it made
+// this directory for a group whose record it had not written yet -- a founding before Open, a join
+// between its commit and its record -- and it is the only thing
+// [DurableStateStore.eraseGroupsWithNoRecord] erases on. It is NEVER written because something is
+// absent: a directory that stands gets no mark, however much is missing from it, because a live
+// group whose record an antivirus quarantine moved away still has its directory, and a mark written
+// on "no record" would have the next Restore sweep that group.
+func (self *DurableStateStore) pendingPath(groupId []byte) string {
+	return filepath.Join(self.groupDir(groupId), "pending")
+}
+
 // sentDir is where one group's [SentRecord] copies live, each named by its stream index as sixteen
 // hex digits -- stateEpochName's shape, and for its reason: the listing's lexical order is the
 // numeric order.
@@ -1312,16 +1326,46 @@ func zeroizeState(octets []byte) {
 // The state is COPIED into the record this call writes, because mls erases the buffer it passed
 // as soon as this returns -- the obligation on [mls.StateStore]'s own header. Nothing of the
 // caller's is retained past the call: this store keeps no map.
+//
+// A CALL THAT CREATES THE GROUP'S DIRECTORY MARKS IT FIRST (R33): the `pending` mark is written and
+// synced before the first epoch state, so a crash between the two leaves a directory the next
+// Restore can tell from a group whose record went missing ([DurableStateStore.pendingPath]).
 func (self *DurableStateStore) PutGroupState(groupId []byte, epoch uint64, state []byte) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if err := self.refuseIfClosed(); err != nil {
 		return err
 	}
+	if err := self.markPendingIfCreatingLocked(groupId); err != nil {
+		return err
+	}
 	var epochOctets [8]byte
 	binary.BigEndian.PutUint64(epochOctets[:], epoch)
 	return self.writeRecord(filepath.Join(self.epochDir(groupId), stateEpochName(epoch)),
 		stateKindGroupState, groupId, epochOctets[:], state)
+}
+
+// markPendingIfCreatingLocked writes the `pending` mark when, and only when, the group's directory
+// does not stand yet, so that this call is the one that creates it. A directory that stands gets no
+// mark, whatever is or is not in it. A directory that cannot be asked about is a refusal, because
+// whether this call creates it is the whole question.
+func (self *DurableStateStore) markPendingIfCreatingLocked(groupId []byte) error {
+	dir := self.groupDir(groupId)
+	_, err := os.Lstat(dir)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: whether %s stands could not be read: %w", ErrStateStoreState, dir, err)
+	}
+	return self.writeRecord(self.pendingPath(groupId), stateKindPending, groupId)
+}
+
+// clearPendingLocked takes one group's `pending` mark away, and answers whether that failed. A mark
+// that is not there is not a failure. It erases no value of the group: the mark is this store's
+// note about its own write, and with it gone, nothing of the directory is ever swept.
+func (self *DurableStateStore) clearPendingLocked(groupId []byte) error {
+	return self.removeLocked(self.pendingPath(groupId))
 }
 
 // GetGroupState answers the state PutGroupState wrote at this epoch.
@@ -1483,10 +1527,19 @@ func (self *DurableStateStore) deleteGroupStateAt(groupId []byte, epoch uint64) 
 	return nil
 }
 
-// eraseGroupsWithNoRecord erases every group directory that holds EPOCH STATE AND NO RECORD, and
-// answers the directories it erased (Task 57, F3). [Device.Restore] runs it, and it is not a
-// refusal: a directory it cannot erase is answered as the error beside the list, and tried again
-// at the next Restore.
+// eraseGroupsWithNoRecord erases every group directory that holds THIS STORE'S `pending` MARK, EPOCH
+// STATE AND NO RECORD, and answers the directories it erased (Task 57, F3; R33). [Device.Restore]
+// runs it, and it is not a refusal: a directory it cannot erase is answered as the error beside
+// the list, and tried again at the next Restore.
+//
+// IT ERASES ON ITS OWN DURABLE PROOF AND ON NOTHING ELSE (R33). It used to erase every directory
+// with epoch state and no record, and a record moved away by an antivirus quarantine is a record
+// absent too: a plain Restore, with no press at all, erased an owner's live group, and when the
+// record came back it named epochs that were gone. The mark is what this store wrote when it
+// CREATED the directory for a group whose record it had not written yet
+// ([DurableStateStore.pendingPath]), and with no mark nothing is erased here, whatever is absent.
+// A mark found beside a record that reads is stale -- the crash came between the record and the
+// mark's removal -- and is taken away, so that the record's fate is the record's.
 //
 // WHAT SUCH A DIRECTORY IS. A join that died between its commit and its record, a join whose
 // record could not be written, or a founder that died before [Group.Open] wrote its first record.
@@ -1502,7 +1555,8 @@ func (self *DurableStateStore) deleteGroupStateAt(groupId []byte, epoch uint64) 
 //   - a directory with a record in it, whether the record reads, does not read, or could not be
 //     read just now: that is a group, and its fate is the record's;
 //   - a directory whose record or mark cannot even be asked about;
-//   - a directory with no epoch state: nothing secret is in it.
+//   - a directory with no epoch state: nothing secret is in it;
+//   - a directory with no `pending` mark, or one whose mark does not read or names another group.
 func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -1533,7 +1587,29 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 			continue
 		}
 		dir := filepath.Join(root, name)
-		if !absent(filepath.Join(dir, "forgetting")) || !absent(filepath.Join(dir, "meta")) {
+		// NO MARK, NO ERASE (R33)
+		if absent(filepath.Join(dir, "pending")) || !absent(filepath.Join(dir, "forgetting")) {
+			continue
+		}
+		if !absent(filepath.Join(dir, "meta")) {
+			// A STALE MARK BESIDE A RECORD THAT READS goes; beside one that does not read, it stays
+			// with the record, which decides the directory either way
+			if record, err := self.groupRecordInLocked(name); err == nil {
+				_ = self.clearPendingLocked(record.GroupId)
+			}
+			continue
+		}
+		// THE MARK MUST READ AND NAME THE DIRECTORY IT SITS IN, as a leave mark must
+		// ([DurableStateStore.GroupsBeingForgotten]): one copied in from another group's directory
+		// would otherwise send the erase to a group nobody made here
+		mark, err := self.readRecord(filepath.Join(dir, "pending"), stateKindPending)
+		if err == nil && (len(mark) != 1 || stateNameOf(mark[0]) != name) {
+			err = fmt.Errorf("%w: it does not name its own group", ErrStateStoreFormat)
+		}
+		if err != nil {
+			if first == nil {
+				first = fmt.Errorf("urmessage: the creation mark in %s is not this store's mark for it, so nothing in it was erased: %w", name, err)
+			}
 			continue
 		}
 		epochDir := filepath.Join(dir, "epoch")
@@ -1557,6 +1633,9 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 		if failed {
 			continue
 		}
+		if err := self.clearPendingLocked(mark[0]); err != nil && first == nil {
+			first = err
+		}
 		os.Remove(epochDir)
 		os.Remove(dir)
 		erased = append(erased, name)
@@ -1568,8 +1647,9 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 	return erased, nil
 }
 
-// ErasedWithNoRecord is every group directory holding epoch state and no record that a
-// [Device.Restore] over this store has erased since it was opened, by the store's name for it.
+// ErasedWithNoRecord is every group directory holding this store's `pending` mark, epoch state and
+// no record that a [Device.Restore] over this store has erased since it was opened, by the store's
+// name for it.
 //
 // IT IS THE ERASE'S LOG, in [DurableStateStore.UnsweptWrites]'s shape: this package has no logger,
 // and an erase nobody can see is not one a caller can tell a person about or a probe can assert.
@@ -1862,9 +1942,17 @@ func (self *DurableStateStore) PutGroupRecord(record *GroupRecord) error {
 	if err != nil {
 		return err
 	}
-	return self.writeRecord(self.groupRecordPath(record.GroupId), stateKindGroupRecord,
+	if err := self.writeRecord(self.groupRecordPath(record.GroupId), stateKindGroupRecord,
 		record.GroupId, record.PqSecret, record.GroupHandleKey, epochOctets[:], flags, table, dark,
-		witness, ledger, removal)
+		witness, ledger, removal); err != nil {
+		return err
+	}
+	// THE CREATION MARK GOES ONCE THE RECORD IS SYNCED (R33): the directory holds a group now, and
+	// its fate is the record's. Best effort, because the record is written and this call must say
+	// so: a mark left beside a record is stale, the sweep never erases a directory with a record in
+	// it, and the next Restore takes the mark away. MG-15 names the one window this leaves.
+	_ = self.clearPendingLocked(record.GroupId)
+	return nil
 }
 
 // encodeWrapDark is [GroupRecord.WrapDarkKind] and [GroupRecord.WrapDarkEpoch] as the one octet
@@ -2265,6 +2353,10 @@ func (self *DurableStateStore) DeleteGroupRecord(groupId []byte) error {
 		return err
 	}
 	if err := self.removeLocked(self.groupRecordPath(groupId)); err != nil {
+		return err
+	}
+	// the creation mark, which a crash between a record and the mark's removal leaves beside it
+	if err := self.clearPendingLocked(groupId); err != nil {
 		return err
 	}
 	// THE MARK A LEAVE WROTE GOES LAST, so an erase interrupted anywhere above leaves it standing,
