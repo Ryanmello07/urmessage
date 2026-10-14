@@ -826,9 +826,11 @@ func (self *connectMlsEngine) LoadGroup(groupId []byte, epoch uint64) (GroupHand
 // THE REFUSAL CARRIES WHAT THE INTERFACE CANNOT SAY. TakeKeyPackage answers a bare error with no
 // declared not-found value, so a loop that treated every error as "not mine" reports a broken disk
 // as an unaddressed Welcome. ErrEngineNoKeyPackageForWelcome therefore carries the ref count, the
-// refusal count and the LAST STORE ERROR VERBATIM, so an operator reading the message can tell the
-// two apart even though a caller matching on the type cannot. The taxonomy that would let the type
-// tell them apart is owed by whoever owns the store interface.
+// refusal count and the LAST STORE ERROR, WRAPPED (%w) and so with its type: an operator reads it
+// in the message, and a caller whose store has a not-found sentinel of its own matches on it to
+// tell "no join code here" from "the join code here could not be read" (Task 57, F4; sdk/urmessage
+// does). This interface still declares no not-found value; that taxonomy is owed by whoever owns
+// the store interface.
 func (self *connectMlsEngine) JoinFromWelcome(welcome []byte, ratchetTree []byte) (GroupHandle, error) {
 	return self.joinFromWelcome(welcome, ratchetTree, nil)
 }
@@ -878,7 +880,11 @@ func (self *connectMlsEngine) joinFromWelcome(welcome []byte, ratchetTree []byte
 		}
 		return handle, nil
 	}
-	return nil, fmt.Errorf("%w: the welcome names %d key package refs, this store refused %d of them, and the last refusal it answered was %v",
+	if lastStoreRefusal == nil {
+		return nil, fmt.Errorf("%w: the welcome names %d key package refs, and this store refused none of them",
+			ErrEngineNoKeyPackageForWelcome, len(parsed.Welcome.Secrets))
+	}
+	return nil, fmt.Errorf("%w: the welcome names %d key package refs, this store refused %d of them, and the last refusal it answered was %w",
 		ErrEngineNoKeyPackageForWelcome, len(parsed.Welcome.Secrets), refused, lastStoreRefusal)
 }
 

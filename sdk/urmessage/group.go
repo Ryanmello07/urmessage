@@ -1451,6 +1451,14 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 			joined, err = nil, fmt.Errorf("%w: %w, and the join code could not be put back: %w", ErrJoinCodeSpent, err, abortErr)
 			return
 		}
+		// A JOIN CODE THE STORE HOLDS AND COULD NOT READ IS NOT A MISSING ONE (Task 57, F4). The
+		// engine carries the store's own refusal, and only the store's not-found is "no join code
+		// here"; any other refusal is the window's, and its sentence is true of it: nothing was
+		// written, the join code is still on the disk, and the same invite joins once it reads.
+		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && !errors.Is(err, ErrStateNotFound) {
+			joined, err = nil, fmt.Errorf("%w: %w", ErrJoinRefused, err)
+			return
+		}
 		// THE ONE REFUSAL IN HERE THAT DOES NOT CARRY THE WINDOW'S SENTENCE: the engine found no
 		// join code of this device that the invite was made for. "The join code is not spent" is
 		// not true of a join code that is not there. See [ErrNoJoinCodeForInvite].

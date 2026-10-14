@@ -123,7 +123,9 @@ func (self *MemoryStateStore) TakeKeyPackage(ref []byte) ([]byte, []byte, []byte
 	defer self.lock.Unlock()
 	held, isHeld := self.keyPackages[fmt.Sprintf("%x", ref)]
 	if !isHeld {
-		return nil, nil, nil, fmt.Errorf("urmessage: no mls key package for %x", ref)
+		// the SAME sentinel the durable store answers: [Device.Join] tells a join code that is not
+		// here from one the store could not read by it (Task 57, F4)
+		return nil, nil, nil, fmt.Errorf("%w: no mls key package for %x", ErrStateNotFound, ref)
 	}
 	delete(self.keyPackages, fmt.Sprintf("%x", ref))
 	return held[0], held[1], held[2], nil
