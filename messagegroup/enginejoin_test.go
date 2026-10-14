@@ -372,6 +372,8 @@ var engineJoinDispositions = map[string]string{
 
 	"engine.go JoinFromWelcome": "where the ref comes from (section 6's signature carries none), why exactly one ref is taken and not the first or all, why the take is destructive and puts back, and what the store interface's bare error cannot express. Every one is a statement about a CONSTRAINT the join works within, and the body below them joins",
 
+	"engine.go joinFromWelcome": "the body both doors share since JoinFromWelcomeInto arrived, moved out of JoinFromWelcome with its sentences: the refusal of a message that decodes and carries no welcome arm. That is a MALFORMED input, and the loop below it joins",
+
 	"engine.go joinWithTakenKeyPackage": "the ownership rule: nothing refuses a device whose signing key was erased by its own join, and mls.JoinFromWelcome exits at some fifteen places so the erase is deferred. Both are reasons the join is written the way it is",
 
 	"errors.go ErrEngineWelcomeShape": "the sentinel for octets that are not an MLSMessage carrying a Welcome. It is a refusal of a MALFORMED input and fires on nothing a real Welcome produces",
@@ -428,12 +430,12 @@ func engineJoinPath(t *testing.T) (names map[string]bool, onlyTheJoinCalls []str
 	if seed == "" {
 		t.Fatal("no production declaration of this package calls mls.JoinFromWelcome, so this gate derived its class off nothing and would report clean having read nothing")
 	}
-	names = map[string]bool{seed: true, engineJoinSeamMethod: true}
+	names = map[string]bool{seed: true, engineJoinSeamMethod: true, engineJoinBoundSeamMethod: true}
 	// the seam method is in the frontier as well as in the set. It was in the set only, once, and
 	// the bug that produced is the one this whole block exists about: its body names
 	// ErrEngineNoKeyPackageForWelcome, so leaving it unwalked dropped "welcome" out of the derived
 	// vocabulary and left the class one word wide.
-	frontier := []string{seed, engineJoinSeamMethod}
+	frontier := []string{seed, engineJoinSeamMethod, engineJoinBoundSeamMethod}
 	for _, function := range bodies {
 		if function.Body == nil {
 			continue
@@ -548,6 +550,14 @@ func engineJoinExclusiveNames(t *testing.T) []string {
 // writes down, and it is at a level where being wrong is visible: a wrong spelling finds no seed
 // and engineJoinPath fatals rather than deriving a smaller class.
 const engineJoinSeamMethod = "JoinFromWelcome"
+
+// The SECOND seam method, since the hardening program's held-group gate: JoinFromWelcome carrying
+// the group id its caller means to join. It is the join as much as the first is, and it is named
+// here for the reason the first is kept whatever else names it: left out, its own name puts "join"
+// and "welcome" among the words the REST of the package spells, the derived vocabulary loses both,
+// and the gate goes on reporting over a class that has stopped being about the join. Measured
+// before this constant existed: the vocabulary fell from [join welcome] to [zeroize].
+const engineJoinBoundSeamMethod = "JoinFromWelcomeInto"
 
 // engineJoinVocabulary answers the words a sentence about the join is recognised by, and PRINTS
 // what each of its two narrowings removed.

@@ -163,8 +163,22 @@ type DeviceStore interface {
 	// package's rather than MLS's, and that a restore cannot be performed without.
 	PutGroupRecord(record *GroupRecord) error
 
-	// GroupRecords is every group this store holds a record for, in no particular order.
+	// GroupRecords is every group this store holds a record for THAT READS, in no particular order.
+	//
+	// A RECORD THAT DOES NOT READ IS REPORTED AND IS NOT THE LIST'S REFUSAL. The list holds every
+	// other record, and the error beside it wraps [ErrGroupRecordDamaged] and names each record it
+	// skipped by the store's own name for it. That is [DeviceStore.GroupsBeingForgotten]'s shape
+	// and its reason: one file that does not read must not cost a device every other group on its
+	// disk. Any other error is the store failing to answer, and comes with no list.
 	GroupRecords() ([]*GroupRecord, error)
+
+	// GroupRecord is the ONE record this store holds for groupId, and it is what a caller with a
+	// group id in its hand asks, so that another group's record is never its answer. It answers
+	// [ErrStateNotFound] when the store holds none (a group being left is none, as in the list),
+	// an error wrapping [ErrGroupRecordDamaged] when a record is there and does not read, and any
+	// other error when the store could not answer. It agrees with the list: both read a group's
+	// record by one function.
+	GroupRecord(groupId []byte) (*GroupRecord, error)
 
 	// DeleteGroupRecord removes one group's record AND every MLS epoch state beside it AND every
 	// copy of a record this device sent in it. It is how a device leaves a group without leaving
@@ -1812,13 +1826,21 @@ func decodeRemoval(part []byte) (uint8, uint64, error) {
 	return part[0], binary.BigEndian.Uint64(part[1:]), nil
 }
 
-// GroupRecords walks the group directory and answers every record it holds.
+// GroupRecords walks the group directory and answers every record it holds that reads.
 //
 // A DIRECTORY WITH NO meta IN IT IS SKIPPED AND NOT A REFUSAL, because that is a real state and
 // not a corruption: mls writes an epoch state at NewGroup, before this package has a pq_secret to
 // write beside it, so a crash between the two leaves exactly that. What it is NOT is a restorable
 // group -- and a group with no record is one this device has to be re-invited to, which is what a
 // missing pq_secret means whatever the MLS state says.
+//
+// A RECORD THAT DOES NOT READ IS REPORTED AND SKIPPED, AND THE OTHERS ARE STILL ANSWERED. It used
+// to be this call's whole answer: one meta that failed its checksum returned an error and no list,
+// so one damaged file cost a device every group on its disk at [Device.Restore]. The error beside
+// the list wraps [ErrGroupRecordDamaged], counts the records skipped and names each BY ITS
+// DIRECTORY. It cannot name them by group id: a directory's name is the SHA-256 of the id
+// ([stateNameOf]) and cannot be turned back into one, and the id inside a record that does not
+// read is not one to believe. A caller that holds an id asks [DurableStateStore.GroupRecord].
 func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -1841,26 +1863,76 @@ func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 	}
 	sort.Strings(names)
 	records := []*GroupRecord{}
+	damaged := []string{}
+	var firstDamage error
 	for _, name := range names {
-		// A GROUP BEING LEFT IS NOT A GROUP TO RESTORE: its epoch states may already be gone, and a
-		// restore of it would fail at every launch. [Device.Restore] finishes its erase instead.
-		if _, err := os.Stat(filepath.Join(root, name, "forgetting")); err == nil {
-			continue
-		}
-		parts, err := self.readRecord(filepath.Join(root, name, "meta"), stateKindGroupRecord)
+		record, err := self.groupRecordInLocked(name)
 		if err != nil {
 			if errors.Is(err, ErrStateNotFound) {
 				continue
 			}
-			return nil, err
-		}
-		record, err := groupRecordOf(name, parts)
-		if err != nil {
-			return nil, err
+			damaged = append(damaged, name)
+			if firstDamage == nil {
+				firstDamage = err
+			}
+			continue
 		}
 		records = append(records, record)
 	}
+	if firstDamage != nil {
+		return records, fmt.Errorf("%w (in all, %d of the %d group directories on this disk: %s)",
+			firstDamage, len(damaged), len(names), strings.Join(damaged, ", "))
+	}
 	return records, nil
+}
+
+// GroupRecord answers the one record this store holds for groupId: see [DeviceStore.GroupRecord].
+//
+// IT READS ONE DIRECTORY AND NO OTHER, which is the point of it. The held-group gate, a founding
+// and [Device.ForgetGroup] each hold one group id, and each used to ask the whole list, so a
+// record of ANOTHER group that did not read answered every one of them: the device could then
+// join nothing, found nothing and leave nothing, and no call cleared it.
+func (self *DurableStateStore) GroupRecord(groupId []byte) (*GroupRecord, error) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return nil, err
+	}
+	return self.groupRecordInLocked(stateNameOf(groupId))
+}
+
+// groupRecordInLocked reads the record in one group directory, for the list and for the one-id
+// read alike, so that the two cannot answer differently about one group. It answers the record;
+// [ErrStateNotFound] when the directory holds none or the group is being left; and an error
+// wrapping [ErrGroupRecordDamaged] when a record is there and does not read.
+//
+// THE RECORD MUST NAME THE DIRECTORY IT SITS IN, which is [DurableStateStore.GroupsBeingForgotten]'s
+// rule for a leave mark and is here for the reason the one-id read exists: the directory is found
+// by the id, so a record that named another group would be held by the list under an id the
+// one-id read answers "not held" for.
+func (self *DurableStateStore) groupRecordInLocked(name string) (*GroupRecord, error) {
+	dir := filepath.Join(self.dataDir, "group", name)
+	// A GROUP BEING LEFT IS NOT A GROUP TO RESTORE: its epoch states may already be gone, and a
+	// restore of it would fail at every launch. [Device.Restore] finishes its erase instead.
+	if _, err := os.Stat(filepath.Join(dir, "forgetting")); err == nil {
+		return nil, fmt.Errorf("%w: the group in %s is being left", ErrStateNotFound, name)
+	}
+	parts, err := self.readRecord(filepath.Join(dir, "meta"), stateKindGroupRecord)
+	if err != nil {
+		if errors.Is(err, ErrStateNotFound) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: the record in %s: %w", ErrGroupRecordDamaged, name, err)
+	}
+	record, err := groupRecordOf(name, parts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrGroupRecordDamaged, err)
+	}
+	if stateNameOf(record.GroupId) != name {
+		return nil, fmt.Errorf("%w: %w: the record in %s does not name its own group",
+			ErrGroupRecordDamaged, ErrStateStoreFormat, name)
+	}
+	return record, nil
 }
 
 // groupRecordOf is one durable group record's parts as a [GroupRecord], and the arity switch that
@@ -1878,8 +1950,9 @@ func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 // bug with the compatibility path. [Device.restoreOne] is the one place that distinction is acted
 // on.
 //
-// IT IS A FUNCTION RATHER THAN THE BODY OF THAT LOOP BECAUSE OF A MEASUREMENT, which is the part
-// worth keeping. Inside [DurableStateStore.GroupRecords] the record's parts are a LOCAL called
+// IT IS A FUNCTION RATHER THAN PART OF THE READ THAT CALLS IT BECAUSE OF A MEASUREMENT, which is
+// the part worth keeping. Inside that read ([DurableStateStore.groupRecordInLocked], which the list
+// and the one-id read share) the record's parts are a LOCAL called
 // `parts` -- a generic record off a generic read -- and no census in this package could taint it:
 // pqsecretgate_test.go's walk seeds a PARAMETER, and wrapseedgate_test.go's `parts` entry seeds
 // the WRITE path's three functions and not this one. Mutant pq-M2 measured it: a `%x` of

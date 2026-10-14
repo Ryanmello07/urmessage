@@ -282,6 +282,22 @@ type Device struct {
 	mutex  sync.Mutex
 	groups map[string]*Group
 
+	// admitMutex is held by every call that puts a group onto this device -- [Device.Join],
+	// [Device.CreateGroup] and [Device.Restore] -- from the question "does this device hold that
+	// group" to the hold that answers it. Without it two admissions of one group id overlap, both
+	// read "not held", and the second replaces the first. It is taken before [Device.mutex] and
+	// never while that one is held.
+	admitMutex sync.Mutex
+	// unrestored is the groups the last [Device.Restore] found on the disk and could not bring
+	// back, by id. Guarded by mutex. It is what [Device.ForgetGroup] reads to leave one of them.
+	unrestored map[string]bool
+
+	// joinStage is the store the engine was built over: [Device.stateStore] with one join at a time
+	// staged in memory until [Device.Join] has finished judging it. A join holds admitMutex from
+	// before it begins the stage to after it closes it, so there is never a second one to stage.
+	// See [joinStage].
+	joinStage *joinStage
+
 	// §4.3.5's pushes and the replaced-session flag: see [pushInbox], which is what the transport's
 	// callbacks hold instead of this device.
 	inbox *pushInbox
@@ -427,7 +443,11 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	// What a member reads off MemberAt is therefore exactly "the leaf that signs", and MG-1's
 	// obligation -- that a joiner must decide whether it expected THAT identity -- is the
 	// caller's and is not met here.
-	engine, err := messagegroup.NewConnectMlsEngine(crypto, stateStore, signer,
+	// THE ENGINE IS BUILT OVER THE JOIN STAGE AND NOT OVER THE STORE. Everything the engine reads
+	// and writes still reaches stateStore, call for call; what the stage adds is that a join's
+	// first epoch state waits in memory until [Device.Join] commits it. See [joinStage].
+	stage := newJoinStage(stateStore)
+	engine, err := messagegroup.NewConnectMlsEngine(crypto, stage, signer,
 		mls.BasicCredential(signerPub), leafKeys)
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: the mls engine: %w", err)
@@ -450,6 +470,8 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		random:           random,
 		commitAuthorizer: config.CommitAuthorizer,
 		groups:           map[string]*Group{},
+		unrestored:       map[string]bool{},
+		joinStage:        stage,
 		inbox:            inbox,
 	}, nil
 }
@@ -902,10 +924,4 @@ func (self *Device) createMlsGroup(groupId []byte) (messagegroup.GroupHandle, er
 		return nil, fmt.Errorf("urmessage: CreateGroup: %w", err)
 	}
 	return handle, nil
-}
-
-func (self *Device) hold(group *Group) {
-	self.mutex.Lock()
-	defer self.mutex.Unlock()
-	self.groups[string(group.id)] = group
 }

@@ -728,6 +728,22 @@ var (
 	// already left, or closed under it.
 	ErrGroupNotHeld = errors.New("urmessage: this device holds no such group")
 
+	// [Device.ForgetGroup] was asked to leave a group that is on this device's disk and that no
+	// [Device.Restore] has tried to bring back since this process started. Restore first: a group
+	// that comes back is left like any other, the owner's refusal included, and one that does not
+	// come back is left by calling ForgetGroup again.
+	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back, ForgetGroup leaves it")
+
+	// A group's record is on this device's disk and DOES NOT READ: its checksum does not hold, it
+	// does not decode, it names another group, or the file under its name cannot be had. It is
+	// ONE GROUP'S damage and never the device's. [DeviceStore.GroupRecord] answers it for that one
+	// group; [DeviceStore.GroupRecords] answers it BESIDE the list of every record that does read,
+	// so [Device.Restore] brings the others back and reports this one; and an invite into any
+	// other group joins. A record that does not read can never be restored, so
+	// [Device.ForgetGroup] leaves its group without a Restore having tried, and without the
+	// owner's question, which is asked of a roster this group no longer has.
+	ErrGroupRecordDamaged = errors.New("urmessage: a group record on this device's disk does not read, so that group cannot be restored; ForgetGroup leaves it, and it can then be joined again")
+
 	// [Device.ForgetGroup] LEFT the group -- it is closed, its keys are gone from memory, and this
 	// device no longer holds it -- but the erase of its copy on the disk did not finish. The leave
 	// mark stands, so the next [Device.Restore] finishes the erase, and so does ForgetGroup again.
@@ -741,4 +757,59 @@ var (
 	// or added back. MASTER §11: "the leave action is refused for an OWNER until ownership has been
 	// transferred". Nothing changed: the group is open, and every file of it is still on the disk.
 	ErrOwnerMustTransfer = errors.New("urmessage: you own this group and somebody else is in it, so hand it over first with TransferOwnership; leaving now would leave them with an owner nobody can remove")
+
+	// [Device.Join] was handed an invite into a group this device ALREADY HOLDS, live in memory or
+	// as a record on its disk, and that group is not one a commit removed this device from. A join
+	// writes an epoch state, a record and a map entry under the group's id, so a join over a held
+	// group is that group replaced by whatever the invite carries, and an invite authenticates
+	// nobody. Nothing was written and the join code is not spent. The one join over a held id that
+	// is honoured is the re-add of a device a commit removed. A group that went dark or halted, one
+	// a restore could not bring back, and one whose record does not read ([ErrGroupRecordDamaged],
+	// which this then carries as well) is joined again by leaving it first, with
+	// [Device.ForgetGroup]. [Device.CreateGroup] answers it too, for an id this device holds
+	// anything under.
+	ErrGroupAlreadyHeld = errors.New("urmessage: this device already holds this group, so an invite into it is refused; leave it first with ForgetGroup to join it again")
+
+	// The re-add of a device a commit removed named an epoch at or below the one it was removed at.
+	// A real re-add is a later commit, so its Welcome stands above that epoch.
+	ErrReaddStale = errors.New("urmessage: this invite adds this device back at an epoch at or below the one it was removed at")
+
+	// [Device.Join] would have written the epoch state of a group and epoch this device's store
+	// already holds a state for, or could not read whether it does. A join creates a group's state
+	// and leaves one that is already there alone. The store is as it was and the join code is not
+	// spent.
+	ErrJoinWouldOverwrite = errors.New("urmessage: this device's store already holds a state for the group and epoch this invite joins, so the invite is refused and the store is left as it was")
+
+	// EVERY REFUSAL [Device.Join] MAKES INSIDE ITS WINDOW BEGINS WITH THIS SENTENCE, whatever the
+	// cause it wraps: the invite was judged after the engine took the join code and before
+	// anything reached the store, and it was refused there, so nothing was written and the join
+	// code went back. It is one fixed sentence because the C ABI carries sentences and not types:
+	// an app tells "your join code is still good" from [ErrJoinCodeSpent] by this prefix alone, and
+	// does not have to know every cause. ONE REFUSAL INSIDE THE WINDOW DOES NOT CARRY IT, because
+	// of it this sentence would be false: [ErrNoJoinCodeForInvite].
+	ErrJoinRefused = errors.New("urmessage: this invite was refused before anything was written, and the join code is not spent")
+
+	// [Device.Join] was handed an invite that NO JOIN CODE THIS DEVICE HOLDS WAS MADE FOR: the
+	// engine found no key package in this device's store that the Welcome is addressed to. The
+	// commonest cause is a join code that is ALREADY GONE. An earlier join of this same invite
+	// spent it ([ErrJoinCodeSpent], which was said once, to that call), or the process died inside
+	// a join's window, where nobody was told. An invite made for another device answers it too.
+	//
+	// IT IS REFUSED INSIDE THE WINDOW AND NOTHING WAS WRITTEN, AND IT DOES NOT BEGIN WITH
+	// [ErrJoinRefused]'s SENTENCE. That sentence says the join code is not spent, and an app turns
+	// it into "your join code is still good: ask for the invitation to be sent again". Here there
+	// is no join code for that to be true of, and pasting the same invite again can never work. A
+	// refusal says what it cost; this one says what is missing, and the remedy.
+	//
+	// WHAT IT CANNOT TELL APART is the engine's to tell and the engine says it cannot: its refusal
+	// is the same one for a Welcome addressed to nobody here and for a store that would not read
+	// the join code it holds (messagegroup.ErrEngineNoKeyPackageForWelcome, whose message carries
+	// the store's last refusal verbatim, as this one does behind it).
+	ErrNoJoinCodeForInvite = errors.New("urmessage: this device holds no join code this invitation was made for; make a new join code")
+
+	// THE ONE REFUSAL OF [Device.Join] THAT COSTS THE JOIN CODE. Every check a join makes runs
+	// before the joined state reaches the store, and a refusal there puts the join code back. This
+	// is what is left: the store would not take the join code back, or the joined state was
+	// written and the group's record then could not be. Make a new join code and be added again.
+	ErrJoinCodeSpent = errors.New("urmessage: this join did not complete and its join code is spent; make a new join code and ask to be added again")
 )

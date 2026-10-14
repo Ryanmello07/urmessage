@@ -2,6 +2,7 @@ package urmessage
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/urnetwork/message/mls"
@@ -47,6 +48,22 @@ import (
 // owner alone, or one with another device of its own still in the group, strands nobody and may go.
 // A refusal changes nothing: no mark, no close, no file.
 //
+// A GROUP THE LAST RESTORE COULD NOT BRING BACK IS LEFT TOO, and it is the one group this call
+// leaves without holding it. Its record is on the disk, so [Device.Join] refuses an invite into it
+// ([ErrGroupAlreadyHeld], whose own sentence sends the caller here); its state does not load, so
+// it can never be held; and until this paragraph such a group could be neither restored, left nor
+// joined again. It is marked and erased like any other. THE OWNER'S REFUSAL IS NOT ASKED OF IT,
+// because it cannot be: the roster is read off a live group and this one has none, and a device
+// that cannot load a group's state strands nobody by erasing it that it had not already. A group
+// on the disk that no Restore has tried is NOT left this way: it answers [ErrGroupNotRestored],
+// so that a device that has merely restarted is asked the owner's question like any other.
+//
+// AND SO IS A GROUP WHOSE RECORD DOES NOT READ ([ErrGroupRecordDamaged]), with no Restore having
+// to try first: the read this call makes of that one record IS the attempt, a record that does
+// not read never restores, and the reasoning above holds of it word for word. Without this, the
+// gate's refusal of an invite into such a group named a remedy that failed for the gate's own
+// reason, and the group could be neither restored, left nor joined again.
+//
 // ONE CALLER AT A TIME PER GROUP. A [Device.Restore] or [Device.Join] of the same group on another
 // goroutine, between the map drop and the erase, is not guarded against: Restore skips a marked
 // group, but a Join would build a group the erase then deletes under it. Every caller this package
@@ -77,6 +94,18 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 		}
 	}
 	if !held {
+		if durable {
+			onDisk, reads, err := recordOnDisk(store, groupId)
+			if err != nil {
+				return err
+			}
+			if onDisk && (!reads || self.didNotRestore(groupId)) {
+				return self.forgetUnrestored(store, groupId)
+			}
+			if onDisk {
+				return fmt.Errorf("%w: %x", ErrGroupNotRestored, groupId)
+			}
+		}
 		return fmt.Errorf("%w: %x", ErrGroupNotHeld, groupId)
 	}
 
@@ -108,6 +137,48 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 	if err := store.DeleteGroupRecord(groupId); err != nil {
 		return fmt.Errorf("%w: %w", ErrForgetUnfinished, err)
 	}
+	return nil
+}
+
+// recordOnDisk asks the store about ONE group: whether it holds a record for it, and whether that
+// record reads. A group being left is not on the disk for this purpose:
+// [DurableStateStore.GroupRecord] answers it as not found, and ForgetGroup has finished that one
+// before it asks this.
+//
+// IT ASKS ABOUT THE ONE GROUP AND NOT FOR THE LIST. It used to ask for every record the store
+// holds, so a record of another group that did not read made this an error, and ForgetGroup, the
+// remedy every held-group refusal names, failed for the reason the refusal was given.
+func recordOnDisk(store DeviceStore, groupId []byte) (onDisk bool, reads bool, err error) {
+	_, err = store.GroupRecord(groupId)
+	switch {
+	case err == nil:
+		return true, true, nil
+	case errors.Is(err, ErrStateNotFound):
+		return false, false, nil
+	case errors.Is(err, ErrGroupRecordDamaged):
+		return true, false, nil
+	}
+	return false, false, fmt.Errorf("urmessage: whether this device holds group %x on its disk could not be read, so nothing was left: %w", groupId, err)
+}
+
+// forgetUnrestored leaves a group that is on the disk and that will not come back, because the
+// last Restore could not bring it back or because its record does not read: the mark, then the
+// erase, as for a live group, with nothing to close.
+func (self *Device) forgetUnrestored(store DeviceStore, groupId []byte) error {
+	if err := store.MarkGroupForgetting(groupId); err != nil {
+		// the same rule as [Group.closeToForget]'s: a mark that stands although its write
+		// reported a failure is an instruction to erase, so the leave goes on
+		marked, readErr := store.GroupBeingForgotten(groupId)
+		if readErr != nil || !marked {
+			return fmt.Errorf("urmessage: the leave could not be recorded on the disk, so nothing was left: %w", err)
+		}
+	}
+	if err := store.DeleteGroupRecord(groupId); err != nil {
+		return fmt.Errorf("%w: %w", ErrForgetUnfinished, err)
+	}
+	self.mutex.Lock()
+	delete(self.unrestored, string(groupId))
+	self.mutex.Unlock()
 	return nil
 }
 
