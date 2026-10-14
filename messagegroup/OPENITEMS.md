@@ -1120,3 +1120,64 @@ were removed from".
 ### What is owed elsewhere
 
 The identity track (T2): the re-add proof and its invite version.
+
+---
+
+## MG-13 — a Welcome with several key package refs is answered by the engine's LAST store refusal only
+
+**Status: OPEN. Filed 2026-10-14 from the T1 fix review (its V3c), read from the code. A NIT,
+reachable only through a hostile Welcome: an honest alpha Welcome names one ref. Not fixed (ruling
+R26). Owner: the healing track (T3).**
+
+### The property
+
+When no key package a Welcome names can be taken, the engine's refusal should let its caller say
+what is true of THIS device's join code.
+
+### The evidence
+
+`joinFromWelcome` (`messagegroup/engine.go`) loops over every ref the Welcome names and keeps only
+`lastStoreRefusal`. `sdk/urmessage`'s Join chooses its sentence from that one refusal (`Device.Join`'s
+deferred exit, R26's V3). So in a Welcome whose refs are this device's (read failed for a moment)
+followed by a foreign one (not found), the answer is "no join code" although this device's join
+code is on the disk.
+
+### What a fix would be
+
+Carry every refusal (or the one for a ref this store holds), and let the caller judge each.
+
+### What is owed elsewhere
+
+The healing track (T3).
+
+---
+
+## MG-14 — a failed re-add whose record write landed leaves the removed group's record overwritten
+
+**Status: OPEN. Filed 2026-10-14 from the T1 fix review (its V4b), read from the code. Not fixed
+(ruling R26). Owner: the healing track (T3).**
+
+### The property
+
+A join that fails after its commit leaves nothing of itself on the disk and changes nothing that
+was there before it.
+
+### The evidence
+
+A re-add joins over a group this device was removed from, in the same directory. If the re-add's
+record write lands (the rename) and then reports a failure (its directory sync), `Device.Join`
+answers `ErrJoinCodeSpent`, and `Device.abandonJoined` (`sdk/urmessage/group.go`) erases the joined
+epoch's state. It does not erase the record, because off a re-add the directory is the removed
+group's too. But that record is now the re-add's own, overwritten, so the removed group's record,
+with its removal mark, is gone, and the record left names an epoch whose state was erased. A
+re-add whose write did NOT land keeps the removed group whole, and
+`TestAReaddThatFailsAfterItsCommitKeepsTheRemovedGroupsEpochsAndRecord` (`sdk/cp3b`) holds that.
+
+### What a fix would be
+
+Keep the removed group's record (a copy taken before the write) and put it back on this failure,
+or write the re-add's record under a name of its own until the join has been held.
+
+### What is owed elsewhere
+
+The healing track (T3).
