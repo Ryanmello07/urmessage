@@ -729,7 +729,20 @@ func (self *Device) rebindAll() error {
 //
 // IT IS SINGLE USE AND THE STORE ENFORCES THAT: the private halves are taken destructively at the
 // join, so two joins off one published package is not something this device can do.
+//
+// A DEVICE WITH NO X-WING SEED PUBLISHES NO JOIN CODE. Every join code this build mints lists the
+// join seal capability, and that is a promise: seal the join secrets to my leaf's X-Wing key and I
+// will open them. A store written before the seed was kept restores without one
+// ([DurableStateStore.GetDeviceIdentity]), and a join code from that device would be a promise it
+// cannot keep: every add of it would leave a leaf in somebody's group that nobody can hand a
+// working invite to. It is refused here, by the name the missing seed already has.
 func (self *Device) KeyPackage() ([]byte, error) {
+	self.mutex.Lock()
+	seedless := len(self.wrapSeed) == 0
+	self.mutex.Unlock()
+	if seedless {
+		return nil, fmt.Errorf("%w, and so it publishes no join code: an invite to one is sealed to that leaf", ErrNoDeviceWrapKey)
+	}
 	keyPackage, err := self.engine.NewKeyPackage()
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: this device's key package: %w", err)

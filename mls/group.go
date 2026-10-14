@@ -723,6 +723,7 @@ func v1Capabilities() Capabilities {
 			ExtensionTypeUrmessageGroupPolicy,
 			ExtensionTypeUrmessageLeafKeys,
 			ExtensionTypeUrmessageOwnerSuccessor,
+			ExtensionTypeUrmessageJoinSeal,
 		},
 		Proposals:   []ProposalType{},
 		Credentials: []CredentialType{CredentialTypeBasic},

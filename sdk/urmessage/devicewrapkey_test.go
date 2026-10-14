@@ -35,6 +35,8 @@ import (
 
 	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
+	messageprotocol "github.com/urnetwork/message/protocol"
+	"github.com/urnetwork/message/syntax"
 )
 
 // mintLeafKeys is one X-Wing key pair, as `deviceIdentity` mints one: the encoded leaf keys body
@@ -374,4 +376,33 @@ func TestNoFieldInThisPackageHoldsAnUnerasableXwingPrivateKey(t *testing.T) {
 			fieldsRead)
 	}
 	t.Logf("read %d struct fields of package urmessage's production source", fieldsRead)
+}
+
+// A DEVICE WITH NO X-WING SEED PUBLISHES NO JOIN CODE. The join code lists the join seal
+// capability, which asks for an invite sealed to the leaf's X-Wing key; a device that holds no
+// seed for that key would be asking for something it cannot open.
+//
+// THE CONTROL is a device that does hold its seed: it mints a join code, and that join code lists
+// the capability, which is the reason the refusal exists.
+//
+// WHAT WOULD GO RED: mint without asking, and the seedless device publishes a join code like any
+// other.
+func TestADeviceWithNoWrapSeedPublishesNoJoinCode(t *testing.T) {
+	dark := &Device{groups: map[string]*Group{}}
+	if _, err := dark.KeyPackage(); !errors.Is(err, ErrNoDeviceWrapKey) {
+		t.Fatalf("a device that holds no x-wing seed answered %v from KeyPackage, want ErrNoDeviceWrapKey", err)
+	}
+
+	lit, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("a nonce"))
+	joinCode, err := lit.KeyPackage()
+	if err != nil {
+		t.Fatalf("CONTROL FAILED: a device that holds its seed answered %v from KeyPackage", err)
+	}
+	decoded := &mls.KeyPackage{}
+	if err := syntax.Unmarshal(joinCode, decoded); err != nil {
+		t.Fatalf("CONTROL FAILED: the join code does not decode: %v", err)
+	}
+	if !decoded.LeafNode.Capabilities.SupportsExtension(mls.ExtensionTypeUrmessageJoinSeal) {
+		t.Fatalf("CONTROL FAILED: the join code does not list the join seal capability, so a seedless device publishing one would promise nothing")
+	}
 }

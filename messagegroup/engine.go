@@ -968,6 +968,7 @@ func engineCapabilities() mls.Capabilities {
 		Extensions: []mls.ExtensionType{
 			mls.ExtensionTypeUrmessageGroupPolicy,
 			mls.ExtensionTypeUrmessageLeafKeys,
+			mls.ExtensionTypeUrmessageJoinSeal,
 		},
 		Proposals:   []mls.ProposalType{},
 		Credentials: []mls.CredentialType{mls.CredentialTypeBasic},
@@ -981,6 +982,7 @@ func engineRequiredCapabilities() mls.RequiredCapabilities {
 		ExtensionTypes: []mls.ExtensionType{
 			mls.ExtensionTypeUrmessageGroupPolicy,
 			mls.ExtensionTypeUrmessageLeafKeys,
+			mls.ExtensionTypeUrmessageJoinSeal,
 		},
 	}
 }

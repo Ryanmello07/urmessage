@@ -195,6 +195,7 @@ var groupExtensionProfile = map[ExtensionType]error{
 	ExtensionTypeUrmessageGroupPolicy:    nil,
 	ExtensionTypeUrmessageLeafKeys:       errProfileGroupExtension,
 	ExtensionTypeUrmessageOwnerSuccessor: nil,
+	ExtensionTypeUrmessageJoinSeal:       errProfileGroupExtension,
 }
 
 // checkGroupExtension is the one refusal surface for a group context extension type, standing in
