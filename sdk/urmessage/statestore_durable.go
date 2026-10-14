@@ -2092,11 +2092,11 @@ func (self *DurableStateStore) GroupRecord(groupId []byte) (*GroupRecord, error)
 // ONLY A PROVEN-PERMANENT FAILURE IS DAMAGE (Task 57, F1; R26; R29). A record that does not read
 // is what [Device.ForgetGroup] leaves WITHOUT the owner's question, irreversibly, so which failures
 // are damage is [classifyRead]'s and nobody else's: a verdict on the octets, or an errno that proves
-// the read will never succeed -- a directory or anything else standing at `meta`, a deny ACL, a
-// symlink loop, the medium -- because a group whose record will never read must stay one a device
-// can leave (R9). A file a scanner, a backup tool or the search indexer holds for a moment, or a
-// read this build cannot classify (too many open files, no errno at all), says nothing about what
-// the record holds: read as damage, a lock that stood at the one read a leave made erased an
+// the read will never succeed -- a directory or anything else standing at `meta`, a symlink loop --
+// because a group whose record will never read must stay one a device can leave (R9). A file a
+// scanner, a backup tool or the search indexer holds for a moment, or a read this build cannot
+// classify (a permission refused, the medium, too many open files, no errno at all), says nothing
+// about what the record holds: read as damage, a lock that stood at the one read a leave made erased an
 // owner's live group with others in it, measured. That is a store that could not answer, which
 // every caller of the one-id read refuses on, and which the list reports apart.
 //

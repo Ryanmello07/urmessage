@@ -65,16 +65,26 @@ import (
 // reason, and the group could be neither restored, left nor joined again.
 //
 // A GROUP WHOSE READ FAILED FOR A REASON NOT PROVEN PERMANENT IS NOT LEFT (Task 57's F1, R26,
-// R29). The damage rule above is for PROVEN-permanent damage only ([classifyRead]): a verdict this
-// code made on the octets, a required file absent, a path of the wrong type, a permission refused,
-// the medium. A read another process blocked for a moment, or one this build cannot classify, is
+// R29, R30). The damage rule above is for PROVEN-permanent damage only ([classifyRead]), a fact
+// about the data: a verdict this code made on the octets, a required file absent, a path of the
+// wrong type. A permission refused or the medium is a fact about the environment and not proof. A
+// read another process blocked for a moment, or one this build cannot classify, is
 // no finding about the group, so it is the store failing to answer, and the leave is refused
-// before anything is written, with the class's own sentence and "so nothing was left": for the
-// record, by this call's own read of it; for any other file, by what the last Restore reported
-// ([Device.notReadRefusal]). The rule had been the other way round, damage unless proven
-// transient, and it leaked three times: an owner's group with others in it was erased, without the
-// owner's question, over a lock on its record, then on an epoch state, then on its `sent`
-// directory, where one site had dropped the errno the proof needed.
+// before anything is written, with the class's own sentence and "so nothing was left". The rule had
+// been the other way round, damage unless proven transient, and it leaked three times: an owner's
+// group with others in it was erased, without the owner's question, over a lock on its record, then
+// on an epoch state, then on its `sent` directory, where one site had dropped the errno the proof
+// needed.
+//
+// AND THE PROOF IS FRESH (R30). An erase without the owner's question is irreversible, so it is
+// never decided on what an EARLIER Restore saw: a permission refused at startup and lifted since,
+// then a lock at the moment of the leave, erased a group on a stale note. So a group the last
+// Restore could not bring back is RESTORED AGAIN here, now, under the admission mutex, and what that
+// attempt finds decides ([Device.restoreForLeave]): a fresh proven-permanent verdict leaves it
+// unasked (R9); a fresh success makes it live, and the ordinary leave below asks the owner's
+// question; a fresh transient or unproven failure is refused with that class's sentence, and
+// nothing is left. A record that does not read needs no second attempt: this call's own read of it,
+// just made, IS the fresh verdict.
 //
 // IT IS AN ADMISSION'S PEER, UNDER [Device.admitMutex] (Task 57, F6). A Join, a CreateGroup or a
 // Restore of the same group on another goroutine waits for the leave, and the leave for it: a Join
@@ -109,24 +119,29 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 		}
 	}
 	if !held {
-		if durable {
-			// A GROUP THE LAST RESTORE COULD NOT READ is refused with that restore's own true
-			// sentence, and nothing is written (R29, the second review's W2)
-			if refusal := self.notReadRefusal(groupId); refusal != nil {
-				return refusal
-			}
-			onDisk, reads, err := recordOnDisk(store, groupId)
-			if err != nil {
-				return err
-			}
-			if onDisk && (!reads || self.didNotRestore(groupId)) {
-				return self.forgetUnrestored(store, groupId)
-			}
-			if onDisk {
-				return fmt.Errorf("%w: %x", ErrGroupNotRestored, groupId)
-			}
+		if !durable {
+			return fmt.Errorf("%w: %x", ErrGroupNotHeld, groupId)
 		}
-		return fmt.Errorf("%w: %x", ErrGroupNotHeld, groupId)
+		onDisk, reads, err := recordOnDisk(store, groupId)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !onDisk:
+			return fmt.Errorf("%w: %x", ErrGroupNotHeld, groupId)
+		case !reads:
+			// the record's own read, just made, is a fresh proven-permanent verdict (R9, R30)
+			return self.forgetUnrestored(store, groupId)
+		case !self.didNotRestore(groupId) && !self.lastRestoreCouldNotRead(groupId):
+			// no Restore has tried it: the owner's question is asked of a live group
+			return fmt.Errorf("%w: %x", ErrGroupNotRestored, groupId)
+		}
+		// THE LAST RESTORE TRIED IT AND FAILED, so it is tried again, now (R30)
+		fresh, err := self.restoreForLeave(store, groupId)
+		if fresh == nil {
+			return err
+		}
+		group = fresh
 	}
 
 	mark := func() error {
@@ -183,9 +198,45 @@ func recordOnDisk(store DeviceStore, groupId []byte) (onDisk bool, reads bool, e
 		groupId, notReadSentinel(classifyRead(err)), err)
 }
 
-// forgetUnrestored leaves a group that is on the disk and that will not come back, because the
-// last Restore could not bring it back or because its record does not read: the mark, then the
-// erase, as for a live group, with nothing to close.
+// restoreForLeave is R30's fresh evidence: the restore of ONE group the last Restore could not
+// bring back, tried again now, by the caller that holds [Device.admitMutex] and is about to leave
+// it. It answers the group, live and held, when the attempt succeeds, and the leave goes on as for
+// any live group, the owner's question included. Otherwise it answers no group and what the
+// leave answers: the erase without the owner's question on a FRESH proven-permanent verdict, and
+// otherwise that class's refusal, "so nothing was left". Every answer re-decides the group's note,
+// so the latest attempt is the one that stands.
+func (self *Device) restoreForLeave(store DeviceStore, groupId []byte) (*Group, error) {
+	record, err := store.GroupRecord(groupId)
+	if err != nil {
+		return nil, fmt.Errorf("urmessage: group %x's record could not be read again for the leave, so nothing was left: %w: %w",
+			groupId, notReadSentinel(classifyRead(err)), err)
+	}
+	nonce, nonceEpoch, err := self.nonce()
+	if err != nil {
+		return nil, fmt.Errorf("urmessage: group %x's restore could not be tried again for the leave, so nothing was left: %w", groupId, err)
+	}
+	group, err := self.restoreOne(store, record, nonce, nonceEpoch)
+	if err == nil {
+		if err = self.hold(group); err != nil {
+			group.Close()
+			err = fmt.Errorf("%w: group %x: %w", ErrRestore, groupId, err)
+		}
+	}
+	if err == nil {
+		return group, nil
+	}
+	class := classifyRead(err)
+	if class == readPermanent {
+		self.noteUnrestored(groupId)
+		return nil, self.forgetUnrestored(store, groupId)
+	}
+	self.noteNotRead(groupId, class)
+	return nil, fmt.Errorf("%w; so nothing was left: group %x: %w", notReadSentinel(class), groupId, err)
+}
+
+// forgetUnrestored leaves a group that is on the disk and that will not come back, on a fresh
+// proven-permanent verdict: its restore, tried again by this leave, failed for good, or its record
+// does not read. The mark, then the erase, as for a live group, with nothing to close.
 func (self *Device) forgetUnrestored(store DeviceStore, groupId []byte) error {
 	if err := store.MarkGroupForgetting(groupId); err != nil {
 		// the same rule as [Group.closeToForget]'s: a mark that stands although its write

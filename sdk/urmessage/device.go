@@ -292,11 +292,11 @@ type Device struct {
 	// unrestored is the groups the last [Device.Restore] found on the disk and could not bring
 	// back, by id. Guarded by mutex. It is what [Device.ForgetGroup] reads to leave one of them.
 	unrestored map[string]bool
-	// notRead is the groups the last [Device.Restore] could not READ, by id, with the class of
-	// the failure and the failure itself (R29, the second review's W2): transient or unproven,
-	// never proven permanent, which is [Device.unrestored]'s. Guarded by mutex. [Device.ForgetGroup]
-	// refuses each of them with its own true sentence; a hold of the group clears it.
-	notRead map[string]notReadEntry
+	// notRead is the groups the latest restore could not READ, by id, with the class of the
+	// failure (R29, the second review's W2): transient or unproven, never proven permanent, which
+	// is [Device.unrestored]'s. Guarded by mutex. [Device.ForgetGroup] tries each one's restore
+	// again before it answers (R30); a hold of the group clears it.
+	notRead map[string]readClass
 
 	// joinStage is the store the engine was built over: [Device.stateStore] with one join at a time
 	// staged in memory until [Device.Join] has finished judging it. A join holds admitMutex from
@@ -477,7 +477,7 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		commitAuthorizer: config.CommitAuthorizer,
 		groups:           map[string]*Group{},
 		unrestored:       map[string]bool{},
-		notRead:          map[string]notReadEntry{},
+		notRead:          map[string]readClass{},
 		joinStage:        stage,
 		inbox:            inbox,
 	}, nil

@@ -25,7 +25,8 @@ const (
 )
 
 // classifyRead is THE ONE CLASSIFIER of a failed read of this device's disk, and IT IS
-// FAIL-CLOSED (R29): only a failure it can PROVE permanent is permanent.
+// FAIL-CLOSED (R29, amended by R30): only a failure it can PROVE permanent is permanent, and the
+// proof is about the DATA, never about the environment.
 //
 // WHY THE RULE IS INVERTED: ONE PROMISE LEAKED THREE TIMES. [Device.ForgetGroup] leaves a group
 // WITHOUT the owner's question only when that group failed to restore for a PERMANENT reason, and
@@ -42,29 +43,36 @@ const (
 // this build can never read the group, and everything this code cannot prove is UNPROVEN, which is
 // never erased.
 //
+// AND THE PROOF IS ABOUT THE DATA (R30). A permission refused and the medium were on the first
+// allow-list, and a deny ACL at startup, lifted, then a lock at the moment of the leave, erased a
+// group on what startup had seen. A permission or a medium can change while the data is intact, so
+// both are unproven; and the erase is decided on a FRESH attempt, never on an earlier note
+// ([Device.restoreForLeave]).
+//
 // THE THREE CLASSES.
-//   - PERMANENT, an explicit allow-list:
+//   - PERMANENT, an explicit allow-list, each a fact about the data:
 //     (1) a verdict this code made on bytes it read: [ErrStateStoreFormat] (a checksum, a format, a
 //     record whose decode or id does not match), and an epoch state that does not decode (the
 //     syntax package's decode sentinels, which are its whole error contract);
 //     (2) a refusal by name: [ErrGroupPredatesJoinSeal];
 //     (3) a required file absent inside an existing group: [ErrStateNotFound], and the platform's
 //     not-found errnos;
-//     (4) the platform's errnos for a path of the wrong type, a permission this device has not got,
-//     and the medium ([permanentErrnos]).
+//     (4) a path of the wrong type: the platform's errnos for it ([permanentErrnos]).
 //   - TRANSIENT: a failure of this store's carrying a sharing or lock violation
 //     ([transientErrnos], R26's list, unchanged).
-//   - UNPROVEN: everything else -- a failure of this store's with no errno, an errno in neither
-//     list (EMFILE, ENOMEM; Windows 4, 8, 1450), and a failure that is not the store's (a cancelled
+//   - UNPROVEN: everything else -- a permission refused (EACCES, EPERM; Windows 5), the medium (EIO;
+//     Windows 23, 27, 30), a failure of this store's with no errno, an errno in neither list
+//     (EMFILE, ENOMEM; Windows 4, 8, 1450), and a failure that is not the store's (a cancelled
 //     context, an engine error).
 //
 // AN ERRNO IS JUDGED ONLY WHEN THE STORE CARRIED IT ([ErrStateStoreState]), and it is judged
 // before any sentinel: it is the OS's own account of that read, the most specific evidence there
 // is. An errno anybody else carried proves nothing about this disk.
 //
-// IT IS APPLIED where a restore failure is recorded ([Device.Restore]), where the list classifies a
-// record ([DurableStateStore.GroupRecords], through groupRecordInLocked), where [Device.ForgetGroup]
-// decides (recordOnDisk), and where a failed take of a join code is worded ([Device.Join]).
+// IT IS APPLIED where a restore failure is recorded ([Device.Restore], and the leave's own fresh
+// attempt), where the list classifies a record ([DurableStateStore.GroupRecords], through
+// groupRecordInLocked), where [Device.ForgetGroup] decides (recordOnDisk), and where a failed take
+// of a join code is worded ([Device.Join]).
 func classifyRead(err error) readClass {
 	if err == nil {
 		return readUnproven

@@ -106,23 +106,30 @@ func tooManyOpenFiles() syscall.Errno {
 	return syscall.EMFILE
 }
 
-// ONLY AN ALLOW-LISTED FAILURE IS PROVEN PERMANENT (R29). [classifyRead] is held over its three
-// classes, both ways, against lists written out here and not read from the code: R29's
-// proven-permanent errnos and sentinels are permanent; R26's sharing and lock violations are
-// transient; and everything else is UNPROVEN -- a store error with no errno, an errno in neither
-// list (too many open files, out of memory, no system resources), a permanent-looking errno the
-// store did not carry, a cancelled context, an engine refusal, nil.
+// ONLY AN ALLOW-LISTED FAILURE IS PROVEN PERMANENT, AND ONLY A FACT ABOUT THE DATA IS ON THE LIST
+// (R29, amended by R30). [classifyRead] is held over its three classes, both ways, against lists
+// written out here and not read from the code: R30's proven-permanent errnos (a required file
+// absent, a path of the wrong type) and sentinels are permanent; R26's sharing and lock violations
+// are transient; and everything else is UNPROVEN -- a permission refused and the medium, which are
+// facts about the environment, a store error with no errno, an errno in neither list (too many open
+// files, out of memory, no system resources), a permanent-looking errno the store did not carry, a
+// cancelled context, an engine refusal, nil.
+//
+// THIS CASE WAS CHANGED BY R30: it held EACCES, EPERM, EIO and Windows 5, 23, 27 and 30 as proven
+// permanent, which R29 had ruled and R30 withdrew. They are held as unproven now.
 //
 // WHAT WOULD GO RED: a classifier that answers "permanent" by default, which is the fail-open rule
-// that leaked three times; or one that drops a class R29 proves permanent, and that group can no
-// longer be left.
+// that leaked three times; one that drops a class R30 proves permanent, and that group can no longer
+// be left; or one that calls a refused permission damage, and intact data is erased because of the
+// environment.
 func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
-	permanentByErrno := []syscall.Errno{syscall.ENOENT, syscall.EISDIR, syscall.ENOTDIR, syscall.ELOOP,
+	permanentByErrno := []syscall.Errno{syscall.ENOENT, syscall.EISDIR, syscall.ENOTDIR, syscall.ELOOP}
+	unprovenByErrno := []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOMEM,
 		syscall.EACCES, syscall.EPERM, syscall.EIO}
-	unprovenByErrno := []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOMEM}
 	if runtime.GOOS == "windows" {
-		permanentByErrno = append(permanentByErrno, 2, 3, 1, 267, 1921, 5, 23, 27, 30)
-		unprovenByErrno = []syscall.Errno{4, 8, 1450, 21} // too many open files, no memory, no resources, not ready
+		permanentByErrno = append(permanentByErrno, 2, 3, 1, 267, 1921)
+		// too many open files, no memory, no resources, not ready; access denied; the medium
+		unprovenByErrno = append(unprovenByErrno, 4, 8, 1450, 21, 5, 23, 27, 30)
 	}
 	for _, errno := range permanentByErrno {
 		if got := classifyRead(asStoreRead(errno)); got != readPermanent {
@@ -166,9 +173,11 @@ func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
 }
 
 // A RESTORE FAILURE THIS BUILD CANNOT CLASSIFY IS NOT NOTED, AND THE LEAVE IS REFUSED (R29, (a) to
-// (c)). Three failures of one group's epoch-state read, none of which proves the group can never be
-// read: (a) a store error that carries no errno, (b) this platform's too-many-open-files errno, and
-// (c) a failure that is not the store's at all. For each: Restore reports the group under
+// (c); R30, (e) and (f)). Failures of one group's epoch-state read, none of which proves the group
+// can never be read: (a) a store error that carries no errno, (b) this platform's
+// too-many-open-files errno, (c) a failure that is not the store's at all, (e) a permission refused
+// and (f) the medium, the two R30 took off the proven list because they are facts about the
+// environment. For each, the failure lasting through the leave's own fresh attempt: Restore reports the group under
 // [ErrGroupReadUnproven] and not as damage, notes it nowhere as a group that will not come back,
 // and the leave of it is refused with that same sentence and "so nothing was left", with every
 // file of the group unchanged.
@@ -184,6 +193,8 @@ func TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused(t 
 		{"(a) a store error with no errno", fmt.Errorf("%w: the epoch state could not be read, and the read carried no errno", ErrStateStoreState)},
 		{"(b) too many open files", asStoreRead(tooManyOpenFiles())},
 		{"(c) a failure that is not the store's", fmt.Errorf("the engine could not load the group: %w", context.Canceled)},
+		{"(e) a permission refused", asStoreRead(syscall.EACCES)},
+		{"(f) the medium", asStoreRead(syscall.EIO)},
 	} {
 		dir, groupId := failClosedScene(t)
 		store, device := failClosedRestart(t, dir, groupId, one.failWith)

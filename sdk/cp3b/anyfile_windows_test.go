@@ -103,8 +103,10 @@ func anyFileTalkingOwnerPair(t *testing.T) (*persona, []byte) {
 // WHOLE LAYOUT, and the layout is ENUMERATED AT RUN TIME from a real owner's directory -- every
 // file and every directory under it, the directory itself included -- not listed here, so a file a
 // later build adds is held too. For each one, on a fresh owner pair: it is held while alice
-// restores, then released. Nothing of the group may change, the leave after the release must not
-// erase it, and the next Restore brings it back and asks the owner's question.
+// restores, then released. Nothing of the group may change, and the leave after the release must
+// not erase it: it tries the group's restore again (R30), which brings it back and asks the owner's
+// question -- or, for a record the list could not read and so noted nowhere, it answers
+// ErrGroupNotRestored, and the next Restore brings the group back and the owner is asked.
 //
 // WHAT WOULD GO RED: a restore failure on any file that is noted as "will not come back" without
 // proof -- measured on the `sent` directory, whose read had dropped its errno: files 5 to 0.
@@ -150,14 +152,12 @@ func TestAnyFileOfTheGroupHeldDuringRestoreIsNotLeftUnasked(t *testing.T) {
 			restored, err := alice.device.Restore(ctx)
 			t.Logf("the Restore while it is held: %d group(s), %v", len(restored), err)
 			release()
+			err = nil
 			if len(restored) == 0 {
-				err := alice.device.ForgetGroup(groupId)
+				err = alice.device.ForgetGroup(groupId)
 				t.Logf("the owner's leave after the release: %v", err)
-				if err == nil || errors.Is(err, urmessage.ErrForgetUnfinished) {
-					t.Errorf("the owner's leave after the release answered %v: the group was left without the owner's question", err)
-				} else if !errors.Is(err, urmessage.ErrGroupRecordNotReadNow) && !errors.Is(err, urmessage.ErrGroupReadUnproven) &&
-					!errors.Is(err, urmessage.ErrGroupNotRestored) {
-					t.Errorf("the owner's leave after the release answered %v, want a not-read refusal or ErrGroupNotRestored", err)
+				if !errors.Is(err, urmessage.ErrOwnerMustTransfer) && !errors.Is(err, urmessage.ErrGroupNotRestored) {
+					t.Errorf("the owner's leave after the release answered %v, want the owner's question (the fresh restore brought the group back) or ErrGroupNotRestored", err)
 				}
 				after := advGroupFiles(t, alice.stateDir, groupId)
 				if len(after) != len(before) {
@@ -168,12 +168,16 @@ func TestAnyFileOfTheGroupHeldDuringRestoreIsNotLeftUnasked(t *testing.T) {
 						t.Errorf("%s of the group changed or went", name)
 					}
 				}
-				if restored, err := alice.device.Restore(ctx); err != nil || len(restored) != 1 {
-					t.Fatalf("the next Restore answered %d group(s), %v, want the group back", len(restored), err)
+				if errors.Is(err, urmessage.ErrGroupNotRestored) {
+					if restored, err := alice.device.Restore(ctx); err != nil || len(restored) != 1 {
+						t.Fatalf("the next Restore answered %d group(s), %v, want the group back", len(restored), err)
+					}
 				}
 			}
-			if err := alice.device.ForgetGroup(groupId); !errors.Is(err, urmessage.ErrOwnerMustTransfer) {
-				t.Errorf("the restored owner's leave answered %v, want ErrOwnerMustTransfer", err)
+			if !errors.Is(err, urmessage.ErrOwnerMustTransfer) {
+				if err := alice.device.ForgetGroup(groupId); !errors.Is(err, urmessage.ErrOwnerMustTransfer) {
+					t.Errorf("the restored owner's leave answered %v, want ErrOwnerMustTransfer", err)
+				}
 			}
 		})
 	}

@@ -292,18 +292,18 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 			// ANY OTHER FAILURE, OF ANY FILE OF THE GROUP, IS NOT (R26's V1, R29's W1): the
 			// subject is the group's restore, not a file. A transient failure (another process
 			// held a file) and an unproven one (nothing proves it will or will not pass) are each
-			// reported under their own sentinel and kept in the not-read set instead, so the leave
-			// refuses with that same true sentence until a Restore reads the group or finds it
-			// damaged (W2). Both reports begin as the list's own report of a record not read
-			// begins, so an app reads one sentence for each.
+			// reported under their own sentinel and kept in the not-read set instead (W2). Either
+			// way the note is only the LATEST attempt's: a leave of the group tries its restore
+			// again and decides on that (R30). Both reports begin as the list's own report of a
+			// record not read begins, so an app reads one sentence for each.
 			switch classifyRead(err) {
 			case readPermanent:
 				self.noteUnrestored(record.GroupId)
 			case readTransient:
-				self.noteNotRead(record.GroupId, readTransient, err)
+				self.noteNotRead(record.GroupId, readTransient)
 				err = fmt.Errorf("%w: %w: group %x: %w", ErrRestore, ErrGroupRecordNotReadNow, record.GroupId, err)
 			default:
-				self.noteNotRead(record.GroupId, readUnproven, err)
+				self.noteNotRead(record.GroupId, readUnproven)
 				err = fmt.Errorf("%w: %w: group %x: %w", ErrRestore, ErrGroupReadUnproven, record.GroupId, err)
 			}
 			if firstFailure == nil {

@@ -12,13 +12,13 @@ var transientErrnos = []syscall.Errno{
 }
 
 // permanentErrnos is [classifyRead]'s allow-list of errnos that PROVE a read will never succeed on
-// Windows (R29). The numbered ones are what the OS answers; the named ones are the values package
-// syscall invents on Windows and package os itself returns (a listing of a regular file answers
-// ENOTDIR), each meaning exactly what its name says.
+// Windows, and each is a fact about the DATA (R29, amended by R30): a required file absent, or a path
+// of the wrong type. The numbered ones are what the OS answers; the named ones are the values package
+// syscall defines on Windows, which package os itself returns, each meaning what its name says
+// (ENOENT is 2 and ENOTDIR is 3 there). A permission refused (5) and the medium (23, 27, 30) are NOT
+// here: they are facts about the environment, which can change while the data is intact.
 var permanentErrnos = []syscall.Errno{
 	2, 3, // ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND: a required file absent
 	1, 267, 1921, // ERROR_INVALID_FUNCTION, ERROR_DIRECTORY, ERROR_CANT_RESOLVE_FILENAME: the wrong type
-	5,          // ERROR_ACCESS_DENIED: a permission this device has not got
-	23, 27, 30, // ERROR_CRC, ERROR_SECTOR_NOT_FOUND, ERROR_READ_FAULT: the medium
-	syscall.ENOENT, syscall.EISDIR, syscall.ENOTDIR, syscall.ELOOP, syscall.EACCES, syscall.EPERM, syscall.EIO,
+	syscall.ENOENT, syscall.EISDIR, syscall.ENOTDIR, syscall.ELOOP,
 }

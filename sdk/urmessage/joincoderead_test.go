@@ -74,7 +74,9 @@ func TestAJoinCodeTheStoreFailedToReadIsStillGoodAndOneItDoesNotHoldIsNot(t *tes
 // A JOIN CODE THAT WILL NEVER READ, OR THAT A TAKE REMOVED, IS NOT SAID TO BE STILL GOOD (R26, the
 // fix review's V3). Three failed takes of the join code an honest invite was made for, each with
 // the sentence that is true of it:
-//   - a read that failed for good (a deny ACL): no join code, since it will never read;
+//   - a read this build cannot prove will pass (a deny ACL; R30 calls it unproven, and only a
+//     sharing or lock violation is the window's "still good"): no join code, which is the sentence
+//     a new join code makes true whatever happens to the old one;
 //   - a record whose octets are damaged: no join code, for the same reason;
 //   - a take that removed the file and then failed (its directory sync): the join code is SPENT,
 //     since nothing will put it back.
@@ -88,7 +90,7 @@ func TestAJoinCodeThatWillNeverReadOrWasRemovedIsNotSaidToBeStillGood(t *testing
 		failWith error
 		want     error
 	}{
-		{"a read that failed for good", fmt.Errorf("%w: the key package could not be read: %w", ErrStateStoreState,
+		{"a read this build cannot prove will pass", fmt.Errorf("%w: the key package could not be read: %w", ErrStateStoreState,
 			&os.PathError{Op: "open", Path: "kp", Err: syscall.EACCES}), ErrNoJoinCodeForInvite},
 		{"a record whose octets are damaged", fmt.Errorf("%w: the record's checksum is not the hash of the record",
 			ErrStateStoreFormat), ErrNoJoinCodeForInvite},

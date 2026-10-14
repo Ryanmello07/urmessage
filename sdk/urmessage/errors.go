@@ -775,11 +775,11 @@ var (
 	// Restore having tried, and without the owner's question, which is asked of a roster this
 	// group no longer has.
 	//
-	// A FILE THAT COULD NOT BE READ FOR A PROVEN-PERMANENT REASON IS THIS TOO (R26, R29): a
-	// directory or any other non-file standing at the record's name, a deny ACL, a symlink loop,
-	// the medium. A record that will never read must stay one a device can leave. A read that
-	// failed for any reason [classifyRead] cannot prove permanent is NOT this: it is
-	// [ErrGroupRecordNotReadNow] or [ErrGroupReadUnproven].
+	// A FILE THAT COULD NOT BE READ FOR A PROVEN-PERMANENT REASON IS THIS TOO (R26, R29, R30): a
+	// directory or any other non-file standing at the record's name, or a symlink loop -- a fact
+	// about the data. A record that will never read must stay one a device can leave. A read that
+	// failed for any reason [classifyRead] cannot prove permanent is NOT this, a permission refused
+	// and the medium among them: it is [ErrGroupRecordNotReadNow] or [ErrGroupReadUnproven].
 	ErrGroupRecordDamaged = errors.New("urmessage: a group record on this device's disk does not read, so that group cannot be restored; ForgetGroup leaves it, and it can then be joined again")
 
 	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ JUST NOW -- any file a
@@ -793,9 +793,11 @@ var (
 	ErrGroupRecordNotReadNow = errors.New("urmessage: a file of a group on this device's disk could not be read just now, so that group was not restored this time; nothing of it was changed, and the next Restore tries it again")
 
 	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ FOR A REASON THIS BUILD
-	// CANNOT CLASSIFY (R29): [classifyRead]'s unproven class -- a failure of the store's with no
-	// errno, an errno in neither of its lists (too many open files, out of memory, a device not
-	// ready), or a failure that is not the store's. The erase without the owner's question needs
+	// CANNOT CLASSIFY (R29, R30): [classifyRead]'s unproven class -- a permission refused, the
+	// medium, a failure of the store's with no errno, an errno in neither of its lists (too many
+	// open files, out of memory, a device not ready), or a failure that is not the store's. A
+	// permission and a medium are facts about the environment, which can change while the data
+	// is intact, so fixing the folder's access is the way through. The erase without the owner's question needs
 	// PROOF that the group can never be read, and this is not proof, so the group is treated as
 	// [ErrGroupRecordNotReadNow] is: not restored, nothing changed, and [Device.ForgetGroup] of it
 	// refused ("so nothing was left"). It is left once a Restore reads it, or finds it damaged.
