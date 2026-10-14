@@ -39,9 +39,9 @@ import (
 // WHAT AN ERASE IS, AND WHY THE LIST OF THEM IS DERIVED. The primitives are package os's Remove,
 // RemoveAll and Truncate, and any Truncate method. A function with a site this list calls a STEP --
 // an erase whose authority is its caller's, such as removeLocked, or DeleteGroupRecord's own
-// removals -- is an erase itself, so every call of it, under its name and whatever its receiver,
-// is a site too, to a fixed point. A helper that wraps an erase therefore cannot hide its callers:
-// they are sites, and each needs a sentence. A site whose entry says NOT A GROUP'S FILE (a
+// removals -- is an erase itself, so every call of it -- through any receiver, or by its bare name
+// for a function of the package -- is a site too, to a fixed point. A helper that wraps an erase
+// therefore cannot hide its callers: they are sites, and each needs a sentence. A site whose entry says NOT A GROUP'S FILE (a
 // temporary file, a private key, a join code, the creation mark, an empty directory) does not make
 // its function an erase.
 //
@@ -60,36 +60,67 @@ func TestEveryEraseInThisRepositoryNamesItsAuthority(t *testing.T) {
 }
 
 // THE CONTROL: AN ERASE PLANTED WITH NO AUTHORITY IS FOUND, AND IT ALONE (R33 (3)). The same scan,
-// over the same sources and one planted file whose one function leaves a group by calling the
-// store's DeleteGroupRecord -- the erase every leave goes through, and not a primitive: it is an
-// erase only because the derivation finds the steps inside it -- with no mark, no verdict and no
-// creation mark behind it. The gate must report that site as one that names no authority, and
-// nothing else, so that it fires for the planted call's own reason and not because some other row
-// came back.
+// over the same sources and one planted file at a time:
+//   - a function that leaves a group by calling the store's DeleteGroupRecord -- the erase every
+//     leave goes through, and not a primitive: it is an erase only because the derivation finds the
+//     steps inside it -- with no mark, no verdict and no creation mark behind it;
+//   - a helper of the package that wraps os.RemoveAll, and a function that erases a directory by
+//     calling that helper by its bare name: the derivation must make the helper an erase, so that
+//     its caller is a site too.
+//
+// For each, the gate must report the planted sites as ones that name no authority, and nothing
+// else, so that it fires for the planted calls' own reason and not because some other row came
+// back.
 func TestTheEraseGateFindsAPlantedEraseAndOnlyIt(t *testing.T) {
-	files := eraseGateSources(t)
-	clean, _ := eraseGateScan(files)
+	clean, _ := eraseGateScan(eraseGateSources(t))
 	if problems := eraseGateProblems(clean); len(problems) != 0 {
-		t.Fatalf("CONTROL FAILED: the scan without the planted file already reports %d problem(s), so the planted one could not be told apart: %v", len(problems), problems)
+		t.Fatalf("CONTROL FAILED: the scan without a planted file already reports %d problem(s), so a planted one could not be told apart: %v", len(problems), problems)
 	}
-	const plantedName = "sdk/urmessage/zz_planted_erase.go"
-	planted, err := parser.ParseFile(token.NewFileSet(), plantedName, `package urmessage
+	for _, one := range []struct {
+		name   string
+		source string
+		want   []string
+	}{
+		{"sdk/urmessage/zz_planted_erase.go", `package urmessage
 
 func (self *Device) plantedLeave(store DeviceStore, groupId []byte) error {
 	return store.DeleteGroupRecord(groupId)
 }
-`, 0)
-	if err != nil {
-		t.Fatalf("CONTROL FAILED: the planted source does not parse: %v", err)
+`, []string{"sdk/urmessage/zz_planted_erase.go|Device.plantedLeave|DeleteGroupRecord(groupId)#1"}},
+		{"sdk/urmessage/zz_planted_helper.go", `package urmessage
+
+import "os"
+
+func plantedNuke(path string) error {
+	return os.RemoveAll(path)
+}
+
+func (self *DurableStateStore) plantedForget(groupId []byte) error {
+	return plantedNuke(self.groupDir(groupId))
+}
+`, []string{
+			"sdk/urmessage/zz_planted_helper.go|DurableStateStore.plantedForget|plantedNuke(self.groupDir(groupId))#1",
+			"sdk/urmessage/zz_planted_helper.go|plantedNuke|os.RemoveAll(path)#1",
+		}},
+	} {
+		files := eraseGateSources(t)
+		planted, err := parser.ParseFile(token.NewFileSet(), one.name, one.source, 0)
+		if err != nil {
+			t.Fatalf("CONTROL FAILED: the planted source %s does not parse: %v", one.name, err)
+		}
+		files[one.name] = planted
+		found, _ := eraseGateScan(files)
+		problems := eraseGateProblems(found)
+		matched := len(problems) == len(one.want)
+		for at := 0; matched && at < len(problems); at++ {
+			matched = strings.Contains(problems[at], one.want[at]+" names no authority")
+		}
+		if !matched {
+			t.Errorf("the gate over %s reported %d problem(s), want exactly the planted sites %v: %v", one.name, len(problems), one.want, problems)
+			continue
+		}
+		t.Logf("%s: the planted erase is reported, and it alone: %v", one.name, one.want)
 	}
-	files[plantedName] = planted
-	found, _ := eraseGateScan(files)
-	problems := eraseGateProblems(found)
-	const want = "sdk/urmessage/zz_planted_erase.go|Device.plantedLeave|DeleteGroupRecord(groupId)#1"
-	if len(problems) != 1 || !strings.Contains(problems[0], want) || !strings.Contains(problems[0], "names no authority") {
-		t.Fatalf("the gate over a planted erase with no authority reported %d problem(s), want exactly the planted site %s: %v", len(problems), want, problems)
-	}
-	t.Logf("the planted erase is reported, and it alone: %s", problems[0])
 }
 
 const (
@@ -236,9 +267,10 @@ func eraseGateScan(files map[string]*ast.File) (map[string]bool, []string) {
 }
 
 // eraseGateSites is every reference to an erase, by key, with the simple name of the function it
-// stands in. A reference is a call or a method value: a selector naming package os's Remove,
-// RemoveAll or Truncate under whatever name the file imports os as, or naming a tracked erase
-// whatever its receiver. A declaration and an interface's method spec are not references.
+// stands in. A reference is a call or a value: a selector naming package os's Remove, RemoveAll or
+// Truncate under whatever name the file imports os as, a selector naming a tracked erase whatever
+// its receiver, or a tracked erase's bare name. A declaration and an interface's method spec are
+// not references.
 func eraseGateSites(files map[string]*ast.File, tracked map[string]bool) map[string]string {
 	found := map[string]string{}
 	names := []string{}
@@ -260,31 +292,56 @@ func eraseGateSites(files map[string]*ast.File, tracked map[string]bool) map[str
 				ordinals[function] = map[string]int{}
 			}
 			ordinal := ordinals[function]
-			calls := map[*ast.SelectorExpr]*ast.CallExpr{}
+			calls := map[ast.Expr]*ast.CallExpr{}
+			// names that are not references: a selector's own name (the selector is the reference),
+			// and every name a declaration introduces -- a field, a parameter, an interface's method,
+			// a type, a variable
+			declared := map[*ast.Ident]bool{}
 			ast.Inspect(body, func(node ast.Node) bool {
-				if call, ok := node.(*ast.CallExpr); ok {
-					if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
-						calls[selector] = call
+				switch one := node.(type) {
+				case *ast.CallExpr:
+					calls[one.Fun] = one
+				case *ast.SelectorExpr:
+					declared[one.Sel] = true
+				case *ast.Field:
+					for _, name := range one.Names {
+						declared[name] = true
+					}
+				case *ast.TypeSpec:
+					declared[one.Name] = true
+				case *ast.ValueSpec:
+					for _, name := range one.Names {
+						declared[name] = true
 					}
 				}
 				return true
 			})
 			ast.Inspect(body, func(node ast.Node) bool {
-				selector, ok := node.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				callee := selector.Sel.Name
-				if ident, isIdent := selector.X.(*ast.Ident); isIdent && ident.Name == osName {
-					if callee != "Remove" && callee != "RemoveAll" && callee != "Truncate" {
+				var callee string
+				var reference ast.Expr
+				arguments := "(method value)"
+				switch one := node.(type) {
+				case *ast.SelectorExpr:
+					callee, reference = one.Sel.Name, one
+					if ident, isIdent := one.X.(*ast.Ident); isIdent && ident.Name == osName {
+						if callee != "Remove" && callee != "RemoveAll" && callee != "Truncate" {
+							return true
+						}
+						callee = "os." + callee
+					} else if !tracked[callee] {
 						return true
 					}
-					callee = "os." + callee
-				} else if !tracked[callee] {
+				case *ast.Ident:
+					// A BARE NAME: a function of the package that erases, called or taken as a value
+					// by its name alone
+					if declared[one] || !tracked[one.Name] {
+						return true
+					}
+					callee, reference, arguments = one.Name, one, "(function value)"
+				default:
 					return true
 				}
-				arguments := "(method value)"
-				if call := calls[selector]; call != nil {
+				if call := calls[reference]; call != nil {
 					rendered := []string{}
 					for _, argument := range call.Args {
 						var out bytes.Buffer
