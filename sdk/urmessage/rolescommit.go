@@ -276,7 +276,7 @@ func (self *Group) outgoingAuthorizationLocked(intent *outgoingCommit) (*CommitA
 	for at, encoded := range intent.addKeyPackages {
 		var keyPackage mls.KeyPackage
 		if err := syntax.Unmarshal(encoded, &keyPackage); err != nil {
-			return nil, fmt.Errorf("urmessage: key package %d of %d does not decode: %w", at, len(intent.addKeyPackages), err)
+			return nil, fmt.Errorf("%w: key package %d of %d does not decode: %w", ErrKeyPackageInvalid, at, len(intent.addKeyPackages), err)
 		}
 		for occupied[next] {
 			next += 1

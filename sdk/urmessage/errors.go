@@ -820,4 +820,18 @@ var (
 	// is what is left: the store would not take the join code back, or the joined state was
 	// written and the group's record then could not be. Make a new join code and be added again.
 	ErrJoinCodeSpent = errors.New("urmessage: this join did not complete and its join code is spent; make a new join code and ask to be added again")
+
+	// THE THREE REFUSALS AN ADDER MAKES OF A JOIN CODE, each before a commit is staged, so the group
+	// is exactly where it was.
+	//
+	// Invalid: the join code does not decode, is not a key package this suite admits, has expired,
+	// or its leaf publishes no key a join seal can be made to.
+	ErrKeyPackageInvalid = errors.New("urmessage: this join code is not a valid key package")
+	// The join code is valid and does not list the join seal capability, so the device that made
+	// it could not open the invite this build would answer with.
+	ErrJoinerCannotOpenSealedInvite = errors.New("urmessage: this join code was made by a build that cannot open a sealed invite; ask for a join code from an updated URmessage")
+	// The join code is valid, and its identity already has a leaf in this group: most often an
+	// invitation that was made and never opened. A group holds one leaf per identity it admits
+	// this way, so the leaf that stands is removed first.
+	ErrJoinerAlreadyHasALeaf = errors.New("urmessage: this identity already has an entry in this group, perhaps from an invitation that was never opened; remove that entry, then add the new join code")
 )

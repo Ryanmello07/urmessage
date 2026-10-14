@@ -15,8 +15,10 @@ import (
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/mls"
 	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/syntax"
 )
 
 // THE JOIN SEAL'S FORMATS, as octets a second implementation can check, and the seal itself from
@@ -263,5 +265,156 @@ func TestAHookThatRefusesLeavesNothingStagedAndNothingSent(t *testing.T) {
 	}
 	if sent := server.frames.Load() - before; sent == 0 {
 		t.Fatalf("CONTROL FAILED: a publish whose hook did not refuse sent the server no frame (%v), so the zero above proves nothing", err)
+	}
+}
+
+// keyPackageWithout is a valid key package of bob's own device that does not list one capability.
+func keyPackageListing(t *testing.T, extensions []mls.ExtensionType) []byte {
+	t.Helper()
+	crypto, err := mls.NewCryptoProvider(deviceCipherSuite)
+	if err != nil {
+		t.Fatalf("the crypto provider: %v", err)
+	}
+	signer, signerPub, err := crypto.SignatureKeyPair()
+	if err != nil {
+		t.Fatalf("the signature key pair: %v", err)
+	}
+	leafKeysBody, _ := mintLeafKeys(t)
+	leafKeys, err := mls.ParseLeafKeysExtension(leafKeysBody)
+	if err != nil {
+		t.Fatalf("the leaf keys body: %v", err)
+	}
+	extension, err := leafKeys.Encode()
+	if err != nil {
+		t.Fatalf("the leaf keys extension: %v", err)
+	}
+	keyPackage, initPrivate, encryptPrivate, err := mls.NewKeyPackageWithSigner(crypto, crypto.Suite(), signer,
+		mls.BasicCredential(signerPub), mls.Capabilities{
+			Versions:     []mls.ProtocolVersion{mls.ProtocolVersionMls10},
+			CipherSuites: mls.Suites(),
+			Extensions:   extensions,
+			Proposals:    []mls.ProposalType{},
+			Credentials:  []mls.CredentialType{mls.CredentialTypeBasic},
+		}, []mls.Extension{extension})
+	if err != nil {
+		t.Fatalf("NewKeyPackageWithSigner: %v", err)
+	}
+	defer keyPackage.Zeroize()
+	defer clear(initPrivate)
+	defer clear(encryptPrivate)
+	encoded, err := syntax.Marshal(keyPackage)
+	if err != nil {
+		t.Fatalf("encoding the key package: %v", err)
+	}
+	return encoded
+}
+
+// A join code is judged BEFORE anything is staged: a damaged one is told it is invalid, one from a
+// build that cannot open a sealed invite is told so by name, and after either the founder is where
+// it was and adds the honest join code.
+func TestAnAdderRefusesAJoinCodeItCannotSealToBeforeAnythingIsStaged(t *testing.T) {
+	ctx := context.Background()
+	alice, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	for _, device := range []*Device{alice, bob} {
+		if err := device.Connect(ctx); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+	}
+	group, err := alice.CreateGroup(ctx, bytes.Repeat([]byte{0x47}, GroupIdBytes))
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	honest, err := bob.KeyPackage()
+	if err != nil {
+		t.Fatalf("bob's KeyPackage: %v", err)
+	}
+	damaged := bytes.Clone(honest)
+	damaged[len(damaged)-1] ^= 0x01 // the last octet of its signature
+	withoutTheCapability := keyPackageListing(t, []mls.ExtensionType{
+		mls.ExtensionTypeUrmessageGroupPolicy, mls.ExtensionTypeUrmessageLeafKeys,
+	})
+	// THE CONTROL for the capability row: the same fixture WITH the capability is not refused for it
+	withTheCapability := keyPackageListing(t, []mls.ExtensionType{
+		mls.ExtensionTypeUrmessageGroupPolicy, mls.ExtensionTypeUrmessageLeafKeys, mls.ExtensionTypeUrmessageJoinSeal,
+	})
+	if _, err := alice.joinerOf(withTheCapability); err != nil {
+		t.Fatalf("CONTROL FAILED: the fixture's key package is refused with the capability listed: %v", err)
+	}
+
+	for _, one := range []struct {
+		name     string
+		joinCode []byte
+		want     error
+	}{
+		{"a join code with one bit of its signature flipped", damaged, ErrKeyPackageInvalid},
+		{"octets that are not a key package", []byte("not a key package"), ErrKeyPackageInvalid},
+		{"a join code that does not list the join seal", withoutTheCapability, ErrJoinerCannotOpenSealedInvite},
+	} {
+		if _, err := group.AddMember(one.joinCode); !errors.Is(err, one.want) {
+			t.Errorf("%s answered %v, want %v", one.name, err, one.want)
+		}
+		if epoch := group.handle.Epoch(); epoch != 0 {
+			t.Fatalf("%s left the founder's handle at epoch %d", one.name, epoch)
+		}
+		if _, err := group.handle.PendingEpoch(); err == nil {
+			t.Fatalf("%s left a commit staged on the founder", one.name)
+		}
+	}
+	if _, err := group.AddMember(honest); err != nil {
+		t.Fatalf("the honest join code after three refused ones: %v", err)
+	}
+}
+
+// THE JOINER'S LEAF IS THE WHOLE LEAF THE JOIN CODE PUBLISHED, and not merely a leaf under its
+// signature key. One device mints two join codes: they carry one signature key and two different
+// leaves. The first is added; asked for the leaf of the SECOND in the tree that add returned, the
+// search must refuse, because the leaf standing there is not the one that join code published.
+//
+// WHAT WOULD GO RED: find the leaf by signature key alone, and the second join code is answered
+// the first one's leaf, which is a seal and an authenticator made for a leaf its holder never
+// published.
+func TestTheJoinersLeafIsTheWholeLeafTheJoinCodePublished(t *testing.T) {
+	ctx := context.Background()
+	alice, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	for _, device := range []*Device{alice, bob} {
+		if err := device.Connect(ctx); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+	}
+	group, err := alice.CreateGroup(ctx, bytes.Repeat([]byte{0x47}, GroupIdBytes))
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	added, err := bob.KeyPackage()
+	if err != nil {
+		t.Fatalf("bob's first KeyPackage: %v", err)
+	}
+	other, err := bob.KeyPackage()
+	if err != nil {
+		t.Fatalf("bob's second KeyPackage: %v", err)
+	}
+	_, _, ratchetTree, err := group.handle.CommitAdd([][]byte{added})
+	if err != nil {
+		t.Fatalf("CommitAdd: %v", err)
+	}
+	defer group.handle.ClearPendingCommit()
+	decode := func(joinCode []byte) *mls.KeyPackage {
+		decoded := &mls.KeyPackage{}
+		if err := syntax.Unmarshal(joinCode, decoded); err != nil {
+			t.Fatalf("decoding a join code: %v", err)
+		}
+		return decoded
+	}
+	// THE CONTROL: the join code that WAS added is found, at the second leaf
+	if leaf, err := joinerLeafIn(ratchetTree, decode(added)); err != nil || leaf != 1 {
+		t.Fatalf("CONTROL FAILED: the added join code's leaf answered %d, %v, want 1", leaf, err)
+	}
+	if !bytes.Equal(decode(added).LeafNode.SignatureKey, decode(other).LeafNode.SignatureKey) {
+		t.Fatalf("CONTROL FAILED: one device's two join codes carry two signature keys, so this is not the case it is written for")
+	}
+	if leaf, err := joinerLeafIn(ratchetTree, decode(other)); err == nil {
+		t.Fatalf("a join code that was never added was answered leaf %d: the search matched its signature key and not its leaf", leaf)
 	}
 }

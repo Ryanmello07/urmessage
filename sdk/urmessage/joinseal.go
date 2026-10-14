@@ -3,10 +3,13 @@ package urmessage
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/urnetwork/message/message"
 	"github.com/urnetwork/message/messagegroup"
+	"github.com/urnetwork/message/mls"
 	"github.com/urnetwork/message/syntax"
 )
 
@@ -70,6 +73,85 @@ const (
 
 	groupHandleKeyBytes = 32
 )
+
+// joinerKeys is what an adder reads off a join code before it stages anything: the decoded key
+// package, and the X-Wing key its leaf publishes.
+type joinerKeys struct {
+	keyPackage *mls.KeyPackage
+	xwing      *messagegroup.XwingPublicKey
+}
+
+// joinerOf judges a join code, in this order, BEFORE a commit is staged: it decodes, it is a valid
+// key package of this suite today, it lists the join seal capability, and its leaf publishes an
+// X-Wing key a seal can be made to.
+//
+// VALIDITY BEFORE CAPABILITY, so that a damaged join code is told it is damaged and not that it is
+// old. The capability is also required by every group this build founds, so connect/mls refuses a
+// key package without it at CommitAdd; it is asked here as well so that the refusal has a name of
+// its own and is made before anything is built.
+func (self *Device) joinerOf(keyPackage []byte) (*joinerKeys, error) {
+	decoded := &mls.KeyPackage{}
+	if err := syntax.Unmarshal(keyPackage, decoded); err != nil {
+		return nil, fmt.Errorf("%w: it does not decode: %w", ErrKeyPackageInvalid, err)
+	}
+	// THE WALL CLOCK, AND NOT THE DEVICE'S OWN: it is the clock connect/mls judges the same key
+	// package's lifetime by at CommitAdd, so this check and that one cannot come to disagree.
+	if err := decoded.Validate(self.crypto, deviceCipherSuite, time.Now()); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrKeyPackageInvalid, err)
+	}
+	if !decoded.LeafNode.Capabilities.SupportsExtension(mls.ExtensionTypeUrmessageJoinSeal) {
+		return nil, ErrJoinerCannotOpenSealedInvite
+	}
+	leafKeys, err := mls.LeafKeysOf(&decoded.LeafNode)
+	if err != nil {
+		return nil, fmt.Errorf("%w: its leaf publishes no key a join seal can be made to: %w", ErrKeyPackageInvalid, err)
+	}
+	xwing, err := messagegroup.ParseXwingPublicKey(leafKeys.DeviceXwingPub)
+	if err != nil {
+		return nil, fmt.Errorf("%w: its leaf's x-wing key: %w", ErrKeyPackageInvalid, err)
+	}
+	return &joinerKeys{keyPackage: decoded, xwing: xwing}, nil
+}
+
+// joinerLeafIn is the leaf of a ratchet tree the joiner's key package was installed at: the one
+// leaf whose signature key AND whole leaf node are the key package's. It is read off the tree the
+// commit returned, which is the tree the joiner is handed, so the adder and the joiner cannot come
+// to name two different leaves.
+func joinerLeafIn(ratchetTree []byte, keyPackage *mls.KeyPackage) (uint32, error) {
+	tree, err := mls.UnmarshalRatchetTree(ratchetTree)
+	if err != nil {
+		return 0, fmt.Errorf("urmessage: the tree the add returned: %w", err)
+	}
+	leaf, found := tree.FindLeafBySignatureKey(keyPackage.LeafNode.SignatureKey)
+	if !found {
+		return 0, fmt.Errorf("urmessage: the tree the add returned holds no leaf with the joiner's signature key")
+	}
+	inTree, err := syntax.Marshal(tree.Leaf(leaf))
+	if err != nil {
+		return 0, err
+	}
+	published, err := syntax.Marshal(&keyPackage.LeafNode)
+	if err != nil {
+		return 0, err
+	}
+	if subtle.ConstantTimeCompare(inTree, published) != 1 {
+		return 0, fmt.Errorf("urmessage: leaf %d of the tree the add returned is not the leaf the join code published", leaf)
+	}
+	return uint32(leaf), nil
+}
+
+// joinerAlreadyHasALeaf gives the two refusals of an add that mean "this identity already has a
+// leaf in this group" the one name an adder can act on, and hands every other error back as it
+// came. The role model refuses first ([ErrCommitIdentityClaimed]: an added leaf claims an identity
+// that is in the group), and connect/mls refuses a signature key the tree already holds. Either is
+// what an adder sees when an invitation it made was never opened and it tries again; the remedy is
+// in the name's own sentence.
+func joinerAlreadyHasALeaf(err error) error {
+	if errors.Is(err, ErrCommitIdentityClaimed) || errors.Is(err, mls.ErrAddDuplicateSignatureKey) {
+		return fmt.Errorf("%w: %w", ErrJoinerAlreadyHasALeaf, err)
+	}
+	return err
+}
 
 // joinerLeafId is u32(joiner_leaf): the wrap's target_id and the join key's exporter context.
 func joinerLeafId(leaf uint32) []byte {

@@ -78,7 +78,7 @@ var sdkCryptoImports = map[string]sdkCryptoImport{
 	"urmessage/group.go": {[]string{"crypto/sha256"},
 		"pq secret witnesses, group-context hashes and a sealed body's hash check"},
 	"urmessage/joinseal.go": {[]string{"crypto/sha256", "crypto/subtle"},
-		"the three hashes join_auth's preimage is over and the width of the sealed digest; and the constant-time comparison of that digest and of an all-zero secret"},
+		"the three hashes join_auth's preimage is over and the width of the sealed digest; and the constant-time comparison of that digest, of an all-zero secret and of the joiner's leaf"},
 	"urmessage/invite.go": {[]string{"crypto/sha256"},
 		"an invite's checksum"},
 	"urmessage/pqepoch.go": {[]string{"crypto/sha256", "crypto/subtle"},

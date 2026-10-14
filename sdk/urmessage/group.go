@@ -1583,9 +1583,13 @@ func (self *Group) AddMember(keyPackage []byte) (*Invite, error) {
 	// CommitAdd carries the Add inside the commit, attributed to the committer, and the SAME
 	// call takes N key packages: one commit admits N members. Nothing is staged on its refusal,
 	// and mls refuses the same things it refused through ProposeAdd, at the same call.
+	// THE JOIN CODE IS JUDGED BEFORE ANYTHING IS BUILT: see [Device.joinerOf].
+	if _, err := self.device.joinerOf(keyPackage); err != nil {
+		return nil, err
+	}
 	commit, welcome, ratchetTree, err := self.handle.CommitAdd([][]byte{keyPackage})
 	if err != nil {
-		return nil, fmt.Errorf("urmessage: CommitAdd: %w", err)
+		return nil, joinerAlreadyHasALeaf(fmt.Errorf("urmessage: CommitAdd: %w", err))
 	}
 	if err := self.handle.MergePendingCommit(); err != nil {
 		return nil, fmt.Errorf("urmessage: MergePendingCommit: %w", err)
@@ -1890,9 +1894,15 @@ func (self *Group) AddMemberAndPublish(ctx context.Context, keyPackage []byte) (
 	// built: a refusal is a fact about this group and this device's role, and it costs no round
 	// trip and touches no session.
 	if _, err := self.authorizeOutgoingLocked(&outgoingCommit{addKeyPackages: [][]byte{keyPackage}}); err != nil {
-		return nil, err
+		return nil, joinerAlreadyHasALeaf(err)
 	}
 	if err := self.rebindLocked(); err != nil {
+		return nil, err
+	}
+	// THE JOIN CODE IS JUDGED BEFORE ANYTHING IS BUILT: see [Device.joinerOf]. The role model
+	// stands ahead of it, because who may add is a fact about this device and is answered the
+	// same way whatever the join code is.
+	if _, err := self.device.joinerOf(keyPackage); err != nil {
 		return nil, err
 	}
 
@@ -1901,7 +1911,7 @@ func (self *Group) AddMemberAndPublish(ctx context.Context, keyPackage []byte) (
 	// Welcome and the ratchet tree it answers are the joiner's whether or not the commit lands.
 	commit, welcome, ratchetTree, err := self.handle.CommitAdd([][]byte{keyPackage})
 	if err != nil {
-		return nil, fmt.Errorf("urmessage: CommitAdd: %w", err)
+		return nil, joinerAlreadyHasALeaf(fmt.Errorf("urmessage: CommitAdd: %w", err))
 	}
 
 	// (2)-(5) announce, submit, and -- once the server has taken it -- merge, enter and fan out
