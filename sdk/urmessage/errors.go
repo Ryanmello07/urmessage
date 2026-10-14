@@ -773,14 +773,17 @@ var (
 	// Restore having tried, and without the owner's question, which is asked of a roster this
 	// group no longer has.
 	//
-	// A FILE THAT COULD NOT BE READ AT ALL IS NOT THIS (Task 57, F1): see
-	// [ErrGroupRecordNotReadNow]. Damage is permanent and is judged off the octets; a read that
-	// failed got no octets to judge.
+	// A FILE THAT COULD NOT BE READ FOR A PERMANENT REASON IS THIS TOO (R26): a directory or any
+	// other non-file standing at the record's name, a deny ACL, a symlink loop, an I/O error. A
+	// record that will never read must stay one a device can leave. A file another process held
+	// for a moment is NOT this ([ErrGroupRecordNotReadNow]); [transientRead] is the one rule that
+	// tells the two apart.
 	ErrGroupRecordDamaged = errors.New("urmessage: a group record on this device's disk does not read, so that group cannot be restored; ForgetGroup leaves it, and it can then be joined again")
 
 	// A group's record is on this device's disk and its file COULD NOT BE READ JUST NOW: another
-	// process holds it open with no read sharing (a scanner, a backup tool, the search indexer),
-	// or the read failed with an I/O error. Nothing is known about the record, so it is NOT
+	// process holds it open with no read sharing or locked (a scanner, a backup tool, the search
+	// indexer), a sharing or lock violation and nothing else ([transientRead], R26). Nothing is
+	// known about the record, so it is NOT
 	// [ErrGroupRecordDamaged], and nothing that damage permits is done to it: [Device.Restore]
 	// brings the other groups back and reports this one beside them, and [Device.ForgetGroup] of
 	// that group is refused before anything is written, so an owner is still asked the owner's
