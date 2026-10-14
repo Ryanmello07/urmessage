@@ -50,6 +50,11 @@ var sectionSixGroupEngine = map[string]string{
 	// unexported. A restored group therefore could not ingest a commit. That was open item J1-8 and
 	// LoadGroup is the change it named.
 	"LoadGroup": "func(groupId []byte, epoch uint64) (GroupHandle, error)",
+	// THE SIXTH, AMENDED FOR THE HARDENING PROGRAM'S HELD-GROUP GATE. JoinFromWelcome's signature
+	// carries no group id, so connect/mls's intent match was off and the sdk compared the id after
+	// mls had persisted the joined epoch under the id the Welcome named. This door carries the id
+	// in, which is the whole of what it adds.
+	"JoinFromWelcomeInto": "func(welcome []byte, ratchetTree []byte, groupId []byte) (GroupHandle, error)",
 }
 
 var sectionSixGroupHandle = map[string]string{
@@ -288,8 +293,17 @@ func TestTheEngineInterfacesAreExactlySectionSixsBlock(t *testing.T) {
 	// removal's post-commit policy is. And ZERO methods for the removed-leaf set the same ruling
 	// derives, which is the other half of it: that read went on the PendingEpoch value this
 	// interface already answers, so the seam grew a field rather than a thirty-sixth method.
-	if len(sectionSixGroupEngine) != 5 || len(sectionSixGroupHandle) != 35 {
-		t.Errorf("section 6's block is transcribed as %d and %d methods; it was measured at 5 and 35, and a change to either is a change to the seam",
+	//
+	// AND IT IS 6 AND 35 FROM THE HARDENING PROGRAM'S HELD-GROUP GATE: the ENGINE half gains
+	// JoinFromWelcomeInto, ONE method, which is JoinFromWelcome carrying the group id its caller
+	// means to join. Without it connect/mls's intent match cannot be turned on from outside this
+	// package, and an invite naming one group while carrying a Welcome for a group the device
+	// already holds writes that group's epoch state before anything refuses it. One method and
+	// not a third parameter on JoinFromWelcome: that door's call sites, in three packages
+	// (`git grep -E '\.JoinFromWelcome\(' -- '*.go'`), state no intent, and a nil they would all
+	// have to pass is the unbound join spelled once per call.
+	if len(sectionSixGroupEngine) != 6 || len(sectionSixGroupHandle) != 35 {
+		t.Errorf("section 6's block is transcribed as %d and %d methods; it was measured at 6 and 35, and a change to either is a change to the seam",
 			len(sectionSixGroupEngine), len(sectionSixGroupHandle))
 	}
 }
@@ -307,8 +321,8 @@ func TestTheEngineInterfacesAreExactlySectionSixsBlock(t *testing.T) {
 // a type change rather than a factory change.
 //
 // The scope question (R3a) is answered separately from the class question: the CLASS is the
-// method set of both interfaces read off the syntax tree, which is 40 members at this commit --
-// 5 and 35, and the figure written here was the HANDLE half alone until 2026-09-25, which is a
+// method set of both interfaces read off the syntax tree, which is 41 members at this commit --
+// 6 and 35, and the figure written here was the HANDLE half alone until 2026-09-25, which is a
 // count its own sentence does not describe -- and is never a list; the SCOPE is engine.go,
 // because that is the file section 2.2's tree puts the
 // interface in and an interface declared anywhere else would fail
@@ -1909,11 +1923,17 @@ func TestTheJoinRefusalTellsAStoreFailureFromAWelcomeAddressedElsewhere(t *testi
 //
 // THE CLASS is the GroupConfig fields mls.JoinFromWelcome reads, and it is FOUR: Crypto, Store,
 // Profile -- defaulted if nil -- and GroupId, which it reads ONLY as an intent match the caller
-// opts into. GroupId is left unset because section 6's signature gives this engine no group id to
-// intend. THE COMPLEMENT IS PRINTED and is the four fields CreateGroup sets and this must not:
+// opts into. THE COMPLEMENT IS PRINTED and is the four fields CreateGroup sets and this must not:
 // Suite, Extensions, RequiredCaps and LeafKeys, all unread on the join path because required
 // capabilities come off the Welcome's own GroupInfo. A gate that did not print them would be one
 // nobody can tell from a gate that checked nothing.
+//
+// GroupId IS SET, AND ONLY FROM THE PARAMETER OF THAT NAME. Until the hardening program's
+// held-group gate this clause read the other way: section 6 gave the engine no group id to intend,
+// so the field stayed unset. JoinFromWelcomeInto now carries the caller's id down, and what this
+// gate holds instead is where the value comes from: the expression is the bare identifier groupId,
+// which is the join body's own parameter. A guess, or an id read back out of the Welcome being
+// judged, is some other expression and fails here.
 func TestTheJoinConfigCarriesExactlyTheFieldsTheJoinReads(t *testing.T) {
 	read := []string{"Crypto", "Store", "Profile", "GroupId"}
 	complement := []string{"Suite", "Extensions", "RequiredCaps", "LeafKeys"}
@@ -1925,8 +1945,11 @@ func TestTheJoinConfigCarriesExactlyTheFieldsTheJoinReads(t *testing.T) {
 	if len(set) == 0 {
 		t.Fatal("no mls.GroupConfig literal was found on this engine's join path, so this gate read nothing")
 	}
-	if slices.Contains(set, "GroupId") {
-		t.Error("the join path sets GroupId. Section 6 gives this engine no group id to intend, so a value here is either a guess that refuses every legitimate welcome or a group id recovered from the message about to be judged -- which turns an intent match into a tautology, and reads like a check")
+	if !slices.Contains(set, "GroupId") {
+		t.Error("the join path does not set GroupId, so connect/mls's intent match is off through both doors and JoinFromWelcomeInto binds nothing")
+	}
+	if source := engineJoinConfigGroupIdSource(t); source != "groupId" {
+		t.Errorf("the join path sets GroupId from %q. It is the caller's own id or it is absent: the one expression this gate admits is the parameter groupId, which JoinFromWelcome passes nil and JoinFromWelcomeInto passes its caller's. An id recovered from the welcome about to be judged turns the intent match into a tautology, and reads like a check", source)
 	}
 	for _, unread := range complement {
 		if slices.Contains(set, unread) {
@@ -2001,6 +2024,84 @@ func engineGroupConfigFieldsSetOnTheJoinPath(t *testing.T) []string {
 	}
 	slices.Sort(named)
 	return slices.Compact(named)
+}
+
+// engineJoinConfigGroupIdSource is the source text of the expression the JOIN PATH's
+// mls.GroupConfig literal sets GroupId from, scoped as engineGroupConfigFieldsSetOnTheJoinPath is:
+// the literal inside the production function whose body calls mls.JoinFromWelcome.
+//
+// IT ALSO HOLDS THAT THE NAME IS THAT FUNCTION'S PARAMETER AND IS NEVER ASSIGNED IN ITS BODY. The
+// text "groupId" alone would be satisfied by a local of that name filled from the Welcome, which
+// is the tautology the gate exists to refuse.
+func engineJoinConfigGroupIdSource(t *testing.T) string {
+	t.Helper()
+	fileSet, sources := messagegroupProductionSources(t)
+	found := []string{}
+	for _, source := range sources {
+		for _, declaration := range source.parsed.Decls {
+			function, isFunction := declaration.(*ast.FuncDecl)
+			if !isFunction || function.Body == nil {
+				continue
+			}
+			joins := false
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				selector, isSelector := node.(*ast.SelectorExpr)
+				if !isSelector || selector.Sel.Name != "JoinFromWelcome" {
+					return true
+				}
+				if qualifier, isIdentifier := selector.X.(*ast.Ident); isIdentifier && qualifier.Name == "mls" {
+					joins = true
+				}
+				return true
+			})
+			if !joins {
+				continue
+			}
+			isParameter := false
+			for _, field := range function.Type.Params.List {
+				for _, name := range field.Names {
+					isParameter = isParameter || name.Name == "groupId"
+				}
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				switch typed := node.(type) {
+				case *ast.AssignStmt:
+					for _, left := range typed.Lhs {
+						if name, isName := left.(*ast.Ident); isName && name.Name == "groupId" {
+							t.Errorf("%s assigns groupId in its body; the id the join intends is the caller's, handed down unchanged", function.Name.Name)
+						}
+					}
+				case *ast.CompositeLit:
+					selector, isSelector := typed.Type.(*ast.SelectorExpr)
+					if !isSelector || selector.Sel.Name != "GroupConfig" {
+						return true
+					}
+					for _, element := range typed.Elts {
+						pair, isPair := element.(*ast.KeyValueExpr)
+						if !isPair {
+							continue
+						}
+						if key, isKey := pair.Key.(*ast.Ident); !isKey || key.Name != "GroupId" {
+							continue
+						}
+						rendered := &bytes.Buffer{}
+						if err := printer.Fprint(rendered, fileSet, pair.Value); err != nil {
+							t.Fatalf("render the GroupId expression: %v", err)
+						}
+						if rendered.String() == "groupId" && !isParameter {
+							t.Errorf("%s sets GroupId from a groupId that is not one of its parameters", function.Name.Name)
+						}
+						found = append(found, rendered.String())
+					}
+				}
+				return true
+			})
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("the join path sets GroupId in %d place(s) %v, want exactly one", len(found), found)
+	}
+	return found[0]
 }
 
 // TestTheDeviceSurvivesItsOwnJoin is j1 task 5's sixth property, and it is the one whose absence

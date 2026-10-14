@@ -1007,3 +1007,149 @@ func TestAdvSimAGroupThatDoesNotRestoreIsLeftAndJoinedAgain(t *testing.T) {
 	}
 	advJudge(t, "S7-c1-unrestorable-rejoins", observed)
 }
+
+// advHeard is one Receive that answers whether a canary came back opened. It fails nothing: in a
+// scenario whose subject is what still works, what a group read is a fact for the verdict.
+func advHeard(ctx context.Context, group *urmessage.Group, canary string) bool {
+	received, err := group.Receive(ctx)
+	if err != nil {
+		return false
+	}
+	for _, one := range received {
+		if one.Gap == "" && one.Text == canary {
+			return true
+		}
+	}
+	return false
+}
+
+// CONTROL: ONE RECORD THAT DOES NOT READ COSTS ITS OWN GROUP AND NO OTHER. Bob holds two groups,
+// the scene's and one of carol's founding. He is stopped, the scene's record on his disk is cut
+// to half its length, and he is started again. Then everything a person can do is driven in
+// order: Restore; an invitation into a third group; a founding under a fresh id; the two calls
+// that must be REFUSED while the damaged record stands (a founding under its group's id, and the
+// founder's own fresh invitation into its group); ForgetGroup; and that same invitation again.
+//
+// It is a control and not a gap. It is here because the held-group gate reads the disk: asked for
+// every record the store holds instead of for the one group, a single record that did not read
+// refused every invitation, every founding and every leave on the device, and no call cleared it.
+func TestAdvSimOneRecordThatDoesNotReadCostsItsOwnGroupAndNoOther(t *testing.T) {
+	scene := advFounding(t, true)
+	ctx := scene.ctx
+	bobId := rolesIdentityOf(t, scene.bobGroup)
+	carol := scene.world.newPersona(t, "carol")
+	if err := carol.device.Connect(ctx); err != nil {
+		advHarness(t, "carol's Connect: %v", err)
+	}
+	otherId := newGroupId(t)
+	carolGroup, _ := openPair(t, ctx, carol, scene.bob, otherId)
+
+	scene.bob.kill()
+	advDamageRecord(t, scene.bob.stateDir, scene.groupId)
+	bob := scene.world.durablePersona(t, scene.bob.name, scene.bob.stateDir, scene.bob.streamDir)
+	if err := bob.device.Connect(ctx); err != nil {
+		advHarness(t, "the restarted bob's Connect: %v", err)
+	}
+	if _, err := bob.stateStore.GroupRecord(scene.groupId); !errors.Is(err, urmessage.ErrGroupRecordDamaged) {
+		advHarness(t, "bob's record of the scene's group answers %v, so this is not a record that does not read", err)
+	}
+	observed := []string{}
+
+	// RESTORE: the other group comes back and reads, and the damage is reported
+	restored, restoreErr := bob.device.Restore(ctx)
+	t.Logf("Restore: %d group(s), %v", len(restored), restoreErr)
+	if len(restored) == 1 && bytes.Equal(restored[0].Id(), otherId) {
+		canary := advCanary(t)
+		if _, err := carolGroup.Send(ctx, canary); err != nil {
+			advHarness(t, "carol's Send: %v", err)
+		}
+		if advHeard(ctx, restored[0], canary) {
+			observed = append(observed, "others-restored")
+		}
+	}
+	if errors.Is(restoreErr, urmessage.ErrRestore) && errors.Is(restoreErr, urmessage.ErrGroupRecordDamaged) {
+		observed = append(observed, "damage-reported")
+	}
+
+	// ANOTHER GROUP STILL JOINS, and a fresh id still founds
+	dave := scene.world.newPersona(t, "dave")
+	if err := dave.device.Connect(ctx); err != nil {
+		advHarness(t, "dave's Connect: %v", err)
+	}
+	daveGroup, err := dave.device.CreateGroup(ctx, newGroupId(t))
+	if err != nil {
+		advHarness(t, "dave's CreateGroup: %v", err)
+	}
+	joinCode, err := bob.device.KeyPackage()
+	if err != nil {
+		advHarness(t, "bob's KeyPackage for the third group: %v", err)
+	}
+	third, err := daveGroup.AddMember(joinCode)
+	if err != nil {
+		advHarness(t, "dave's AddMember: %v", err)
+	}
+	if err := daveGroup.Open(ctx); err != nil {
+		advHarness(t, "dave's Open: %v", err)
+	}
+	joinedThird, err := bob.device.Join(ctx, gcReencodeInvite(t, third))
+	t.Logf("Join of a third group, with the damaged record standing: %v", err)
+	if err == nil {
+		canary := advCanary(t)
+		if _, err := daveGroup.Send(ctx, canary); err != nil {
+			advHarness(t, "dave's Send: %v", err)
+		}
+		if advHeard(ctx, joinedThird, canary) {
+			observed = append(observed, "other-group-joined")
+		}
+	}
+	_, err = bob.device.CreateGroup(ctx, newGroupId(t))
+	t.Logf("CreateGroup under a fresh id, with the damaged record standing: %v", err)
+	if err == nil {
+		observed = append(observed, "fresh-id-founded")
+	}
+
+	// WHILE THE DAMAGED RECORD STANDS, ITS OWN GROUP ID IS REFUSED: a founding under it, and the
+	// founder's fresh invitation into it. Neither may read a record that does not read as "not held".
+	_, err = bob.device.CreateGroup(ctx, scene.groupId)
+	t.Logf("CreateGroup under the damaged group's id: %v", err)
+	switch {
+	case errors.Is(err, urmessage.ErrGroupAlreadyHeld):
+		observed = append(observed, "damaged-id-not-founded")
+	case err == nil:
+		observed = append(observed, "founded-over-the-damaged-record")
+	}
+	if err := scene.aliceGroup.RemoveMember(ctx, bobId); err != nil {
+		advHarness(t, "alice's RemoveMember of the stranded leaf: %v", err)
+	}
+	joinCode, err = bob.device.KeyPackage()
+	if err != nil {
+		advHarness(t, "bob's fresh KeyPackage: %v", err)
+	}
+	fresh, err := scene.aliceGroup.AddMemberAndPublish(ctx, joinCode)
+	if err != nil {
+		advHarness(t, "alice's AddMemberAndPublish of the fresh join code: %v", err)
+	}
+	_, err = bob.device.Join(ctx, gcReencodeInvite(t, fresh))
+	t.Logf("Join over the founder's fresh invitation, with the damaged record standing: %v", err)
+	switch {
+	case errors.Is(err, urmessage.ErrGroupAlreadyHeld):
+		observed = append(observed, "damaged-invite-refused")
+	case err == nil:
+		observed = append(observed, "joined-over-the-damaged-record")
+	}
+
+	// THE REMEDY THAT REFUSAL NAMES, and then the same invitation again: the refusal cost nothing
+	forgetErr := bob.device.ForgetGroup(scene.groupId)
+	t.Logf("ForgetGroup of the damaged group: %v", forgetErr)
+	rejoined, joinErr := bob.device.Join(ctx, gcReencodeInvite(t, fresh))
+	t.Logf("Join over the same invitation after ForgetGroup: %v", joinErr)
+	if joinErr != nil {
+		observed = append(observed, "wedged")
+	} else {
+		scene.bob, scene.bobGroup = bob, rejoined
+		scene.say(t, "alice", scene.aliceGroup)
+		scene.hear(t, "bob", rejoined)
+		observed = append(observed, "rejoined")
+	}
+	advJudge(t, "S7-c2-unreadable-record-costs-one-group", observed)
+}
