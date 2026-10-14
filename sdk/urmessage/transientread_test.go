@@ -113,3 +113,38 @@ func TestARecordThatCannotBeReadJustNowIsNotDamageAndNothingIsLeftOverIt(t *test
 		t.Errorf("CONTROL FAILED: the damaged record is still on the disk after the leave: %v", err)
 	}
 }
+
+// A DAMAGED RECORD IS SAID TO NOT READ, AND NOT TO BE ANOTHER BUILD'S (Task 57, F9). A record this
+// store wrote is cut to half its length, and the refusal for it says that it does not read as a
+// record this store writes. It does not say that this build did not write it, which a checksum
+// cannot know and which is false here.
+//
+// WHAT WOULD GO RED: the old sentence, "this is not a state record this build wrote", over a record
+// this build wrote one line earlier.
+func TestADamagedRecordIsSaidToNotReadAndNotToBeAnotherBuilds(t *testing.T) {
+	store := openTestStore(t, t.TempDir())
+	groupId := bytes.Repeat([]byte{0x53}, GroupIdBytes)
+	if err := store.PutGroupRecord(&GroupRecord{
+		GroupId: groupId, PqSecret: bytes.Repeat([]byte{0x2A}, 32), GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32), Epoch: 1, Opened: true,
+	}); err != nil {
+		t.Fatalf("PutGroupRecord: %v", err)
+	}
+	path := store.groupRecordPath(groupId)
+	octets, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, octets[:len(octets)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.GroupRecord(groupId)
+	if !errors.Is(err, ErrGroupRecordDamaged) || !errors.Is(err, ErrStateStoreFormat) {
+		t.Fatalf("CONTROL FAILED: the cut record answered %v, want ErrGroupRecordDamaged carrying ErrStateStoreFormat", err)
+	}
+	if !strings.Contains(err.Error(), "does not read as a record this store writes") {
+		t.Errorf("the refusal for a damaged record does not say that it does not read as a record this store writes: %v", err)
+	}
+	if strings.Contains(err.Error(), "this build wrote") {
+		t.Errorf("the refusal for a record this build wrote says this build did not write it: %v", err)
+	}
+}

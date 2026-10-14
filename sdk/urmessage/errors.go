@@ -554,10 +554,15 @@ var (
 	// rather than about this one.
 	ErrStateStoreLocked = errors.New("urmessage: this state directory is already held by a single-writer exclusion")
 
-	// A file under a name this store computes that is not a record this build wrote: the wrong
-	// magic, the wrong version, the wrong kind, a checksum that does not match, or a record
-	// whose own key octets are not the key that was asked for.
-	ErrStateStoreFormat = errors.New("urmessage: this is not a state record this build wrote")
+	// A file under a name this store computes that does not read as a record this store writes:
+	// the wrong magic, the wrong version, the wrong kind, a checksum that does not match, or a
+	// record whose own key octets are not the key that was asked for. The clause after it says
+	// which.
+	//
+	// IT SAYS WHAT IS TRUE AND NO MORE (Task 57, F9). It used to say "this is not a state record
+	// this build wrote", which is a claim about who wrote the file that a checksum cannot make: a
+	// record this very build wrote and the disk then damaged answers it too.
+	ErrStateStoreFormat = errors.New("urmessage: this does not read as a record this store writes")
 
 	// No such value. It is a sentinel and not a nil: "this device was never in that group" and
 	// "the disk is broken" are two readings a restore has to branch on.
