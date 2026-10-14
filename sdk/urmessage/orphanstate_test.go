@@ -101,3 +101,44 @@ func TestRestoreErasesEpochStateNoRecordStandsBesideAndNothingElse(t *testing.T)
 		t.Errorf("Restore erased the epoch state of a group whose record does not read: %v", err)
 	}
 }
+
+// landedRecordSink is a durable store whose group-record write, once armed, LANDS and then
+// reports a failure, as a rename that succeeded before its directory sync failed does.
+type landedRecordSink struct {
+	*DurableStateStore
+	armed bool
+}
+
+func (self *landedRecordSink) PutGroupRecord(record *GroupRecord) error {
+	if err := self.DurableStateStore.PutGroupRecord(record); err != nil {
+		return err
+	}
+	if self.armed {
+		return errors.New("the store this test sits on wrote the record and then could not sync its directory")
+	}
+	return nil
+}
+
+// A JOIN WHOSE RECORD LANDED AND THEN FAILED LEAVES NO RECORD BEHIND (R26, the fix review's V4b).
+// The record a failed join wrote holds the joined epoch's pq_secret and the group's handle key,
+// with no state behind it. Off a re-add, the failed join takes it with the state.
+//
+// WHAT WOULD GO RED: erase the state and not the record, and the disk holds a record of a group
+// the person was told they never joined, with its secrets in it.
+func TestAJoinWhoseRecordLandedAndThenFailedLeavesNoRecordBehind(t *testing.T) {
+	ctx := context.Background()
+	durable := openTestStore(t, t.TempDir())
+	store := &landedRecordSink{DurableStateStore: durable}
+	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	honest, groupId := windowInvite(t, joiner)
+	store.armed = true
+	if _, err := joiner.Join(ctx, honest); !errors.Is(err, ErrJoinCodeSpent) {
+		t.Fatalf("a join whose record landed and then failed answered %v, want ErrJoinCodeSpent", err)
+	}
+	if _, err := durable.GroupRecord(groupId); !errors.Is(err, ErrStateNotFound) {
+		t.Errorf("the failed join's record is still on the disk: %v", err)
+	}
+	if _, err := os.Stat(durable.groupDir(groupId)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the failed join's group directory is still on the disk: %v", err)
+	}
+}

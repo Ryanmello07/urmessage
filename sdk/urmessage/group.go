@@ -1612,6 +1612,17 @@ func (self *Device) abandonJoined(group *Group, readd bool, cause error) error {
 	if err := self.eraseJoinedState(group.id, group.epoch, readd); err != nil {
 		return fmt.Errorf("%w, and the joined epoch state could not be erased: %w", cause, err)
 	}
+	// AND THE RECORD, WHEN IT IS THIS JOIN'S (R26, the fix review's V4b). A record whose write
+	// landed and then reported a failure (its directory sync), or that was written before the hold
+	// refused, is on the disk with no state behind it, holding the joined epoch's pq_secret and the
+	// group's handle key. Off a re-add, nothing else of the group is on this disk -- the gate said
+	// so -- so the group's whole directory goes. On a re-add the record may be the removed
+	// group's, which is not this join's to take (open item MG-14 in messagegroup/OPENITEMS.md).
+	if store, durable := self.stateStore.(DeviceStore); durable && !readd {
+		if err := store.DeleteGroupRecord(group.id); err != nil {
+			return fmt.Errorf("%w, and the joined group's record could not be erased: %w", cause, err)
+		}
+	}
 	return cause
 }
 
