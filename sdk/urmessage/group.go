@@ -1451,11 +1451,19 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 			joined, err = nil, fmt.Errorf("%w: %w, and the join code could not be put back: %w", ErrJoinCodeSpent, err, abortErr)
 			return
 		}
-		// A JOIN CODE THE STORE HOLDS AND COULD NOT READ IS NOT A MISSING ONE (Task 57, F4). The
-		// engine carries the store's own refusal, and only the store's not-found is "no join code
-		// here"; any other refusal is the window's, and its sentence is true of it: nothing was
-		// written, the join code is still on the disk, and the same invite joins once it reads.
-		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && !errors.Is(err, ErrStateNotFound) {
+		// A TAKE THAT REMOVED THE JOIN CODE AND THEN FAILED SPENT IT (R26, the fix review's V3a):
+		// the file is gone and nothing puts it back, so the one true sentence is the spent one.
+		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && errors.Is(err, errKeyPackageRemoved) {
+			joined, err = nil, fmt.Errorf("%w: %w", ErrJoinCodeSpent, err)
+			return
+		}
+		// A JOIN CODE THE STORE HOLDS AND COULD NOT READ FOR A MOMENT IS NOT A MISSING ONE (Task
+		// 57, F4; R26, V3b). The engine carries the store's own refusal. Only a TRANSIENT one
+		// ([transientRead]: another process held the file, so the file is there) is the window's,
+		// and its sentence is true of it: nothing was written, the join code is still on the disk,
+		// and the same invite joins once it reads. A join code that will never read -- its octets
+		// damaged, or a read that failed for good -- is no join code, and is said so below.
+		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && transientRead(err) {
 			joined, err = nil, fmt.Errorf("%w: %w", ErrJoinRefused, err)
 			return
 		}

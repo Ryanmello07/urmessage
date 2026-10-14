@@ -1676,10 +1676,20 @@ func (self *DurableStateStore) TakeKeyPackage(ref []byte) ([]byte, []byte, []byt
 			ErrStateStoreFormat, ref)
 	}
 	if err := self.removeLocked(path); err != nil {
+		// A REMOVE THAT LANDED AND THEN REPORTED A FAILURE (its directory sync, its re-read) has
+		// spent the join code all the same, and nothing will put it back: the take answered no
+		// package, so the stage never marked it taken. It is said so (R26, the fix review's V3a).
+		if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+			return nil, nil, nil, fmt.Errorf("%w: %w", errKeyPackageRemoved, err)
+		}
 		return nil, nil, nil, err
 	}
 	return parts[1], parts[2], parts[3], nil
 }
+
+// errKeyPackageRemoved is a take that removed the key package from the disk and then failed:
+// [Device.Join] answers it [ErrJoinCodeSpent].
+var errKeyPackageRemoved = errors.New("urmessage: the join code was removed from the disk and the take then failed")
 
 // ── DeviceStore ──────────────────────────────────────────────────────────────────────────────
 
