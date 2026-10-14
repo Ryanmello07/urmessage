@@ -266,7 +266,8 @@ JWT-shaped value fails and prints the disclosure, naming the count and never the
 stdout by its own hand; catching those needs the file descriptor replaced by a pipe, which costs a
 drained goroutine and loses whatever is in flight when the probe exits on a failure.
 
-The run therefore prints **13 steps**: the eleven scenario steps, the counters, and the read-back.
+The run therefore prints **14 steps**: the eleven scenario steps, one for the join seal, the
+counters, and the read-back.
 
 ## What it does NOT assert
 

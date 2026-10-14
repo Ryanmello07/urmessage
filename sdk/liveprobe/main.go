@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -270,6 +271,24 @@ func main() {
 	check(aGroup.IsOpen(), "Open returned no error and the group does not say it is open")
 	fmt.Fprintf(out, "  group %x epoch %d; invite %d octets, carried out of band as the design says\n",
 		aGroup.Id()[:8], aGroup.Epoch(), len(encoded))
+
+	// ── the join seal, 1 of 4 ────────────────────────────────────────────────────────────
+	step("an invitation at version 2, the format that carried its secrets in the clear, is refused by its version")
+	fmt.Fprintf(out, "  WHAT THIS IS FOR: version 2 put the join epoch's secret and the group's handle key in the\n"+
+		"  invitation as plain octets. This build writes version 3 and reads nothing else, so that no\n"+
+		"  paste can hand a joiner two secrets somebody on the channel chose. The blob below is the\n"+
+		"  invitation A just made with its version octets changed to 2, under a checksum that covers\n"+
+		"  the change: what is refused is the version, and not a damaged paste.\n")
+	check(2 < len(encoded) && encoded[0] == 0x00 && encoded[1] == 0x03,
+		"the invitation A made begins with the octets %x, want 00 03", encoded[:2])
+	versionTwo := append([]byte{0x00, 0x02}, encoded[2:len(encoded)-sha256.Size]...)
+	versionTwoSum := sha256.Sum256(versionTwo)
+	_, err = urmessage.ParseInvite(append(versionTwo, versionTwoSum[:]...))
+	check(errors.Is(err, urmessage.ErrInviteVersion),
+		"an invitation at version 2, under a checksum that covers it, answered %v, want ErrInviteVersion", err)
+	check(!errors.Is(err, urmessage.ErrInviteDamaged),
+		"the version 2 invitation was refused as DAMAGED (%v): the refusal is the checksum's and says nothing about the version", err)
+	fmt.Fprintf(out, "  refused by its version, before a field of it was read\n")
 
 	// ── 3 ────────────────────────────────────────────────────────────────────────────────
 	step("B joins from the invite and reads the string A typed")
