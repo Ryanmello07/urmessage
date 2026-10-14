@@ -1181,3 +1181,41 @@ or write the re-add's record under a name of its own until the join has been hel
 ### What is owed elsewhere
 
 The healing track (T3).
+
+---
+
+## MG-15 — a group whose restore failure this build cannot classify can never be left
+
+**Status: OPEN. Filed 2026-10-14 by ruling R29, which made the erase without the owner's question
+fail-closed. Not fixed here: the way out is a new export, and this plan changes no header. Owner: a
+later change that may add an export.**
+
+### The property
+
+A device can always be rid of a copy of a group it can no longer use: restore it, leave it, or be
+told what to do.
+
+### The evidence
+
+`sdk/urmessage`'s one classifier (`classifyRead`, `sdk/urmessage/transientread.go`) answers three
+classes for a failed restore, and since R29 only a PROVEN-permanent failure is noted as a group that
+will not come back, which `Device.ForgetGroup` then leaves without the owner's question. A failure in
+neither of its lists -- a store error with no errno, an errno outside both (too many open files, out
+of memory, no system resources, a device not ready), a failure that is not the store's, and the
+engine's own `ErrEngineLoadedEpoch` (a record naming an epoch whose state stands at another), which
+R29's allow-list does not name -- is UNPROVEN. Restore reports it under `urmessage.ErrGroupReadUnproven`
+and `ForgetGroup` refuses it, "so nothing was left". That is the point: the erase is irreversible
+and an owner's copy erased without the transfer can leave a group without an owner. But a group
+that STAYS unproven -- the same unclassified failure at every launch -- can never be left, restored
+or joined again by this build. `TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused`
+(`sdk/urmessage/failclosed_test.go`) holds the refusal.
+
+### What a fix would be
+
+An explicit export, "erase this copy anyway", that a person chooses knowing what it costs, with the
+owner's question asked where the roster can still be read. Until then, the way out is deleting
+URmessage's folder, which this file says so that nobody has to find it out.
+
+### What is owed elsewhere
+
+A later change that may add an export to the C header, and the app's row for it.

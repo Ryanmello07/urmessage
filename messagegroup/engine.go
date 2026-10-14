@@ -773,6 +773,11 @@ func (self *connectMlsEngine) CreateGroup(groupId []byte, policy []byte, leafKey
 // refuses them for a reason this device cannot name. sdk's own restore made this comparison before
 // this method existed and it is kept HERE so that every caller of the interface gets it rather than
 // the one caller that remembered.
+//
+// WHAT A CALLER DOES WITH A REFUSAL HERE IS ITS OWN, and sdk/urmessage's is fail-closed: a group whose
+// load failed is erased without its owner's question only on proof that it can never be read, and a
+// failure it cannot classify -- this method's ErrEngineLoadedEpoch among them -- keeps the group, for
+// ever if the failure does (open item MG-15).
 func (self *connectMlsEngine) LoadGroup(groupId []byte, epoch uint64) (GroupHandle, error) {
 	group, err := mls.LoadGroup(&mls.GroupConfig{
 		Crypto:  self.crypto,
