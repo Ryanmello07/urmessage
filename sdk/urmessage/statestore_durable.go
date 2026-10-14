@@ -2421,6 +2421,12 @@ func (self *DurableStateStore) SentRecords(groupId []byte) ([]*SentRecord, error
 		if errors.Is(err, os.ErrNotExist) && !stateIsNotADirectory(dir) {
 			return []*SentRecord{}, nil
 		}
+		// AND IT SAYS SO UNAMBIGUOUSLY (R33): Windows' 3 is also an absence, which proves nothing,
+		// so once the Lstat has said this path is a file the listing's failure carries the
+		// platform's not-a-directory errno instead
+		if stateIsNotADirectory(dir) {
+			err = &os.PathError{Op: "readdir", Path: dir, Err: stateNotADirectory}
+		}
 		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, dir, err)
 	}
 	records := []*SentRecord{}
@@ -2508,6 +2514,17 @@ func (self *DurableStateStore) deleteSentLocked(groupId []byte) error {
 			ErrStateStoreState, entries[0].Name(), groupId)
 	}
 	return nil
+}
+
+// groupDirectoryStands answers whether one group's directory stands on the disk, whatever is or is
+// not in it. [Device.ForgetGroup] asks it of a group whose record is absent: a record absent from a
+// directory that stands is a file gone missing, which proves nothing (R33), and is not "nothing is
+// here".
+func (self *DurableStateStore) groupDirectoryStands(groupId []byte) bool {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	_, err := os.Lstat(self.groupDir(groupId))
+	return !errors.Is(err, os.ErrNotExist)
 }
 
 // stateIsNotADirectory answers whether something other than a directory stands at path. Anything

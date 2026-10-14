@@ -1000,8 +1000,10 @@ func TestAdvSimASecondFoundersInvitationOverAGroupTheDeviceWasRemovedFrom(t *tes
 }
 
 // CONTROL: A GROUP WHOSE RECORD IS ON THE DISK AND WHICH DOES NOT RESTORE CAN STILL BE LEFT AND
-// JOINED AGAIN. The damage is every epoch state the device holds for the group, removed from its
-// disk while it is stopped; its record stays. The three verbs a person has over such a group are
+// JOINED AGAIN. The damage is every epoch state the device holds for the group, cut to half its
+// length while it is stopped; its record stays. (R33 changed this case truthfully: the epoch states
+// were REMOVED, and an absence is no longer proof that a group will never read, so a group whose
+// files are missing is not left; bytes that do not decode are.) The three verbs a person has over such a group are
 // then driven in order: Restore, ForgetGroup, and the founder's repair (the stranded leaf out, a
 // fresh join code in, Join).
 //
@@ -1011,15 +1013,7 @@ func TestAdvSimAGroupThatDoesNotRestoreIsLeftAndJoinedAgain(t *testing.T) {
 	scene := advFounding(t, true)
 	bobId := rolesIdentityOf(t, scene.bobGroup)
 	scene.bob.kill()
-	removed := 0
-	for name := range advGroupFiles(t, scene.bob.stateDir, scene.groupId) {
-		if strings.HasPrefix(name, "epoch/") {
-			removed += 1
-		}
-	}
-	if err := advRemoveEpochStates(scene.bob.stateDir, scene.groupId); err != nil || removed == 0 {
-		advHarness(t, "removing bob's %d epoch state(s): %v", removed, err)
-	}
+	advDamageEpochStates(t, scene.bob.stateDir, scene.groupId)
 	if record := advGroupFiles(t, scene.bob.stateDir, scene.groupId)["meta"]; len(record) == 0 {
 		advHarness(t, "bob's record of the group is not on the disk, so this is not a group he holds")
 	}

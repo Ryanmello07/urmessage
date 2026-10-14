@@ -793,11 +793,13 @@ var (
 	ErrGroupRecordNotReadNow = errors.New("urmessage: a file of a group on this device's disk could not be read just now, so that group was not restored this time; nothing of it was changed, and the next Restore tries it again")
 
 	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ FOR A REASON THIS BUILD
-	// CANNOT CLASSIFY (R29, R30): [classifyRead]'s unproven class -- a permission refused, the
-	// medium, a failure of the store's with no errno, an errno in neither of its lists (too many
-	// open files, out of memory, a device not ready), or a failure that is not the store's. A
-	// permission and a medium are facts about the environment, which can change while the data
-	// is intact, so fixing the folder's access is the way through. The erase without the owner's question needs
+	// CANNOT CLASSIFY (R29, R30, R33): [classifyRead]'s unproven class -- a file gone missing, a
+	// permission refused, the medium, a failure of the store's with no errno, an errno in neither
+	// of its lists (too many open files, out of memory, a device not ready), or a failure that is
+	// not the store's. A missing file, a permission and a medium are facts about the environment,
+	// which can change while the data is intact -- an antivirus quarantine, a sync tool or a
+	// backup tool moves a file away and back -- so fixing the folder's access, or putting back what
+	// was moved out of it, is the way through. The erase without the owner's question needs
 	// PROOF that the group can never be read, and this is not proof, so the group is treated as
 	// [ErrGroupRecordNotReadNow] is: not restored, nothing changed, and [Device.ForgetGroup] of it
 	// refused ("so nothing was left"). It is left once a Restore reads it, or finds it damaged.

@@ -65,10 +65,11 @@ import (
 // reason, and the group could be neither restored, left nor joined again.
 //
 // A GROUP WHOSE READ FAILED FOR A REASON NOT PROVEN PERMANENT IS NOT LEFT (Task 57's F1, R26,
-// R29, R30). The damage rule above is for PROVEN-permanent damage only ([classifyRead]), a fact
-// about the data: a verdict this code made on the octets, a required file absent, a path of the
-// wrong type. A permission refused or the medium is a fact about the environment and not proof. A
-// read another process blocked for a moment, or one this build cannot classify, is
+// R29, R30, R33). The damage rule above is for PROVEN-permanent damage only ([classifyRead]), a
+// fact about the data: a verdict this code made on the octets, or a path of the wrong type. A
+// permission refused or the medium is a fact about the environment and not proof, and so is an
+// absence: a file an antivirus quarantine, a sync tool or a backup tool moved away can come back
+// (R33). A read another process blocked for a moment, or one this build cannot classify, is
 // no finding about the group, so it is the store failing to answer, and the leave is refused
 // before anything is written, with the class's own sentence and "so nothing was left". The rule had
 // been the other way round, damage unless proven transient, and it leaked three times: an owner's
@@ -128,6 +129,13 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 		}
 		switch {
 		case !onDisk:
+			// A RECORD AND A DIRECTORY BOTH ABSENT ARE "NOTHING IS HERE", and erase nothing. A
+			// record absent from a directory that STANDS is a file gone missing, which proves
+			// nothing (R33): refused, as unproven, and nothing is written.
+			if dir, asks := store.(interface{ groupDirectoryStands([]byte) bool }); asks && dir.groupDirectoryStands(groupId) {
+				return fmt.Errorf("urmessage: whether this device holds group %x on its disk could not be read, so nothing was left: %w: its directory stands and its record is not in it",
+					groupId, ErrGroupReadUnproven)
+			}
 			return fmt.Errorf("%w: %x", ErrGroupNotHeld, groupId)
 		case !reads:
 			// the record's own read, just made, is a fresh proven-permanent verdict (R9, R30)

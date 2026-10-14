@@ -49,21 +49,28 @@ const (
 // both are unproven; and the erase is decided on a FRESH attempt, never on an earlier note
 // ([Device.restoreForLeave]).
 //
+// AND AN ABSENCE IS NEVER PROOF (R33), THE FOURTH LEAK. "A required file absent" was on the list:
+// an owner's epoch state moved away by an antivirus quarantine read as "holds no such value", the
+// leave erased the group unasked, and when the file came back the sweep erased it as an orphan. A
+// file that is not there says nothing about whether it will be there again, so on the restore and
+// leave roads an absence -- [ErrStateNotFound] for a group's own file, ENOENT, Windows 2, 3 and 53
+// -- is unproven. Where an absence only answers "nothing is there" and erases nothing (a group with
+// neither a record nor a directory, a join code with no such ref, an epoch this device never stood
+// in), it still answers that, and none of those callers asks this classifier.
+//
 // THE THREE CLASSES.
 //   - PERMANENT, an explicit allow-list, each a fact about the data:
 //     (1) a verdict this code made on bytes it read: [ErrStateStoreFormat] (a checksum, a format, a
 //     record whose decode or id does not match), and an epoch state that does not decode (the
 //     syntax package's decode sentinels, which are its whole error contract);
 //     (2) a refusal by name: [ErrGroupPredatesJoinSeal];
-//     (3) a required file absent inside an existing group: [ErrStateNotFound], and the platform's
-//     not-found errnos;
-//     (4) a path of the wrong type: the platform's errnos for it ([permanentErrnos]).
+//     (3) a path of the wrong type, unambiguously: the platform's errnos for it ([permanentErrnos]).
 //   - TRANSIENT: a failure of this store's carrying a sharing or lock violation
 //     ([transientErrnos], R26's list, unchanged).
-//   - UNPROVEN: everything else -- a permission refused (EACCES, EPERM; Windows 5), the medium (EIO;
-//     Windows 23, 27, 30), a failure of this store's with no errno, an errno in neither list
-//     (EMFILE, ENOMEM; Windows 4, 8, 1450), and a failure that is not the store's (a cancelled
-//     context, an engine error).
+//   - UNPROVEN: everything else -- an absence (ErrStateNotFound, ENOENT; Windows 2, 3, 53), a
+//     permission refused (EACCES, EPERM; Windows 5), the medium (EIO; Windows 23, 27, 30), a
+//     failure of this store's with no errno, an errno in neither list (EMFILE, ENOMEM; Windows 4,
+//     8, 1450), and a failure that is not the store's (a cancelled context, an engine error).
 //
 // AN ERRNO IS JUDGED ONLY WHEN THE STORE CARRIED IT ([ErrStateStoreState]), and it is judged
 // before any sentinel: it is the OS's own account of that read, the most specific evidence there
@@ -89,8 +96,8 @@ func classifyRead(err error) readClass {
 			return readUnproven
 		}
 	}
-	if errors.Is(err, ErrStateStoreFormat) || errors.Is(err, ErrStateNotFound) ||
-		errors.Is(err, ErrGroupPredatesJoinSeal) || epochStateDoesNotDecode(err) {
+	if errors.Is(err, ErrStateStoreFormat) || errors.Is(err, ErrGroupPredatesJoinSeal) ||
+		epochStateDoesNotDecode(err) {
 		return readPermanent
 	}
 	return readUnproven
