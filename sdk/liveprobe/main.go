@@ -290,6 +290,28 @@ func main() {
 		"the version 2 invitation was refused as DAMAGED (%v): the refusal is the checksum's and says nothing about the version", err)
 	fmt.Fprintf(out, "  refused by its version, before a field of it was read\n")
 
+	// ── the join seal, 2 of 4 ────────────────────────────────────────────────────────────
+	step("an invitation with one bit of its authenticator flipped is refused, and B's join code is not spent")
+	fmt.Fprintf(out, "  WHAT THIS IS FOR: the two join secrets travel sealed to B's own device key, and the seal\n"+
+		"  is authenticated by a key only a member of the epoch B is joining can derive. B checks\n"+
+		"  that before it opens anything, and before anything of the join reaches its disk. So an\n"+
+		"  invitation altered on the way is refused AND costs nothing: B's one-use join code goes\n"+
+		"  back, and the honest invitation joins over it in the next step.\n")
+	altered, err := urmessage.ParseInvite(encoded)
+	if err != nil {
+		fail("parse invite: %v", err)
+	}
+	// a copy, so that the octets A's invitation is carried in are not the ones that are bent
+	altered.JoinAuth = bytes.Clone(altered.JoinAuth)
+	altered.JoinAuth[0] ^= 0x01
+	_, err = b.device.Join(ctx, altered)
+	check(errors.Is(err, urmessage.ErrJoinSealUnauthenticated),
+		"an invitation with one bit of its authenticator flipped answered %v, want ErrJoinSealUnauthenticated", err)
+	check(errors.Is(err, urmessage.ErrJoinRefused) && !errors.Is(err, urmessage.ErrJoinCodeSpent),
+		"that refusal is %v: it must say the join code is not spent, and must not say it is", err)
+	check(len(b.device.Groups()) == 0, "B holds %d group(s) after an invitation it refused", len(b.device.Groups()))
+	fmt.Fprintf(out, "  refused inside the join's window; the next step joins the honest invitation over the SAME join code\n")
+
 	// ── 3 ────────────────────────────────────────────────────────────────────────────────
 	step("B joins from the invite and reads the string A typed")
 	carried, err := urmessage.ParseInvite(encoded)
