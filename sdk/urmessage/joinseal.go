@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/urnetwork/message/message"
@@ -334,6 +335,38 @@ func (self *Device) openJoinSeal(handle messagegroup.GroupHandle, invite *Invite
 		return nil, nil, fmt.Errorf("%w: at epoch %d", ErrJoinSealWrongEpoch, epoch)
 	}
 	return pqSecret, groupHandleKey, nil
+}
+
+// requireJoinSeal answers [ErrGroupPredatesJoinSeal] for a group whose context does not REQUIRE
+// the join seal capability of every member, and nil for one that does.
+//
+// THE REQUIREMENT IS HOW A GROUP SAYS WHICH BUILD FOUNDED IT. Every group this build founds
+// requires the capability, and a group's required capabilities are fixed in its context, so a
+// group without the requirement was founded by a build whose invitations carried the join secrets
+// in the clear. It is read off the handle's own group context, which is the group's and not a
+// caller's claim about it.
+func requireJoinSeal(handle messagegroup.GroupHandle) error {
+	contextBytes, err := handle.GroupContextBytes()
+	if err != nil {
+		return fmt.Errorf("urmessage: the group context: %w", err)
+	}
+	context := &mls.GroupContext{}
+	if err := syntax.Unmarshal(contextBytes, context); err != nil {
+		return fmt.Errorf("urmessage: decoding the group context: %w", err)
+	}
+	for _, extension := range context.Extensions {
+		if extension.ExtensionType != mls.ExtensionTypeRequiredCapabilities {
+			continue
+		}
+		required := &mls.RequiredCapabilities{}
+		if err := syntax.Unmarshal(extension.ExtensionData, required); err != nil {
+			return fmt.Errorf("urmessage: the group's required capabilities: %w", err)
+		}
+		if slices.Contains(required.ExtensionTypes, mls.ExtensionTypeUrmessageJoinSeal) {
+			return nil
+		}
+	}
+	return ErrGroupPredatesJoinSeal
 }
 
 // sameDigest compares two H(epoch_keys) values, and answers false for one that is absent. The

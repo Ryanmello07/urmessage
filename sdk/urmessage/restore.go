@@ -297,6 +297,12 @@ func (self *Device) restoreOne(store DeviceStore, record *GroupRecord, nonce []b
 	if err != nil {
 		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
 	}
+	// ONLY A GROUP THAT REQUIRES THE JOIN SEAL IS RESTORED: see [ErrGroupPredatesJoinSeal]. It is
+	// asked before a session is built, so nothing of the group is in memory when it is refused.
+	if err := requireJoinSeal(handle); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
 	// THE TABLE THIS RECORD CAME BACK WITH, AND WHAT IT IS WHEN THERE IS NONE. A record written
 	// before item 251's ruling 40 has five parts and nil here; one written by this build has six
 	// and a table, possibly empty. [restoredPqSecrets] turns either into the map this group runs

@@ -1474,6 +1474,10 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 		return nil, fmt.Errorf("%w: the welcome stands at epoch %d and this device was removed at epoch %d",
 			ErrReaddStale, handle.Epoch(), removedEpoch)
 	}
+	// ONLY A GROUP THAT REQUIRES THE JOIN SEAL IS JOINED: see [ErrGroupPredatesJoinSeal].
+	if err := requireJoinSeal(handle); err != nil {
+		return nil, err
+	}
 	// THE JOIN SEAL: verified, opened and checked, in that order, before anything is honoured. See
 	// [Device.openJoinSeal]. The two secrets exist in this function only from here.
 	pqSecret, groupHandleKey, err := self.openJoinSeal(handle, invite)

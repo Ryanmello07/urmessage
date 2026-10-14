@@ -856,4 +856,13 @@ var (
 	// the digest [Group.AddMember] sealed into the invite. The joiner would refuse that invite, so
 	// the group is not published under it.
 	ErrInviteDigestDrift = errors.New("urmessage: the keys this group would open with are not the keys its invite was sealed over")
+
+	// The group's context does not REQUIRE the join seal capability of its members, so it was
+	// founded by a build that sent its join secrets in the clear: its handle key has crossed a
+	// paste channel as plain octets, and nothing this build does can take that back. This build
+	// neither joins such a group ([Device.Join] refuses inside the join's window, so the join
+	// code is not spent) nor restores one ([Device.Restore] answers this inside [ErrRestore]).
+	// A group Restore refused this way is left with [Device.ForgetGroup], like any group that
+	// does not come back, and is founded again.
+	ErrGroupPredatesJoinSeal = errors.New("urmessage: this group was founded before invitations were sealed, so this build does not open it; leave it and start the group again")
 )
