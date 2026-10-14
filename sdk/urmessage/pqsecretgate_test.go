@@ -247,6 +247,10 @@ var pqSecretProducerSites = map[string]string{
 }
 
 var pqSecretSinks = map[string]pqSecretSink{
+	"publishCommitLocked|call beforeSubmit": {
+		carries: []string{"commitDigest", "pqNext"},
+		why:     "THE JOIN SEAL'S HOOK: the rotated secret of the epoch this commit opens, to the closure that seals it to the joiner, before anything of the epoch is submitted. It is the only way that secret can reach a leaf that does not exist yet.",
+	},
 	"epochKeysDigestOver|return": {
 		carries: []string{"digest"},
 		why:     "H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes. It is not a key.",

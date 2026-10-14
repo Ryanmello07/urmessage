@@ -134,6 +134,10 @@ type epochKeySink struct {
 // measurement that says why they cannot move yet -- and because the map is held BOTH ways, the day
 // they do move this file goes red until somebody deletes the entry and the sentence with it.
 var epochKeySinks = map[string]epochKeySink{
+	"publishCommitLocked|call beforeSubmit": {
+		carries: []string{"commitDigest"},
+		why:     "THE JOIN SEAL'S HOOK. It is handed the digest the commit record below carries, so that a seal and its commit cannot come to name two digests. H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes.",
+	},
 	"epochKeysDigestOver|return": {
 		carries: []string{"digest"},
 		why:     "H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes. It is not a key.",

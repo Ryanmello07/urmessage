@@ -604,7 +604,7 @@ func (self *Group) RemoveMember(ctx context.Context, identityPub []byte) error {
 	if err != nil {
 		return fmt.Errorf("urmessage: CommitRemoveWithExtensions: %w", err)
 	}
-	return self.publishCommitLocked(ctx, commit)
+	return self.publishCommitLocked(ctx, commit, nil)
 }
 
 // editablePolicyLocked is the live policy as a value the verbs may write into: freshly decoded off
@@ -656,5 +656,5 @@ func (self *Group) commitPolicyAndPublishLocked(ctx context.Context, policy []by
 	if err != nil {
 		return fmt.Errorf("urmessage: CommitPolicy: %w", err)
 	}
-	return self.publishCommitLocked(ctx, commit)
+	return self.publishCommitLocked(ctx, commit, nil)
 }

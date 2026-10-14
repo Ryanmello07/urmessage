@@ -1907,7 +1907,7 @@ func (self *Group) AddMemberAndPublish(ctx context.Context, keyPackage []byte) (
 	// (2)-(5) announce, submit, and -- once the server has taken it -- merge, enter and fan out
 	// the epoch the commit opens. A refusal erases the staged epoch and answers here with nothing
 	// moved; the key package is the joiner's and a retry after Receive may offer it again.
-	if err := self.publishCommitLocked(ctx, commit); err != nil {
+	if err := self.publishCommitLocked(ctx, commit, nil); err != nil {
 		return nil, err
 	}
 
@@ -2057,7 +2057,15 @@ func (self *Group) streamFloorRefusalLocked() error {
 // is granted to it, and that its own table never gains the removed-from epoch's row. The exclusion
 // it drives is this method's derivation and no argument of the case's own, which is what makes it
 // a property of the code rather than of the fixture.
-func (self *Group) publishCommitLocked(ctx context.Context, commit []byte) error {
+//
+// beforeSubmit, WHEN IT IS NOT NIL, RUNS ONCE THE EPOCH IS FULLY DECIDED AND BEFORE ANYTHING OF IT
+// IS ON THE WIRE: after the rotation is staged and the digest the commit record will carry is
+// built, and ahead of the first wrap. It is handed the epoch the commit opens, that epoch's
+// pq_secret and that digest's H(epoch_keys). It is how [Group.AddMemberAndPublish] seals the join
+// secrets over exactly what is about to be published, and a refusal from it erases the staged
+// commit like every other exit above the submit.
+func (self *Group) publishCommitLocked(ctx context.Context, commit []byte,
+	beforeSubmit func(opensEpoch uint64, pqSecret []byte, epochKeysDigest []byte) error) error {
 	// (2) the facts of the epoch the staged commit opens, off the staged value: the epoch, the
 	// member count the fan-out will wrap to, the group context the server keys the epoch under,
 	// and the NEW epoch's write and read keys, derived STRAIGHT OFF the staged exporter -- the
@@ -2139,6 +2147,32 @@ func (self *Group) publishCommitLocked(ctx context.Context, commit []byte) error
 	zeroizeState(newRoot)
 	contextHash := sha256.Sum256(pending.GroupContext)
 
+	// (2b') THE DIGEST THE COMMIT RECORD WILL CARRY, BUILT HERE, AHEAD OF THE WRAPS. It reads only
+	// the staged keys, the epoch and the target count, so nothing about it waits for a submit; it
+	// stands above them so that beforeSubmit is handed the value the record below carries, and
+	// the join seal and the commit cannot come to name two digests.
+	group, err := epochDigestGroupId(self.id)
+	if err != nil {
+		self.handle.ClearPendingCommit()
+		return err
+	}
+	commitDigest, err := message.NewEpochDigestAttachment(group, message.EpochDigestAttachment{
+		Epoch:             newEpoch,
+		AlgId:             epochAttachmentAlgId,
+		GroupContextHash:  contextHash[:],
+		ExpectedWrapCount: uint32(len(targets)),
+	}, writeKey, readKey)
+	if err != nil {
+		self.handle.ClearPendingCommit()
+		return fmt.Errorf("urmessage: the digest of the keys epoch %d opens with: %w", newEpoch, err)
+	}
+	if beforeSubmit != nil {
+		if err := beforeSubmit(newEpoch, pqNext, commitDigest.EpochKeysDigest); err != nil {
+			self.handle.ClearPendingCommit()
+			return err
+		}
+	}
+
 	// (2c) RULING 37's WRAPS: SEALED AND SUBMITTED HERE, PRE-MERGE, AT EPOCH n -- AND AHEAD OF THE
 	// COMMIT RECORD.
 	//
@@ -2165,22 +2199,8 @@ func (self *Group) publishCommitLocked(ctx context.Context, commit []byte) error
 
 	// (3) the commit record, sealed at the OLD epoch by self.session -- which is the epoch the
 	// handle is still at -- announcing the new epoch. The server takes it iff its header names
-	// the current epoch and its attachment opens the next.
-	group, err := epochDigestGroupId(self.id)
-	if err != nil {
-		self.handle.ClearPendingCommit()
-		return err
-	}
-	commitDigest, err := message.NewEpochDigestAttachment(group, message.EpochDigestAttachment{
-		Epoch:             newEpoch,
-		AlgId:             epochAttachmentAlgId,
-		GroupContextHash:  contextHash[:],
-		ExpectedWrapCount: uint32(len(targets)),
-	}, writeKey, readKey)
-	if err != nil {
-		self.handle.ClearPendingCommit()
-		return fmt.Errorf("urmessage: the digest of the keys epoch %d opens with: %w", newEpoch, err)
-	}
+	// the current epoch and its attachment opens the next. The attachment is the digest built at
+	// (2b') above.
 	commitRecord, err := self.session.SealRecord(message.RetentionPermanent, 0, true,
 		encodeHead(self.device.nowMs()), commit, 0, &message.ServerAttachment{
 			Kind:        message.AttachmentEpochDigest,
