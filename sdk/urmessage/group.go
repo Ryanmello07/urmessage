@@ -2556,7 +2556,7 @@ func (self *Group) haltLocked(refusal error) error {
 		return self.halted
 	}
 	if err := self.device.persistGroup(self.groupRecordLocked(true)); err != nil {
-		return fmt.Errorf("%w -- and this refusal could not be persisted, so a restart would come back to a group that reads healthy: %v",
+		return fmt.Errorf("%w -- and this refusal could not be persisted, so a restart would come back to a group that reads healthy: %w",
 			self.halted, err)
 	}
 	return self.halted
@@ -2596,7 +2596,7 @@ func (self *Group) removedLocked(cause error) error {
 		return self.removed
 	}
 	if err := self.device.persistGroup(self.groupRecordLocked(true)); err != nil {
-		return fmt.Errorf("%w -- and this could not be persisted, so a restart would come back to a group that reads caught up and silent: %v",
+		return fmt.Errorf("%w -- and this could not be persisted, so a restart would come back to a group that reads caught up and silent: %w",
 			self.removed, err)
 	}
 	return self.removed

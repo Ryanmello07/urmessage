@@ -40,7 +40,7 @@ func acquireStateStoreExclusion(dir string) (io.Closer, error) {
 	path := stateStoreGuardPath(dir)
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("%w: the guard entry %s could not be opened: %v", ErrStateStoreState, path, err)
+		return nil, fmt.Errorf("%w: the guard entry %s could not be opened: %w", ErrStateStoreState, path, err)
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		file.Close()
@@ -49,7 +49,7 @@ func acquireStateStoreExclusion(dir string) (io.Closer, error) {
 				"%w: the state directory %s is held by another DurableStateStore; two stores over one directory are two devices writing one device's mls state, and the later writer's epoch overwrites the earlier's",
 				ErrStateStoreLocked, dir)
 		}
-		return nil, fmt.Errorf("%w: the guard entry %s could not be locked: %v", ErrStateStoreState, path, err)
+		return nil, fmt.Errorf("%w: the guard entry %s could not be locked: %w", ErrStateStoreState, path, err)
 	}
 	return &stateStoreExclusion{file: file}, nil
 }
@@ -62,11 +62,11 @@ func acquireStateStoreExclusion(dir string) (io.Closer, error) {
 func syncStateDir(dir string) error {
 	handle, err := os.Open(dir)
 	if err != nil {
-		return fmt.Errorf("%w: %s could not be opened to be flushed: %v", ErrStateStoreState, dir, err)
+		return fmt.Errorf("%w: %s could not be opened to be flushed: %w", ErrStateStoreState, dir, err)
 	}
 	defer handle.Close()
 	if err := handle.Sync(); err != nil {
-		return fmt.Errorf("%w: %s could not be flushed, so a value this store named may not survive a crash: %v",
+		return fmt.Errorf("%w: %s could not be flushed, so a value this store named may not survive a crash: %w",
 			ErrStateStoreState, dir, err)
 	}
 	return nil

@@ -966,7 +966,7 @@ func OpenDurableStateStore(dir string) (*DurableStateStore, error) {
 		return nil, fmt.Errorf("%w: a durable state store needs a directory", ErrStateStoreState)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("%w: the store directory %s could not be created: %v", ErrStateStoreState, dir, err)
+		return nil, fmt.Errorf("%w: the store directory %s could not be created: %w", ErrStateStoreState, dir, err)
 	}
 	exclusion, err := acquireStateStoreExclusion(dir)
 	if err != nil {
@@ -980,7 +980,7 @@ func OpenDurableStateStore(dir string) (*DurableStateStore, error) {
 	}()
 	dataDir := filepath.Join(dir, stateDataDirName)
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, fmt.Errorf("%w: the data directory %s could not be created: %v", ErrStateStoreState, dataDir, err)
+		return nil, fmt.Errorf("%w: the data directory %s could not be created: %w", ErrStateStoreState, dataDir, err)
 	}
 	unswept, err := sweepStateTempFiles(dataDir)
 	if err != nil {
@@ -1060,7 +1060,7 @@ func sweepStateTempFiles(dataDir string) ([]string, error) {
 	unswept := []string{}
 	err := filepath.WalkDir(dataDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
-			return fmt.Errorf("%w: %s could not be walked for leftover writes: %v",
+			return fmt.Errorf("%w: %s could not be walked for leftover writes: %w",
 				ErrStateStoreState, dataDir, err)
 		}
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), stateTempPrefix) {
@@ -1230,11 +1230,11 @@ func (self *DurableStateStore) writeRecord(path string, kind byte, parts ...[]by
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("%w: %s could not be created: %v", ErrStateStoreState, dir, err)
+		return fmt.Errorf("%w: %s could not be created: %w", ErrStateStoreState, dir, err)
 	}
 	temp, err := os.CreateTemp(dir, ".writing-*")
 	if err != nil {
-		return fmt.Errorf("%w: a temporary file in %s could not be created: %v", ErrStateStoreState, dir, err)
+		return fmt.Errorf("%w: a temporary file in %s could not be created: %w", ErrStateStoreState, dir, err)
 	}
 	tempPath := temp.Name()
 	committed := false
@@ -1248,10 +1248,10 @@ func (self *DurableStateStore) writeRecord(path string, kind byte, parts ...[]by
 	// because "the file mode is the whole of what protects these octets" is this type's headline
 	// and a value that important is not left to another package's default.
 	if err := temp.Chmod(0o600); err != nil && !errors.Is(err, os.ErrInvalid) && !errors.Is(err, os.ErrPermission) {
-		return fmt.Errorf("%w: %s could not be given mode 0600: %v", ErrStateStoreState, tempPath, err)
+		return fmt.Errorf("%w: %s could not be given mode 0600: %w", ErrStateStoreState, tempPath, err)
 	}
 	if _, err := temp.Write(record); err != nil {
-		return fmt.Errorf("%w: %s could not be written: %v", ErrStateStoreState, tempPath, err)
+		return fmt.Errorf("%w: %s could not be written: %w", ErrStateStoreState, tempPath, err)
 	}
 	// NEVER SWALLOWED. A Put that returned after a failed flush has told a caller that a value is
 	// durable when nothing recorded it, and for PutGroupState that caller is a seal that has
@@ -1259,14 +1259,14 @@ func (self *DurableStateStore) writeRecord(path string, kind byte, parts ...[]by
 	syncErr := temp.Sync()
 	self.flushes += 1
 	if syncErr != nil {
-		return fmt.Errorf("%w: %s could not be flushed, so this value is not durable and must not be named: %v",
+		return fmt.Errorf("%w: %s could not be flushed, so this value is not durable and must not be named: %w",
 			ErrStateStoreState, tempPath, syncErr)
 	}
 	if err := temp.Close(); err != nil {
-		return fmt.Errorf("%w: %s could not be closed: %v", ErrStateStoreState, tempPath, err)
+		return fmt.Errorf("%w: %s could not be closed: %w", ErrStateStoreState, tempPath, err)
 	}
 	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("%w: %s could not be renamed onto %s: %v", ErrStateStoreState, tempPath, path, err)
+		return fmt.Errorf("%w: %s could not be renamed onto %s: %w", ErrStateStoreState, tempPath, path, err)
 	}
 	committed = true
 	return syncStateDir(dir)
@@ -1385,7 +1385,7 @@ func (self *DurableStateStore) deleteEpochsLocked(groupId []byte, before uint64)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, dir, err)
+		return fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, dir, err)
 	}
 	removed := 0
 	for _, entry := range entries {
@@ -1402,7 +1402,7 @@ func (self *DurableStateStore) deleteEpochsLocked(groupId []byte, before uint64)
 			}
 			if !self.skipRemove {
 				if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-					return fmt.Errorf("%w: %s is an unfinished write of group %x's epoch state and it could not be discarded: %v",
+					return fmt.Errorf("%w: %s is an unfinished write of group %x's epoch state and it could not be discarded: %w",
 						ErrStateStoreState, entry.Name(), groupId, err)
 				}
 			}
@@ -1414,7 +1414,7 @@ func (self *DurableStateStore) deleteEpochsLocked(groupId []byte, before uint64)
 		}
 		if !self.skipRemove {
 			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("%w: epoch %d of group %x could not be discarded: %v",
+				return fmt.Errorf("%w: epoch %d of group %x could not be discarded: %w",
 					ErrStateStoreState, at, groupId, err)
 			}
 		}
@@ -1432,7 +1432,7 @@ func (self *DurableStateStore) deleteEpochsLocked(groupId []byte, before uint64)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("%w: %s could not be re-read after the discard: %v", ErrStateStoreState, dir, err)
+		return fmt.Errorf("%w: %s could not be re-read after the discard: %w", ErrStateStoreState, dir, err)
 	}
 	for _, entry := range entries {
 		at, named := stateEpochOfName(entry.Name())
@@ -1515,7 +1515,7 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, root, err)
+		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, root, err)
 	}
 	keep := map[string]bool{}
 	for _, groupId := range held {
@@ -1540,7 +1540,7 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 		epochs, err := os.ReadDir(epochDir)
 		if err != nil || len(epochs) == 0 {
 			if err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
-				first = fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, epochDir, err)
+				first = fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, epochDir, err)
 			}
 			continue
 		}
@@ -1997,7 +1997,7 @@ func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, root, err)
+		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, root, err)
 	}
 	names := []string{}
 	for _, entry := range entries {
@@ -2311,7 +2311,7 @@ func (self *DurableStateStore) GroupBeingForgotten(groupId []byte) (bool, error)
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, fmt.Errorf("%w: %v", ErrStateStoreState, err)
+		return false, fmt.Errorf("%w: %w", ErrStateStoreState, err)
 	}
 	return true, nil
 }
@@ -2331,7 +2331,7 @@ func (self *DurableStateStore) GroupsBeingForgotten() ([][]byte, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, root, err)
+		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, root, err)
 	}
 	// A MARK THAT CANNOT BE READ, or that names another directory, is REPORTED and skipped: one bad
 	// mark does not stop every other leave from being finished. Its group is not restored either
@@ -2387,7 +2387,7 @@ func (self *DurableStateStore) PutSentRecord(groupId []byte, record *SentRecord)
 		return fmt.Errorf("%w: group %x already holds a copy of this device's record at stream index %d, and a reserver never hands an index out twice",
 			ErrStateStoreState, groupId, record.StreamIndex)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: %s could not be examined: %v", ErrStateStoreState, path, err)
+		return fmt.Errorf("%w: %s could not be examined: %w", ErrStateStoreState, path, err)
 	}
 	var indexOctets [8]byte
 	binary.BigEndian.PutUint64(indexOctets[:], record.StreamIndex)
@@ -2413,10 +2413,15 @@ func (self *DurableStateStore) SentRecords(groupId []byte) ([]*SentRecord, error
 	dir := self.sentDir(groupId)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		// A LISTING OF A FILE IS NOT A MISSING DIRECTORY (R29, the second review's W1). Windows
+		// answers a listing of a regular file ERROR_PATH_NOT_FOUND, which reads as not-found, so a
+		// file standing where this directory goes would have restored the group as one with no
+		// copies of its own lines, silently. It is a path of the wrong type, and it fails through
+		// the same wrap as every other failure of this listing, with the OS's own errno.
+		if errors.Is(err, os.ErrNotExist) && !stateIsNotADirectory(dir) {
 			return []*SentRecord{}, nil
 		}
-		return nil, fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, dir, err)
+		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, dir, err)
 	}
 	records := []*SentRecord{}
 	for _, entry := range entries {
@@ -2456,12 +2461,20 @@ func (self *DurableStateStore) SentRecords(groupId []byte) ([]*SentRecord, error
 // survived a discard reported as done is the user's own words left behind for a group they left.
 func (self *DurableStateStore) deleteSentLocked(groupId []byte) error {
 	dir := self.sentDir(groupId)
+	// A NON-DIRECTORY STANDING WHERE THIS STORE KEEPS ITS DIRECTORY (R29, W1's own case) is a
+	// path of the wrong type: a group whose `sent` is one is proven permanent, so its leave must be
+	// able to finish, and a listing of it never can. It is removed as the one entry it is. Nothing
+	// this store writes is a file at that name, so this removes nothing a copy of this device's
+	// lines could be in.
+	if stateIsNotADirectory(dir) {
+		return self.removeLocked(dir)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, dir, err)
+		return fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, dir, err)
 	}
 	if len(entries) == 0 {
 		return nil
@@ -2475,7 +2488,7 @@ func (self *DurableStateStore) deleteSentLocked(groupId []byte) error {
 		}
 		if !self.skipRemove {
 			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("%w: the sent copy %s of group %x could not be discarded: %v",
+				return fmt.Errorf("%w: the sent copy %s of group %x could not be discarded: %w",
 					ErrStateStoreState, entry.Name(), groupId, err)
 			}
 		}
@@ -2488,13 +2501,20 @@ func (self *DurableStateStore) deleteSentLocked(groupId []byte) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("%w: %s could not be re-read after the discard: %v", ErrStateStoreState, dir, err)
+		return fmt.Errorf("%w: %s could not be re-read after the discard: %w", ErrStateStoreState, dir, err)
 	}
 	if len(entries) != 0 {
 		return fmt.Errorf("%w: %s still stands in group %x's sent directory after every copy was discarded",
 			ErrStateStoreState, entries[0].Name(), groupId)
 	}
 	return nil
+}
+
+// stateIsNotADirectory answers whether something other than a directory stands at path. Anything
+// that cannot be asked about answers false: the caller then goes on as for what its listing said.
+func stateIsNotADirectory(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && !info.IsDir()
 }
 
 // The width of one [PeerHead] on the disk: epoch, leaf, wire byte, window and head, big endian,
