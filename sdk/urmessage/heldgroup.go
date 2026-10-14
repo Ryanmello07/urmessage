@@ -184,6 +184,15 @@ func (self *Device) lastRestoreCouldNotRead(groupId []byte) bool {
 	return found
 }
 
+// clearNotes takes one group's notes away, both of them: the latest attempt read the group
+// ([Device.restoreForLeave]), so neither "will not come back" nor "could not be read" is true of it.
+func (self *Device) clearNotes(groupId []byte) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	delete(self.unrestored, string(groupId))
+	delete(self.notRead, string(groupId))
+}
+
 // clearNotRead empties the not-read set at the start of a Restore: it is the last Restore's.
 func (self *Device) clearNotRead() {
 	self.mutex.Lock()

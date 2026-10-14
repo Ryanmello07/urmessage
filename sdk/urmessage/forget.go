@@ -82,9 +82,10 @@ import (
 // then a lock at the moment of the leave, erased a group on a stale note. So a group the last
 // Restore could not bring back is RESTORED AGAIN here, now, under the admission mutex, and what that
 // attempt finds decides ([Device.restoreForLeave]): a fresh proven-permanent verdict leaves it
-// unasked (R9); a fresh success makes it live, and the ordinary leave below asks the owner's
-// question; a fresh transient or unproven failure is refused with that class's sentence, and
-// nothing is left. A record that does not read needs no second attempt: this call's own read of it,
+// unasked (R9); a fresh success rebuilds it, NOT held, and the ordinary leave below asks the
+// owner's question -- and a leave refused there, for any reason, closes it again, so the refusal
+// changed nothing and the next Restore hands the group back (R33's X2); a fresh transient or
+// unproven failure is refused with that class's sentence, and nothing is left. A record that does not read needs no second attempt: this call's own read of it,
 // just made, IS the fresh verdict.
 //
 // IT IS AN ADMISSION'S PEER, UNDER [Device.admitMutex] (Task 57, F6). A Join, a CreateGroup or a
@@ -167,6 +168,15 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 	}
 	closed, err := group.closeToForget(mark, stands)
 	if !closed {
+		// A GROUP REBUILT FOR THIS LEAVE IS CLOSED AGAIN WHEN THE LEAVE IS REFUSED (R33's X2), by
+		// whatever refused it: the owner's question, a roster that does not read, a leave that
+		// could not be recorded. It was never held, so the refusal changed nothing -- this device
+		// held no group under the id before the call and holds none after it -- and the next
+		// Restore hands the group back. Held, a refused leave left it in the map, and the next
+		// Restore, which skips a held group, handed back nothing, measured.
+		if !held {
+			group.Close()
+		}
 		return err
 	}
 	// FROM HERE THIS DEVICE HAS LEFT. A close that reported an error still closed the group and
@@ -208,11 +218,12 @@ func recordOnDisk(store DeviceStore, groupId []byte) (onDisk bool, reads bool, e
 
 // restoreForLeave is R30's fresh evidence: the restore of ONE group the last Restore could not
 // bring back, tried again now, by the caller that holds [Device.admitMutex] and is about to leave
-// it. It answers the group, live and held, when the attempt succeeds, and the leave goes on as for
-// any live group, the owner's question included. Otherwise it answers no group and what the
-// leave answers: the erase without the owner's question on a FRESH proven-permanent verdict, and
-// otherwise that class's refusal, "so nothing was left". Every answer re-decides the group's note,
-// so the latest attempt is the one that stands.
+// it. It answers the group, rebuilt and NOT HELD, when the attempt succeeds, and the leave goes on
+// as for any live group, the owner's question included; [Device.ForgetGroup] closes it again if
+// that leave is refused (R33's X2). Otherwise it answers no group and what the leave answers: the
+// erase without the owner's question on a FRESH proven-permanent verdict, and otherwise that
+// class's refusal, "so nothing was left". Every answer re-decides the group's note, so the latest
+// attempt is the one that stands: a success takes both notes away.
 func (self *Device) restoreForLeave(store DeviceStore, groupId []byte) (*Group, error) {
 	record, err := store.GroupRecord(groupId)
 	if err != nil {
@@ -225,12 +236,7 @@ func (self *Device) restoreForLeave(store DeviceStore, groupId []byte) (*Group, 
 	}
 	group, err := self.restoreOne(store, record, nonce, nonceEpoch)
 	if err == nil {
-		if err = self.hold(group); err != nil {
-			group.Close()
-			err = fmt.Errorf("%w: group %x: %w", ErrRestore, groupId, err)
-		}
-	}
-	if err == nil {
+		self.clearNotes(groupId)
 		return group, nil
 	}
 	class := classifyRead(err)
