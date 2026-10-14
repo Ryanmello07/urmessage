@@ -64,6 +64,14 @@ import (
 // gate's refusal of an invite into such a group named a remedy that failed for the gate's own
 // reason, and the group could be neither restored, left nor joined again.
 //
+// A RECORD WHOSE FILE COULD NOT BE READ AT ALL IS NOT ONE THAT DOES NOT READ (Task 57, F1). A file
+// another process holds, or an I/O error, is no finding about the record, so it is the store
+// failing to answer, and that is refused before anything is written: "whether this device holds
+// group %x on its disk could not be read, so nothing was left". The damage rule above is for
+// PERMANENT damage only. Read as damage, one lock at the moment of the leave erased an owner's
+// group with others in it, without the owner's question; refused, the same leave asked again once
+// the file reads is asked it.
+//
 // ONE CALLER AT A TIME PER GROUP. A [Device.Restore] or [Device.Join] of the same group on another
 // goroutine, between the map drop and the erase, is not guarded against: Restore skips a marked
 // group, but a Join would build a group the erase then deletes under it. Every caller this package

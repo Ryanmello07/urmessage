@@ -169,15 +169,19 @@ type DeviceStore interface {
 	// other record, and the error beside it wraps [ErrGroupRecordDamaged] and names each record it
 	// skipped by the store's own name for it. That is [DeviceStore.GroupsBeingForgotten]'s shape
 	// and its reason: one file that does not read must not cost a device every other group on its
-	// disk. Any other error is the store failing to answer, and comes with no list.
+	// disk. A record whose file could not be read at all JUST NOW (held by another process, an I/O
+	// error) is skipped the same way and reported apart, wrapping [ErrGroupRecordNotReadNow] and
+	// not [ErrGroupRecordDamaged]: it is no finding about the record. Any other error is the store
+	// failing to answer, and comes with no list.
 	GroupRecords() ([]*GroupRecord, error)
 
 	// GroupRecord is the ONE record this store holds for groupId, and it is what a caller with a
 	// group id in its hand asks, so that another group's record is never its answer. It answers
 	// [ErrStateNotFound] when the store holds none (a group being left is none, as in the list),
 	// an error wrapping [ErrGroupRecordDamaged] when a record is there and does not read, and any
-	// other error when the store could not answer. It agrees with the list: both read a group's
-	// record by one function.
+	// other error when the store could not answer -- a record file that could not be read at all
+	// among them, which is NOT damage. It agrees with the list: both read a group's record by one
+	// function.
 	GroupRecord(groupId []byte) (*GroupRecord, error)
 
 	// DeleteGroupRecord removes one group's record AND every MLS epoch state beside it AND every
@@ -1842,6 +1846,12 @@ func decodeRemoval(part []byte) (uint8, uint64, error) {
 // DIRECTORY. It cannot name them by group id: a directory's name is the SHA-256 of the id
 // ([stateNameOf]) and cannot be turned back into one, and the id inside a record that does not
 // read is not one to believe. A caller that holds an id asks [DurableStateStore.GroupRecord].
+//
+// A RECORD THAT COULD NOT BE READ JUST NOW IS REPORTED APART FROM ONE THAT DOES NOT READ (Task 57,
+// F1). A file another process holds, or an I/O error, is no finding about the record, so it is
+// skipped like damage -- one locked file must not cost the device its other groups -- and
+// reported under [ErrGroupRecordNotReadNow] instead of [ErrGroupRecordDamaged], by its directory
+// as well. When both stand, the error carries both sentinels.
 func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -1866,10 +1876,19 @@ func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 	records := []*GroupRecord{}
 	damaged := []string{}
 	var firstDamage error
+	notRead := []string{}
+	var firstNotRead error
 	for _, name := range names {
 		record, err := self.groupRecordInLocked(name)
 		if err != nil {
 			if errors.Is(err, ErrStateNotFound) {
+				continue
+			}
+			if !errors.Is(err, ErrGroupRecordDamaged) {
+				notRead = append(notRead, name)
+				if firstNotRead == nil {
+					firstNotRead = err
+				}
 				continue
 			}
 			damaged = append(damaged, name)
@@ -1880,11 +1899,21 @@ func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 		}
 		records = append(records, record)
 	}
+	var report error
 	if firstDamage != nil {
-		return records, fmt.Errorf("%w (in all, %d of the %d group directories on this disk: %s)",
+		report = fmt.Errorf("%w (in all, %d of the %d group directories on this disk: %s)",
 			firstDamage, len(damaged), len(names), strings.Join(damaged, ", "))
 	}
-	return records, nil
+	if firstNotRead != nil {
+		notReadReport := fmt.Errorf("%w: %w (in all, %d of the %d group directories on this disk: %s)",
+			ErrGroupRecordNotReadNow, firstNotRead, len(notRead), len(names), strings.Join(notRead, ", "))
+		if report == nil {
+			report = notReadReport
+		} else {
+			report = fmt.Errorf("%w; and %w", report, notReadReport)
+		}
+	}
+	return records, report
 }
 
 // GroupRecord answers the one record this store holds for groupId: see [DeviceStore.GroupRecord].
@@ -1904,8 +1933,18 @@ func (self *DurableStateStore) GroupRecord(groupId []byte) (*GroupRecord, error)
 
 // groupRecordInLocked reads the record in one group directory, for the list and for the one-id
 // read alike, so that the two cannot answer differently about one group. It answers the record;
-// [ErrStateNotFound] when the directory holds none or the group is being left; and an error
-// wrapping [ErrGroupRecordDamaged] when a record is there and does not read.
+// [ErrStateNotFound] when the directory holds none or the group is being left; an error wrapping
+// [ErrGroupRecordDamaged] when a record is there and does not read; and the read's own
+// [ErrStateStoreState], NOT WRAPPED AS DAMAGE, when the file could not be read at all.
+//
+// A READ THAT FAILS IS NOT DAMAGE (Task 57, F1). A file another process holds open with no read
+// sharing -- a scanner, a backup tool, the search indexer -- or an I/O error says nothing about
+// what the record holds, and a record that does not read is what [Device.ForgetGroup] leaves
+// WITHOUT the owner's question. Read as damage, a lock that stood at the one read a leave made
+// erased an owner's live group with others in it, measured. Damage is what the octets say: a
+// checksum, a decode, an id that is not the directory's. A read that never got the octets is a
+// store that could not answer, which every caller of the one-id read already refuses on, and which
+// the list reports apart ([ErrGroupRecordNotReadNow]).
 //
 // THE RECORD MUST NAME THE DIRECTORY IT SITS IN, which is [DurableStateStore.GroupsBeingForgotten]'s
 // rule for a leave mark and is here for the reason the one-id read exists: the directory is found
@@ -1920,7 +1959,7 @@ func (self *DurableStateStore) groupRecordInLocked(name string) (*GroupRecord, e
 	}
 	parts, err := self.readRecord(filepath.Join(dir, "meta"), stateKindGroupRecord)
 	if err != nil {
-		if errors.Is(err, ErrStateNotFound) {
+		if errors.Is(err, ErrStateNotFound) || errors.Is(err, ErrStateStoreState) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: the record in %s: %w", ErrGroupRecordDamaged, name, err)

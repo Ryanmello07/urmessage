@@ -760,14 +760,27 @@ var (
 	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back, ForgetGroup leaves it")
 
 	// A group's record is on this device's disk and DOES NOT READ: its checksum does not hold, it
-	// does not decode, it names another group, or the file under its name cannot be had. It is
-	// ONE GROUP'S damage and never the device's. [DeviceStore.GroupRecord] answers it for that one
-	// group; [DeviceStore.GroupRecords] answers it BESIDE the list of every record that does read,
-	// so [Device.Restore] brings the others back and reports this one; and an invite into any
-	// other group joins. A record that does not read can never be restored, so
-	// [Device.ForgetGroup] leaves its group without a Restore having tried, and without the
-	// owner's question, which is asked of a roster this group no longer has.
+	// does not decode, or it names another group. It is ONE GROUP'S damage and never the
+	// device's. [DeviceStore.GroupRecord] answers it for that one group; [DeviceStore.GroupRecords]
+	// answers it BESIDE the list of every record that does read, so [Device.Restore] brings the
+	// others back and reports this one; and an invite into any other group joins. A record that
+	// does not read can never be restored, so [Device.ForgetGroup] leaves its group without a
+	// Restore having tried, and without the owner's question, which is asked of a roster this
+	// group no longer has.
+	//
+	// A FILE THAT COULD NOT BE READ AT ALL IS NOT THIS (Task 57, F1): see
+	// [ErrGroupRecordNotReadNow]. Damage is permanent and is judged off the octets; a read that
+	// failed got no octets to judge.
 	ErrGroupRecordDamaged = errors.New("urmessage: a group record on this device's disk does not read, so that group cannot be restored; ForgetGroup leaves it, and it can then be joined again")
+
+	// A group's record is on this device's disk and its file COULD NOT BE READ JUST NOW: another
+	// process holds it open with no read sharing (a scanner, a backup tool, the search indexer),
+	// or the read failed with an I/O error. Nothing is known about the record, so it is NOT
+	// [ErrGroupRecordDamaged], and nothing that damage permits is done to it: [Device.Restore]
+	// brings the other groups back and reports this one beside them, and [Device.ForgetGroup] of
+	// that group is refused before anything is written, so an owner is still asked the owner's
+	// question once the file reads again. Restore again later.
+	ErrGroupRecordNotReadNow = errors.New("urmessage: a group record on this device's disk could not be read just now, so that group was not restored this time; nothing of it was changed, and the next Restore tries it again")
 
 	// [Device.ForgetGroup] LEFT the group -- it is closed, its keys are gone from memory, and this
 	// device no longer holds it -- but the erase of its copy on the disk did not finish. The leave

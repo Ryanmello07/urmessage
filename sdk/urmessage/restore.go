@@ -236,8 +236,13 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	// first failure, answered inside [ErrRestore] like any other group that did not come back.
 	// It is named by the store's name for it and not by a group id, which the store cannot give
 	// (see [DurableStateStore.GroupRecords]); [Device.ForgetGroup] leaves it by its id.
+	//
+	// AND ONE RECORD THAT COULD NOT BE READ JUST NOW DOES NOT COST THE OTHERS EITHER (Task 57,
+	// F1). It is reported the same way, under [ErrGroupRecordNotReadNow] and NOT as damage, and
+	// nothing is noted of it: the next Restore tries it again, and ForgetGroup of it is refused
+	// until it reads, so an owner is asked the owner's question.
 	records, err := store.GroupRecords()
-	if err != nil && !errors.Is(err, ErrGroupRecordDamaged) {
+	if err != nil && !errors.Is(err, ErrGroupRecordDamaged) && !errors.Is(err, ErrGroupRecordNotReadNow) {
 		return nil, err
 	}
 	restored := []*Group{}
