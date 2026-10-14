@@ -821,7 +821,13 @@ func (self *connectMlsEngine) LoadGroup(groupId []byte, epoch uint64) (GroupHand
 // mls.JoinFromWelcome needs the material in order to decide. THE WINDOW THIS LEAVES AND DOES NOT
 // CLOSE: a crash between the take and the put-back loses the key package permanently, and the
 // device must publish a fresh one and be re-added. That is the store's to close, with a
-// Get/Delete split or a normative sentence, and not this method's.
+// Get/Delete split or a normative sentence, and not this method's. Open item MG-9 measures it on
+// sdk/urmessage's durable store and files the fix with the healing track.
+//
+// AND WHAT A JOIN THROUGH THIS DOOR STILL CANNOT TELL, beyond MG-1, is filed beside it: a re-add
+// over a group the device was removed from cannot tell that group from a second founder's under
+// the same id (open item MG-12), and a joiner whose adder sealed it a wrong secret meets a server
+// refusal and no sentence (open item MG-11).
 //
 // THE REFUSAL CARRIES WHAT THE INTERFACE CANNOT SAY. TakeKeyPackage answers a bare error with no
 // declared not-found value, so a loop that treated every error as "not mine" reports a broken disk

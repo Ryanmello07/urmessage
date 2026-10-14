@@ -986,3 +986,137 @@ Nothing below is decided, and this package must not decide it.
 The healing track of the hardening program, whose plan takes this item, and a `SPEC-LEDGER.md`
 number from whoever owns that register. Until one exists, `errors.go` cites this row beside the
 sentence it is about.
+
+---
+
+## MG-9 — a crash inside a join's window loses the join code, and nobody is told
+
+**Status: OPEN. Filed 2026-10-14 from the T1 red team (Task 57, its F2), which measured it. The
+design accepted the window; the fix is the healing track's (T3). It does not touch the seal, the
+payload or the authenticator.**
+
+### The property
+
+A join spends its join code only when it completes, or when it says so (`ErrJoinCodeSpent`). A
+process that dies inside the join's window is told nothing, so for it the join code must survive.
+
+### The evidence
+
+The durable store's `TakeKeyPackage` deletes the key-package file AT THE TAKE
+(`sdk/urmessage/statestore_durable.go`, the `removeLocked(path)` in `TakeKeyPackage`), and the stage
+puts it back only on a refusal the process lives to make (`sdk/urmessage/joinstage.go`, `abort`).
+The red team copied the joiner's disk at each instant of an honest join and started a new device
+over each copy (`TestT57CrashInsideTheJoinWindow`, kept in the Task 57 report and not in this
+tree):
+
+| crash at | on the disk | next start |
+|---|---|---|
+| after the engine took the join code, or before the commit | the device identity only; the key-package file is gone | `Restore` gives 0 groups and nil; the same invite answers `ErrNoJoinCodeForInvite` |
+| after the commit, before the record | also an orphan epoch state | as above; since F3, `Restore` erases the orphan state |
+| control: after the join | the record | `Restore` gives 1 group |
+
+The adder's leaf for the device stands in every row. Nobody is told that the join code is gone.
+
+### What a fix would be
+
+The stage takes the package and puts it back at once; the commit removes it just before it writes
+the state. The window in which a crash costs the join code shrinks to two fsyncs. It is a change to
+the stage and the store's take, and it is the healing track's.
+
+### What is owed elsewhere
+
+The healing track (T3) of the hardening program.
+
+---
+
+## MG-10 — a stale Welcome's staged state is served to the removed group's past-epoch loader
+
+**Status: OPEN. Filed 2026-10-14 from the T1 red team (Task 57, its F7), read from the code. Nothing
+leaks and nothing persists. Owner: the healing track (T3).**
+
+### The property
+
+During a join, the stage holds the joined state in memory and serves it for that group and epoch
+(`sdk/urmessage/joinstage.go`, `joinStage.GetGroupState`). A re-add into a group this device was
+removed from is refused when its Welcome stands at or below the removal epoch (`ErrReaddStale`,
+`sdk/urmessage/group.go`), but only after the engine joined and the state was staged.
+
+### The evidence
+
+In that interval, the REMOVED group's past-epoch loader (`Device.pastEpochLoader`,
+`sdk/urmessage/restore.go`) reads through the engine's store, which is the stage, so a hostile
+stale Welcome's state is what it is handed for that epoch. The session caches what it loads
+(`messagegroup/pastepoch.go`, `self.pastEpochs[epoch] = past`), so that epoch's history fails to
+open until a restart. Adversary: the holder of a join code, or the hostile founder of a Welcome. No
+secret of the removed group leaks, and nothing is written to the disk.
+
+### What a fix would be
+
+`begin(groupId, removedEpoch)`, and the stage serves its staged state only above that epoch.
+
+### What is owed elsewhere
+
+The healing track (T3).
+
+---
+
+## MG-11 — the joiner of a dark join sees a server refusal and no join sentence
+
+**Status: OPEN. Filed 2026-10-14 from the T1 red team (Task 57, its F8), measured. The adversary is
+a member (A4), out of scope. Owner: the identity track (T2).**
+
+### The property
+
+A join that cannot read its group should say so in a sentence an app can show, as every other join
+failure does.
+
+### The evidence
+
+Appendix B's mutant MJ22 (a member seals the wrong secret into a live add) was driven to the
+joiner's first read: the join succeeds, the first `Receive` answers "the message server refused
+this fetch: REASON_REJECTED", and `Send` is refused by the floor gate. The digest in the payload
+does not stop it, because a member holds everything the digest is over; the payload does not bind
+`group_handle_key`, so a member can seal a wrong one of that too. Same class.
+
+### What a fix would be (optional)
+
+A typed sentence for a fetch refusal made before a joined group has ever completed a walk.
+
+### What is owed elsewhere
+
+The identity track (T2), with A4.
+
+---
+
+## MG-12 — a second founder's invitation replaces a group this device was removed from (S7g)
+
+**Status: OPEN, and PINNED: `sdk/cp3b`'s strict scenario `S7g-removed-group-second-founder`
+(`TestAdvSimASecondFoundersInvitationOverAGroupTheDeviceWasRemovedFrom`) stands open until the
+identity track (T2) closes it. Re-ruled 2026-10-14 (ruling R24, the T1 red team's Step 1): pinning is
+enough until T2's re-add proof.**
+
+### The property
+
+The held-group gate honours a re-add into a group a commit removed this device from
+(`sdk/urmessage/heldgroup.go`, `joinOverHeldGroup`). An invite authenticates nobody (MG-1), so the
+gate cannot tell the group that removed the device from another founder's group under the same id
+at a later epoch, and that invite replaces the removed group's record.
+
+### The evidence
+
+The pinned scenario runs the second founder on a server of its own. The red team measured the same
+attempt on the victim's own server: the second founder's `Open` under the held id is refused
+("the founding commit was answered REASON_REJECTED, and REASON_REJECTED again after a fresh
+Hello"). So it needs an attacker's server. What it costs is local: the removed group's record, its
+history slot and its "removed" mark are replaced. Against MG-1, the attacker gains only the reuse of
+that conversation's slot.
+
+### What a fix would be
+
+A re-add proof keyed by an epoch secret the removed device held. That is a new invite field, so a
+new invite version. A cheap mitigation for the app meanwhile: say "this replaces a conversation you
+were removed from".
+
+### What is owed elsewhere
+
+The identity track (T2): the re-add proof and its invite version.
