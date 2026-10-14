@@ -314,3 +314,41 @@ func TestWhileAFailureLastsTheLeaveSaysTheTrueThingEveryRound(t *testing.T) {
 		t.Fatalf("once the failure passed, Restore answered %d group(s), %v, want the group back", len(restored), err)
 	}
 }
+
+// EVERY RESTORE RE-DECIDES THE NOTE IT LEAVES (R30). The note a restore leaves on a group it could not
+// bring back -- "will not come back" for a proven-permanent failure, "could not read" for a transient
+// or unproven one -- is the LATEST attempt's and no other's, and a success clears both. One scene,
+// four Restores over a disk that changes between them: a format verdict, then a sharing violation,
+// then a store error with no errno, then nothing in the way.
+//
+// WHAT WOULD GO RED: a note that keeps an earlier attempt's class, or a transient failure noted as a
+// group that will not come back -- the note R30 found deciding an erase.
+func TestEveryRestoreRedecidesTheNoteItLeaves(t *testing.T) {
+	ctx := context.Background()
+	dir, groupId := failClosedScene(t)
+	store, device := failClosedRestart(t, dir, groupId, nil)
+	for _, one := range []struct {
+		name       string
+		failWith   error
+		unrestored bool
+		notRead    bool
+	}{
+		{"a format verdict", fmt.Errorf("%w: the record's checksum is not the hash of the record", ErrStateStoreFormat), true, false},
+		{"a sharing violation", asStoreRead(transientErrnos[0]), false, true},
+		{"a store error with no errno", fmt.Errorf("%w: the epoch state could not be read, and the read carried no errno", ErrStateStoreState), false, true},
+		{"nothing in the way", nil, false, false},
+	} {
+		store.failWith = one.failWith
+		restored, err := device.Restore(ctx)
+		t.Logf("after %s: %d group(s), %v", one.name, len(restored), err)
+		if (one.failWith == nil) != (len(restored) == 1) {
+			t.Fatalf("after %s the Restore answered %d group(s), %v", one.name, len(restored), err)
+		}
+		if got := device.didNotRestore(groupId); got != one.unrestored {
+			t.Errorf("after %s the group is noted as one that will not come back: %v, want %v", one.name, got, one.unrestored)
+		}
+		if got := device.lastRestoreCouldNotRead(groupId); got != one.notRead {
+			t.Errorf("after %s the group is noted as one that could not be read: %v, want %v", one.name, got, one.notRead)
+		}
+	}
+}
