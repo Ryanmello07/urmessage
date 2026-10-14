@@ -764,7 +764,11 @@ var (
 	// come back because it is damaged is left by calling ForgetGroup again. A group the last
 	// Restore could not READ is not answered this: it is answered [ErrGroupRecordNotReadNow] or
 	// [ErrGroupReadUnproven], which say what is true of it (R29, the second review's W2).
-	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back, ForgetGroup leaves it")
+	//
+	// ITS REMEDY IS SCOPED TO DAMAGE (R33's X3): a Restore that cannot READ the group answers one
+	// of the two not-read sentinels instead, and the leave of that group is refused until it reads,
+	// so "if it does not come back, ForgetGroup leaves it" was not true of every group it was said of.
+	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back because it is damaged, ForgetGroup leaves it")
 
 	// A group's record is on this device's disk and DOES NOT READ: its checksum does not hold, it
 	// does not decode, or it names another group. It is ONE GROUP'S damage and never the

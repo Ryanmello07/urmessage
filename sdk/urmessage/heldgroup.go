@@ -42,6 +42,11 @@ import (
 // is "not held", which is the one answer that lets a join write. The first is refused as held
 // ([ErrGroupAlreadyHeld], carrying [ErrGroupRecordDamaged]), because the remedy is the same and it
 // exists: [Device.ForgetGroup] leaves a group whose record does not read.
+//
+// AND A GROUP THE LAST RESTORE COULD NOT READ IS REFUSED WITH THAT CLASS'S SENTINEL (R33's X3), not
+// [ErrGroupAlreadyHeld]'s "leave it first with ForgetGroup": the leave of such a group is refused
+// until it reads ([ErrGroupRecordNotReadNow], [ErrGroupReadUnproven]), so that remedy would be
+// false. Its record is on the disk, so the invite is refused all the same.
 func (self *Device) joinOverHeldGroup(groupId []byte) (replaces *Group, readd bool, removedEpoch uint64, err error) {
 	self.mutex.Lock()
 	live := self.groups[string(groupId)]
@@ -65,6 +70,10 @@ func (self *Device) joinOverHeldGroup(groupId []byte) (replaces *Group, readd bo
 		return nil, false, 0, heldUnread(groupId, err, "the invite into it is refused")
 	}
 	if record.RemovedKind == removedNone {
+		if class, notRead := self.notReadClass(groupId); notRead {
+			return nil, false, 0, fmt.Errorf("urmessage: group %x is on this device's disk and the last Restore could not read it, so the invite into it is refused: %w",
+				groupId, notReadSentinel(class))
+		}
 		return nil, false, 0, fmt.Errorf("%w: group %x has a record on this device's disk", ErrGroupAlreadyHeld, groupId)
 	}
 	readd = true
@@ -178,10 +187,17 @@ func (self *Device) noteNotRead(groupId []byte, class readClass) {
 
 // lastRestoreCouldNotRead answers whether the latest restore of this group could not read it.
 func (self *Device) lastRestoreCouldNotRead(groupId []byte) bool {
+	_, found := self.notReadClass(groupId)
+	return found
+}
+
+// notReadClass answers the class the latest restore of this group could not read it for, and
+// whether it is in the not-read set at all.
+func (self *Device) notReadClass(groupId []byte) (readClass, bool) {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
-	_, found := self.notRead[string(groupId)]
-	return found
+	class, found := self.notRead[string(groupId)]
+	return class, found
 }
 
 // clearNotes takes one group's notes away, both of them: the latest attempt read the group
