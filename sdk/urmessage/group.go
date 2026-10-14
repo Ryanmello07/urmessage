@@ -1459,11 +1459,11 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 		}
 		// A JOIN CODE THE STORE HOLDS AND COULD NOT READ FOR A MOMENT IS NOT A MISSING ONE (Task
 		// 57, F4; R26, V3b). The engine carries the store's own refusal. Only a TRANSIENT one
-		// ([transientRead]: another process held the file, so the file is there) is the window's,
+		// ([classifyRead]'s transient class: another process held the file, so the file is there) is the window's,
 		// and its sentence is true of it: nothing was written, the join code is still on the disk,
 		// and the same invite joins once it reads. A join code that will never read -- its octets
 		// damaged, or a read that failed for good -- is no join code, and is said so below.
-		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && transientRead(err) {
+		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && classifyRead(err) == readTransient {
 			joined, err = nil, fmt.Errorf("%w: %w", ErrJoinRefused, err)
 			return
 		}

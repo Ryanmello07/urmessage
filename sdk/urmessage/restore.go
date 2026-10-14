@@ -252,8 +252,17 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	// F1). It is reported the same way, under [ErrGroupRecordNotReadNow] and NOT as damage, and
 	// nothing is noted of it: the next Restore tries it again, and ForgetGroup of it is refused
 	// until it reads, so an owner is asked the owner's question.
+	//
+	// AND ONE THIS BUILD CANNOT CLASSIFY DOES NOT EITHER (R29): reported under
+	// [ErrGroupReadUnproven], noted nowhere, and its leave refused until it reads.
+	//
+	// THE NOT-READ SET IS THE LAST RESTORE'S, so it starts empty here: a group this one cannot
+	// read again is put back below, and a group whose record this one finds damaged is not kept
+	// refused on the strength of an earlier read.
+	self.clearNotRead()
 	records, err := store.GroupRecords()
-	if err != nil && !errors.Is(err, ErrGroupRecordDamaged) && !errors.Is(err, ErrGroupRecordNotReadNow) {
+	if err != nil && !errors.Is(err, ErrGroupRecordDamaged) && !errors.Is(err, ErrGroupRecordNotReadNow) &&
+		!errors.Is(err, ErrGroupReadUnproven) {
 		return nil, err
 	}
 	restored := []*Group{}
@@ -275,22 +284,27 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 			}
 		}
 		if err != nil {
-			// REMEMBERED, so that [Device.ForgetGroup] can leave a group that will not come back:
-			// its record is still on the disk, and a join into it is refused while it is.
+			// REMEMBERED AS WILL-NOT-COME-BACK ONLY ON PROOF (R29). A group noted unrestored is
+			// one [Device.ForgetGroup] leaves WITHOUT the owner's question, irreversibly, so only
+			// a failure [classifyRead] proves permanent is noted that way: its record is still on
+			// the disk, a join into it is refused while it is, and the leave is its way out.
 			//
-			// UNLESS IT FAILED FOR A MOMENT (R26, the fix review's V1). A file of this group that
-			// another process held -- the record, an epoch state, any of them: the subject is the
-			// group's restore, not a file -- is no reason the group will not come back, and a
-			// group noted here is left WITHOUT the owner's question. So a transient failure
-			// ([transientRead]) is reported under [ErrGroupRecordNotReadNow] and noted nowhere;
-			// the next Restore tries it again, and until one succeeds a leave of it answers
-			// [ErrGroupNotRestored].
-			if transientRead(err) {
-				// begun as the list's own report of a record not read now begins, so an app reads
-				// one sentence for both
-				err = fmt.Errorf("%w: %w: group %x: %w", ErrRestore, ErrGroupRecordNotReadNow, record.GroupId, err)
-			} else {
+			// ANY OTHER FAILURE, OF ANY FILE OF THE GROUP, IS NOT (R26's V1, R29's W1): the
+			// subject is the group's restore, not a file. A transient failure (another process
+			// held a file) and an unproven one (nothing proves it will or will not pass) are each
+			// reported under their own sentinel and kept in the not-read set instead, so the leave
+			// refuses with that same true sentence until a Restore reads the group or finds it
+			// damaged (W2). Both reports begin as the list's own report of a record not read
+			// begins, so an app reads one sentence for each.
+			switch classifyRead(err) {
+			case readPermanent:
 				self.noteUnrestored(record.GroupId)
+			case readTransient:
+				self.noteNotRead(record.GroupId, readTransient, err)
+				err = fmt.Errorf("%w: %w: group %x: %w", ErrRestore, ErrGroupRecordNotReadNow, record.GroupId, err)
+			default:
+				self.noteNotRead(record.GroupId, readUnproven, err)
+				err = fmt.Errorf("%w: %w: group %x: %w", ErrRestore, ErrGroupReadUnproven, record.GroupId, err)
 			}
 			if firstFailure == nil {
 				firstFailure = err

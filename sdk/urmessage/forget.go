@@ -64,13 +64,17 @@ import (
 // gate's refusal of an invite into such a group named a remedy that failed for the gate's own
 // reason, and the group could be neither restored, left nor joined again.
 //
-// A RECORD WHOSE FILE ANOTHER PROCESS HOLDS FOR A MOMENT IS NOT ONE THAT DOES NOT READ (Task 57,
-// F1; R26). A sharing or lock violation ([transientRead]) is no finding about the record, so it is
-// the store failing to answer, and that is refused before anything is written: "whether this
-// device holds group %x on its disk could not be read, so nothing was left". The damage rule
-// above is for PERMANENT damage only, and every other failure to read the record is permanent. Read as damage, one lock at the moment of the leave erased an owner's
-// group with others in it, without the owner's question; refused, the same leave asked again once
-// the file reads is asked it.
+// A GROUP WHOSE READ FAILED FOR A REASON NOT PROVEN PERMANENT IS NOT LEFT (Task 57's F1, R26,
+// R29). The damage rule above is for PROVEN-permanent damage only ([classifyRead]): a verdict this
+// code made on the octets, a required file absent, a path of the wrong type, a permission refused,
+// the medium. A read another process blocked for a moment, or one this build cannot classify, is
+// no finding about the group, so it is the store failing to answer, and the leave is refused
+// before anything is written, with the class's own sentence and "so nothing was left": for the
+// record, by this call's own read of it; for any other file, by what the last Restore reported
+// ([Device.notReadRefusal]). The rule had been the other way round, damage unless proven
+// transient, and it leaked three times: an owner's group with others in it was erased, without the
+// owner's question, over a lock on its record, then on an epoch state, then on its `sent`
+// directory, where one site had dropped the errno the proof needed.
 //
 // IT IS AN ADMISSION'S PEER, UNDER [Device.admitMutex] (Task 57, F6). A Join, a CreateGroup or a
 // Restore of the same group on another goroutine waits for the leave, and the leave for it: a Join
@@ -106,6 +110,11 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 	}
 	if !held {
 		if durable {
+			// A GROUP THE LAST RESTORE COULD NOT READ is refused with that restore's own true
+			// sentence, and nothing is written (R29, the second review's W2)
+			if refusal := self.notReadRefusal(groupId); refusal != nil {
+				return refusal
+			}
 			onDisk, reads, err := recordOnDisk(store, groupId)
 			if err != nil {
 				return err
@@ -169,7 +178,9 @@ func recordOnDisk(store DeviceStore, groupId []byte) (onDisk bool, reads bool, e
 	case errors.Is(err, ErrGroupRecordDamaged):
 		return true, false, nil
 	}
-	return false, false, fmt.Errorf("urmessage: whether this device holds group %x on its disk could not be read, so nothing was left: %w", groupId, err)
+	// a record that could not be read for a reason not proven permanent, said by its class (R29)
+	return false, false, fmt.Errorf("urmessage: whether this device holds group %x on its disk could not be read, so nothing was left: %w: %w",
+		groupId, notReadSentinel(classifyRead(err)), err)
 }
 
 // forgetUnrestored leaves a group that is on the disk and that will not come back, because the

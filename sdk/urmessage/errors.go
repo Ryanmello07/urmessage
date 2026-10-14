@@ -761,7 +761,9 @@ var (
 	// [Device.ForgetGroup] was asked to leave a group that is on this device's disk and that no
 	// [Device.Restore] has tried to bring back since this process started. Restore first: a group
 	// that comes back is left like any other, the owner's refusal included, and one that does not
-	// come back is left by calling ForgetGroup again.
+	// come back because it is damaged is left by calling ForgetGroup again. A group the last
+	// Restore could not READ is not answered this: it is answered [ErrGroupRecordNotReadNow] or
+	// [ErrGroupReadUnproven], which say what is true of it (R29, the second review's W2).
 	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back, ForgetGroup leaves it")
 
 	// A group's record is on this device's disk and DOES NOT READ: its checksum does not hold, it
@@ -773,23 +775,33 @@ var (
 	// Restore having tried, and without the owner's question, which is asked of a roster this
 	// group no longer has.
 	//
-	// A FILE THAT COULD NOT BE READ FOR A PERMANENT REASON IS THIS TOO (R26): a directory or any
-	// other non-file standing at the record's name, a deny ACL, a symlink loop, an I/O error. A
-	// record that will never read must stay one a device can leave. A file another process held
-	// for a moment is NOT this ([ErrGroupRecordNotReadNow]); [transientRead] is the one rule that
-	// tells the two apart.
+	// A FILE THAT COULD NOT BE READ FOR A PROVEN-PERMANENT REASON IS THIS TOO (R26, R29): a
+	// directory or any other non-file standing at the record's name, a deny ACL, a symlink loop,
+	// the medium. A record that will never read must stay one a device can leave. A read that
+	// failed for any reason [classifyRead] cannot prove permanent is NOT this: it is
+	// [ErrGroupRecordNotReadNow] or [ErrGroupReadUnproven].
 	ErrGroupRecordDamaged = errors.New("urmessage: a group record on this device's disk does not read, so that group cannot be restored; ForgetGroup leaves it, and it can then be joined again")
 
-	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ JUST NOW -- its record,
-	// or an epoch state a restore needs (R26, the fix review's V1): another process holds it open
-	// with no read sharing or locked (a scanner, a backup tool, the search indexer), a sharing or
-	// lock violation and nothing else ([transientRead]). Nothing is known about the group, so it
-	// is NOT
+	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ JUST NOW -- any file a
+	// restore needs (R26, R29): another process holds it open with no read sharing or locked (a
+	// scanner, a backup tool, the search indexer), a sharing or lock violation and nothing else
+	// ([classifyRead]'s transient class). Nothing is known about the group, so it is NOT
 	// [ErrGroupRecordDamaged], and nothing that damage permits is done to it: [Device.Restore]
 	// brings the other groups back and reports this one beside them, and [Device.ForgetGroup] of
-	// that group is refused before anything is written, so an owner is still asked the owner's
-	// question once the file reads again. Restore again later.
+	// that group is refused before anything is written ("so nothing was left"), so an owner is
+	// still asked the owner's question once the file reads again. Restore again later.
 	ErrGroupRecordNotReadNow = errors.New("urmessage: a file of a group on this device's disk could not be read just now, so that group was not restored this time; nothing of it was changed, and the next Restore tries it again")
+
+	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ FOR A REASON THIS BUILD
+	// CANNOT CLASSIFY (R29): [classifyRead]'s unproven class -- a failure of the store's with no
+	// errno, an errno in neither of its lists (too many open files, out of memory, a device not
+	// ready), or a failure that is not the store's. The erase without the owner's question needs
+	// PROOF that the group can never be read, and this is not proof, so the group is treated as
+	// [ErrGroupRecordNotReadNow] is: not restored, nothing changed, and [Device.ForgetGroup] of it
+	// refused ("so nothing was left"). It is left once a Restore reads it, or finds it damaged.
+	// Open item MG-15 (messagegroup/OPENITEMS.md) is the residual: a group that stays
+	// this way can never be left by this build.
+	ErrGroupReadUnproven = errors.New("urmessage: a file of a group on this device's disk could not be read, and this build cannot tell whether that will pass, so that group was not restored; nothing of it was changed, and it is not left until a Restore reads it or finds it damaged")
 
 	// [Device.ForgetGroup] LEFT the group -- it is closed, its keys are gone from memory, and this
 	// device no longer holds it -- but the erase of its copy on the disk did not finish. The leave
@@ -852,7 +864,7 @@ var (
 	// (messagegroup.ErrEngineNoKeyPackageForWelcome) is the same one for a Welcome addressed to
 	// nobody here and for a store that would not hand over the join code it holds, and it carries
 	// the store's last refusal WRAPPED. A store that failed to read the join code FOR A MOMENT
-	// ([transientRead]: another process held the file) gets [ErrJoinRefused]'s, which is then
+	// ([classifyRead]'s transient class: another process held the file) gets [ErrJoinRefused]'s, which is then
 	// true: the join code is still there, and the same invite joins once the store reads it. A
 	// take that removed the file and then failed gets [ErrJoinCodeSpent]'s. Everything else gets
 	// this one: no join code at all, a join code whose octets are damaged, or a read that failed

@@ -82,7 +82,10 @@ func heldUnread(groupId []byte, err error, refused string) error {
 	if errors.Is(err, ErrGroupRecordDamaged) {
 		return fmt.Errorf("%w: group %x has a record on this device's disk that does not read: %w", ErrGroupAlreadyHeld, groupId, err)
 	}
-	return fmt.Errorf("urmessage: whether this device already holds group %x could not be read, so %s: %w", groupId, refused, err)
+	// AND IT SAYS WHICH OF THE TWO NOT-READ CLASSES THIS IS (R29), by the sentinel [Device.Restore]
+	// reports the same failure under, so an app reads one sentence for each
+	return fmt.Errorf("urmessage: whether this device already holds group %x could not be read, so %s: %w: %w",
+		groupId, refused, notReadSentinel(classifyRead(err)), err)
 }
 
 // foundOverHeldGroup is the same question for [Device.CreateGroup], and it has no exception: a
@@ -121,6 +124,7 @@ func (self *Device) hold(group *Group) error {
 	}
 	self.groups[string(group.id)] = group
 	delete(self.unrestored, string(group.id))
+	delete(self.notRead, string(group.id))
 	return nil
 }
 
@@ -141,6 +145,7 @@ func (self *Device) holdReplacing(group *Group, judged *Group) error {
 	}
 	self.groups[string(group.id)] = group
 	delete(self.unrestored, string(group.id))
+	delete(self.notRead, string(group.id))
 	self.mutex.Unlock()
 	if judged != nil {
 		judged.Close()
@@ -155,6 +160,54 @@ func (self *Device) noteUnrestored(groupId []byte) {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
 	self.unrestored[string(groupId)] = true
+	delete(self.notRead, string(groupId))
+}
+
+// notReadEntry is one group the last [Device.Restore] could not read: the class [classifyRead]
+// gave the failure, which is never [readPermanent], and the failure.
+type notReadEntry struct {
+	class readClass
+	cause error
+}
+
+// noteNotRead records that [Device.Restore] could not READ one group, for a reason it cannot
+// prove permanent (R29, the second review's W2). Such a group is NOT left without the owner's
+// question; what [Device.ForgetGroup] answers for it is [Device.notReadRefusal].
+func (self *Device) noteNotRead(groupId []byte, class readClass, cause error) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	self.notRead[string(groupId)] = notReadEntry{class: class, cause: cause}
+	delete(self.unrestored, string(groupId))
+}
+
+// clearNotRead empties the not-read set at the start of a Restore: it is the last Restore's.
+func (self *Device) clearNotRead() {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	clear(self.notRead)
+}
+
+// notReadRefusal is what [Device.ForgetGroup] answers for a group the last Restore could not
+// read, and nil for any other group. It is the TRUE sentence: the class's own sentinel, the same
+// one Restore reported, and that nothing was left. The remedy [ErrGroupNotRestored] names --
+// Restore, then leave -- loops while the hold lasts, so it is not the answer here (W2).
+func (self *Device) notReadRefusal(groupId []byte) error {
+	self.mutex.Lock()
+	entry, found := self.notRead[string(groupId)]
+	self.mutex.Unlock()
+	if !found {
+		return nil
+	}
+	return fmt.Errorf("%w; so nothing was left: group %x: %w", notReadSentinel(entry.class), groupId, entry.cause)
+}
+
+// notReadSentinel is the sentinel each not-read class is reported under. Anything but transient
+// is unproven here: a proven-permanent failure is damage, and is never a refusal of a leave.
+func notReadSentinel(class readClass) error {
+	if class == readTransient {
+		return ErrGroupRecordNotReadNow
+	}
+	return ErrGroupReadUnproven
 }
 
 func (self *Device) didNotRestore(groupId []byte) bool {

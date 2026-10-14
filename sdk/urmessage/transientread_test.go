@@ -48,8 +48,8 @@ func TestARecordThatCanNeverBeReadIsDamageAndItsGroupCanBeLeft(t *testing.T) {
 	if !errors.Is(err, ErrGroupRecordDamaged) || errors.Is(err, ErrStateNotFound) {
 		t.Fatalf("the one-id read of a record that can never be read answered %v, want ErrGroupRecordDamaged", err)
 	}
-	if transientRead(err) {
-		t.Errorf("a record that can never be read is classed as a transient read: %v", err)
+	if classifyRead(err) != readPermanent {
+		t.Errorf("a record that can never be read is not classed proven permanent: %v", err)
 	}
 	// THE LIST: the other record, and this one reported as damage, by its directory
 	records, err := store.GroupRecords()
@@ -74,10 +74,10 @@ func TestARecordThatCanNeverBeReadIsDamageAndItsGroupCanBeLeft(t *testing.T) {
 	}
 }
 
-// ONLY A SHARING OR LOCK VIOLATION IS A TRANSIENT READ (R26). [transientRead] is held over the
-// errno set both ways: each of the platform's transient errnos, wrapped as the store wraps an OS
-// error, is transient; every errno R26 names as permanent is not; and neither is a store error
-// that carries no errno, nor an errno that is not the store's.
+// ONLY A SHARING OR LOCK VIOLATION IS A TRANSIENT READ (R26). [classifyRead]'s transient class is
+// held over the errno set both ways: each of the platform's transient errnos, wrapped as the store
+// wraps an OS error, is transient; every errno R26 names as permanent is not; and neither is a
+// store error that carries no errno, nor an errno that is not the store's.
 //
 // WHAT WOULD GO RED: a classifier that calls every [ErrStateStoreState] transient, and a record
 // that will never read is held for good; one that calls none transient, and F1 is back.
@@ -90,20 +90,20 @@ func TestOnlyASharingOrLockViolationIsATransientRead(t *testing.T) {
 		t.Fatalf("CONTROL FAILED: this platform's transient set is empty, so nothing below is held")
 	}
 	for _, errno := range transientErrnos {
-		if !transientRead(asStore(errno)) {
+		if classifyRead(asStore(errno)) != readTransient {
 			t.Errorf("errno %d (%v) is in the transient set and is not classed transient", uint(errno), errno)
 		}
-		if transientRead(&os.PathError{Op: "open", Path: "meta", Err: errno}) {
+		if classifyRead(&os.PathError{Op: "open", Path: "meta", Err: errno}) == readTransient {
 			t.Errorf("errno %d outside the store's sentinel is classed transient", uint(errno))
 		}
 	}
 	for _, errno := range []syscall.Errno{syscall.EACCES, syscall.ELOOP, syscall.ENOENT, syscall.EIO, syscall.EISDIR,
 		syscall.Errno(5), syscall.Errno(1)} { // 5 and 1: Windows ERROR_ACCESS_DENIED and ERROR_INVALID_FUNCTION
-		if transientRead(asStore(errno)) {
+		if classifyRead(asStore(errno)) == readTransient {
 			t.Errorf("errno %d (%v) is permanent and is classed transient", uint(errno), errno)
 		}
 	}
-	if transientRead(fmt.Errorf("%w: this store is closed", ErrStateStoreState)) {
+	if classifyRead(fmt.Errorf("%w: this store is closed", ErrStateStoreState)) == readTransient {
 		t.Errorf("a store error that carries no errno is classed transient")
 	}
 }

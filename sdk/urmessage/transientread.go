@@ -2,37 +2,104 @@ package urmessage
 
 import (
 	"errors"
+	"slices"
 	"syscall"
+
+	"github.com/urnetwork/message/syntax"
 )
 
-// transientRead is THE ONE CLASSIFIER of a failed read of this device's disk (R26): it answers
-// whether the store could not read a file FOR A MOMENT -- another process holds it, with a sharing
-// or lock violation -- or for a reason that will not pass.
+// readClass is what [classifyRead] answers about one failed read of this device's disk.
+type readClass uint8
+
+const (
+	// readUnproven is the ZERO VALUE AND THE DEFAULT: nothing proves the failure will pass, and
+	// nothing proves it will not. A group whose restore failed this way is NOT left without the
+	// owner's question ([ErrGroupReadUnproven]).
+	readUnproven readClass = iota
+	// readTransient is a sharing or lock violation: another process holds the file for a moment.
+	// Not left either ([ErrGroupRecordNotReadNow]).
+	readTransient
+	// readPermanent is PROOF that this build can never read the group: the one class
+	// [Device.ForgetGroup] may leave without the owner's question (R9).
+	readPermanent
+)
+
+// classifyRead is THE ONE CLASSIFIER of a failed read of this device's disk, and IT IS
+// FAIL-CLOSED (R29): only a failure it can PROVE permanent is permanent.
 //
-// IT EXISTS BECAUSE ONE PROMISE LEAKED TWICE. [Device.ForgetGroup] leaves a group WITHOUT the
-// owner's question only when that group failed to restore for a PERMANENT reason. The promise
-// broke first on the record file (Task 57's F1), then on the epoch-state file (the fix review's
-// V1): each fix had been made at one file, and the subject is not a file. It is "this group's
-// restore failed", whichever file failed. So the rule is made once, here, and applied wherever a
-// restore failure is recorded and wherever the list classifies a record.
+// WHY THE RULE IS INVERTED: ONE PROMISE LEAKED THREE TIMES. [Device.ForgetGroup] leaves a group
+// WITHOUT the owner's question only when that group failed to restore for a PERMANENT reason, and
+// the erase is irreversible: an owner's copy gone without the transfer can leave the group without
+// an owner for every member. The promise broke on the record file (Task 57's F1), then on an epoch
+// state (the fix review's V1), then on the `sent` directory (the second review's W1). The first two
+// fixes moved the rule from a file to the group's restore, which is the right subject; the third
+// leak was in the rule's INPUT. The rule then was fail-open -- transient only on proof, a two- or
+// three-item errno list, and everything else damage -- so the promise held only while every read
+// site on the restore path kept its errno, and one `%v` (SentRecords) dropped it and made a held
+// directory "damage". The same rule called damage every transient failure outside its list: too
+// many open files, out of memory, a device not ready. The transient list is incomplete by nature,
+// so the proof has to be on the other side: an erase without the owner's question needs proof that
+// this build can never read the group, and everything this code cannot prove is UNPROVEN, which is
+// never erased.
 //
-// THE RULE. Transient is ONLY the platform's sharing and lock violations ([transientErrnos]): on
-// Windows ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION, which is what a scanner or a backup
-// tool holding a file causes; elsewhere EAGAIN, EINTR and EBUSY. Everything else is PERMANENT and
-// is damage, R9's: EACCES, ELOOP, ENOENT inside a group, EIO, a file that is not a regular file,
-// and every checksum, decode or id mismatch. An error that is not this store's
-// ([ErrStateStoreState]) or that carries no errno is not transient either: this classifier never
-// guesses "for a moment", because that is the answer that keeps a group a device can never leave.
-func transientRead(err error) bool {
-	if !errors.Is(err, ErrStateStoreState) {
-		return false
+// THE THREE CLASSES.
+//   - PERMANENT, an explicit allow-list:
+//     (1) a verdict this code made on bytes it read: [ErrStateStoreFormat] (a checksum, a format, a
+//     record whose decode or id does not match), and an epoch state that does not decode (the
+//     syntax package's decode sentinels, which are its whole error contract);
+//     (2) a refusal by name: [ErrGroupPredatesJoinSeal];
+//     (3) a required file absent inside an existing group: [ErrStateNotFound], and the platform's
+//     not-found errnos;
+//     (4) the platform's errnos for a path of the wrong type, a permission this device has not got,
+//     and the medium ([permanentErrnos]).
+//   - TRANSIENT: a failure of this store's carrying a sharing or lock violation
+//     ([transientErrnos], R26's list, unchanged).
+//   - UNPROVEN: everything else -- a failure of this store's with no errno, an errno in neither
+//     list (EMFILE, ENOMEM; Windows 4, 8, 1450), and a failure that is not the store's (a cancelled
+//     context, an engine error).
+//
+// AN ERRNO IS JUDGED ONLY WHEN THE STORE CARRIED IT ([ErrStateStoreState]), and it is judged
+// before any sentinel: it is the OS's own account of that read, the most specific evidence there
+// is. An errno anybody else carried proves nothing about this disk.
+//
+// IT IS APPLIED where a restore failure is recorded ([Device.Restore]), where the list classifies a
+// record ([DurableStateStore.GroupRecords], through groupRecordInLocked), where [Device.ForgetGroup]
+// decides (recordOnDisk), and where a failed take of a join code is worded ([Device.Join]).
+func classifyRead(err error) readClass {
+	if err == nil {
+		return readUnproven
 	}
-	var errno syscall.Errno
-	if !errors.As(err, &errno) {
-		return false
+	if errors.Is(err, ErrStateStoreState) {
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			switch {
+			case slices.Contains(transientErrnos, errno):
+				return readTransient
+			case slices.Contains(permanentErrnos, errno):
+				return readPermanent
+			}
+			return readUnproven
+		}
 	}
-	for _, transient := range transientErrnos {
-		if errno == transient {
+	if errors.Is(err, ErrStateStoreFormat) || errors.Is(err, ErrStateNotFound) ||
+		errors.Is(err, ErrGroupPredatesJoinSeal) || epochStateDoesNotDecode(err) {
+		return readPermanent
+	}
+	return readUnproven
+}
+
+// epochStateDoesNotDecode answers whether err carries one of the syntax package's DECODE sentinels,
+// which that package states is its complete error contract. On the restore path the only octets
+// decoded by it are an epoch state this store handed back, so this is a verdict on bytes this code
+// read. The two sentinels that are not about input -- an overflow on encode, and a negative length,
+// which is API misuse -- are not here.
+func epochStateDoesNotDecode(err error) bool {
+	for _, decode := range []error{
+		syntax.ErrTruncated, syntax.ErrTrailingBytes, syntax.ErrVarintReserved, syntax.ErrVarintNotMinimal,
+		syntax.ErrLengthExceedsInput, syntax.ErrLengthExceedsMax, syntax.ErrOptionalPresence,
+		syntax.ErrZeroLengthElement, syntax.ErrRoundTripNotByteExact, syntax.ErrRoundTripNotStable,
+	} {
+		if errors.Is(err, decode) {
 			return true
 		}
 	}

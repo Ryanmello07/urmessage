@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -185,9 +186,10 @@ func TestARecordAnotherProcessHoldsIsNotDamageAndTheOwnerIsStillAsked(t *testing
 // ASKED (R26, the fix review's V1; the reviewer's probe, kept as the regression it found). F1's
 // promise is about the group's restore, whichever of its files failed: here every epoch state of
 // alice's group is held while she restores, in the app's own order (restore, then leave). The
-// Restore reports the group as not read now; once the files are released, the leave is the one a
-// device that has not restored that group gets, and the next Restore brings it back and asks the
-// owner's question.
+// Restore reports the group as not read now; once the files are released, the leave is refused with
+// that same true sentence and nothing is written (R29's W2: it used to answer ErrGroupNotRestored,
+// whose remedy loops while a hold lasts, and this case asserted that), and the next Restore brings
+// the group back and asks the owner's question.
 //
 // WHAT WOULD GO RED: note any restore failure as "will not come back", and the leave after the
 // release erases the owner's group, with bob in it, unasked -- measured, 3 files to 0.
@@ -221,8 +223,8 @@ func TestAnEpochStateAnotherProcessHoldsDuringRestoreIsNotDamageAndTheOwnerIsSti
 		release()
 	}
 	err = alice.device.ForgetGroup(groupId)
-	if !errors.Is(err, urmessage.ErrGroupNotRestored) {
-		t.Errorf("the owner's leave after the release answered %v, want ErrGroupNotRestored", err)
+	if !errors.Is(err, urmessage.ErrGroupRecordNotReadNow) || !strings.Contains(err.Error(), "so nothing was left") {
+		t.Errorf("the owner's leave after the release answered %v, want ErrGroupRecordNotReadNow and that nothing was left", err)
 	}
 	if after := len(advGroupFiles(t, alice.stateDir, groupId)); after != before {
 		t.Fatalf("the owner's group lost files: %d before, %d after", before, after)
