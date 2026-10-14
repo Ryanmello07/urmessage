@@ -53,9 +53,9 @@ joined will simply wait, because no key package is published.
   each gets its own `-dir`.
 * **The credential is a secret.** It is read from a path and never printed; the only thing said
   about it is its length.
-* **The invite is key material in full.** Whoever reads it is in the group. It is written 0600, to
-  a path outside any repository, and deleted as soon as it has been used. Neither file may ever
-  enter a working tree.
+* **Treat the invite as secret.** It carries the Welcome, and it names the group and who is in
+  it. It is written 0600, to a path outside any repository, and deleted as soon as it has been
+  used. Neither file may ever enter a working tree.
 * **`-dir` must not be inside a repo either** — it holds the durable MLS state.
 
 ## What it asserts, and what it does not

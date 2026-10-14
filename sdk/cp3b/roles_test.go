@@ -490,6 +490,8 @@ type seamMember struct {
 	session     *messagegroup.GroupSession
 	groupId     []byte
 	pqSecret    []byte
+	// the private half of the X-Wing key this member's leaf publishes, which a join seal is made to
+	xwing *messagegroup.XwingPrivateKey
 }
 
 // seamMember stands one up and says Hello through its own transport.
@@ -561,6 +563,7 @@ func (self *world) seamMemberClaiming(t *testing.T, ctx context.Context, name st
 		// the identity this member is KNOWN BY, which is its credential's and not its signer's:
 		// the roster, the policy and every role decision are keyed on the credential identity.
 		identityPub: append([]byte(nil), credential...),
+		xwing:       xwing,
 	}
 }
 
@@ -582,7 +585,19 @@ func (self *seamMember) join(t *testing.T, invite *urmessage.Invite) {
 	if err != nil {
 		t.Fatalf("%s's JoinFromWelcome: %v", self.name, err)
 	}
-	session, err := messagegroup.NewGroupSession(handle, invite.PqSecret, invite.GroupHandleKey,
+	// THE JOIN SEAL, OPENED FROM THE PUBLIC PACKAGES AND NOT THROUGH urmessage: target type 0x03,
+	// payload type 0x04, content epoch 0, target id u32(own leaf), and a 96 octet payload whose
+	// first two thirds are pq_secret and group_handle_key. A second spelling of the format, which
+	// is what a member that is not this sdk is.
+	leaf := handle.OwnLeafIndex()
+	_, joinSecrets, err := messagegroup.OpenWrapBody(self.xwing, invite.GroupId, 0, 0x03,
+		[]byte{byte(leaf >> 24), byte(leaf >> 16), byte(leaf >> 8), byte(leaf)}, 0x04, invite.JoinSeal)
+	if err != nil || len(joinSecrets) != 96 {
+		handle.Close()
+		t.Fatalf("%s opening its join seal: %d octets, %v", self.name, len(joinSecrets), err)
+	}
+	pqSecret, groupHandleKey := joinSecrets[:32], joinSecrets[32:64]
+	session, err := messagegroup.NewGroupSession(handle, pqSecret, groupHandleKey,
 		self.reserver, func() int64 { return time.Now().UnixMilli() }, self.transport.Nonce())
 	if err != nil {
 		handle.Close()
@@ -591,7 +606,7 @@ func (self *seamMember) join(t *testing.T, invite *urmessage.Invite) {
 	t.Cleanup(func() { session.Close() })
 	self.handle, self.session = handle, session
 	self.groupId = append([]byte(nil), invite.GroupId...)
-	self.pqSecret = append([]byte(nil), invite.PqSecret...)
+	self.pqSecret = append([]byte(nil), pqSecret...)
 }
 
 // commitAddAndSubmit builds an Add of one key package through the seam's by-value arm, merges it,

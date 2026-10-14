@@ -157,7 +157,7 @@ func (self *advJoin) recordOf(t *testing.T, who *persona) *urmessage.GroupRecord
 // advHarvest is the recorder's whole attack on one join: the Shor grant over what was captured,
 // the scrape of the haystack, and the read. It answers the epochs it read.
 func advHarvest(t *testing.T, world *world, groupId []byte, captured [][]byte, haystack []byte,
-	joinCode []byte, beforeJoin string, invite []byte, canaries map[string]uint64) []string {
+	joinCode []byte, beforeJoin string, invite []byte, canaries map[string]uint64, grants ...func(*advShadow)) []string {
 
 	t.Helper()
 	version, fields := advInviteFields(t, invite)
@@ -169,7 +169,17 @@ func advHarvest(t *testing.T, world *world, groupId []byte, captured [][]byte, h
 		t.Logf("the recorder captured no init key, so the CRQC inverts nothing and the shadow does not exist")
 		return []string{}
 	}
+	for _, grant := range grants {
+		grant(shadow)
+	}
 	scraped := advScrape(t, world, groupId, shadow, haystack)
+	if scraped.pqSecret == nil && len(fields) == 5 {
+		// NOTHING IN THE CLEAR, SO THE SEAL: opened with the X-Wing key the shadow holds, which is
+		// a useless one unless a grant above replaced it.
+		if pqSecret, groupHandleKey, opened := advOpenSeal(t, shadow, groupId, fields[3]); opened {
+			return advRead(t, world, shadow, pqSecret, groupHandleKey, canaries)
+		}
+	}
 	if scraped.pqSecret == nil {
 		shadow.handle.Close()
 		return []string{}
@@ -396,22 +406,21 @@ func TestAdvSimTheInvitationAloneReadsNothing(t *testing.T) {
 	advJudge(t, "P1-c1-invite-alone", observed)
 }
 
-// CONTROL: both codes, with the pq_secret field of the RECORDED invitation replaced by random
-// octets. The honest joiner still joined on the real one. The read is causal in that field.
+// CONTROL: both codes and the group's TRUE group_handle_key handed to the recorder, with 32 random
+// octets where the control below hands it the true pq_secret. The read is causal in that one value.
 func TestAdvSimAReplacedPqSecretReadsNothing(t *testing.T) {
 	scene := advFounding(t, true)
-	version, fields := advInviteFields(t, scene.invite)
-	if len(fields) < 4 {
-		advHarness(t, "the invite carries %d fields, so there is no fourth to replace", len(fields))
+	record := scene.recordOf(t, scene.alice)
+	if record == nil || len(record.GroupHandleKey) != 32 {
+		advHarness(t, "the founder's durable record does not hold the group_handle_key to inject")
 	}
-	replaced := make([]byte, len(fields[3]))
+	replaced := make([]byte, 32)
 	if _, err := rand.Read(replaced); err != nil {
 		advHarness(t, "drawing the replacement: %v", err)
 	}
-	fields[3] = replaced
-	recorded := advEncodeInvite(version, fields)
-	haystack := append(append([]byte(nil), scene.joinCode...), recorded...)
-	observed := advHarvest(t, scene.world, scene.groupId, [][]byte{scene.joinCode, recorded}, haystack,
+	haystack := append(scene.paste.haystack(), replaced...)
+	haystack = append(haystack, record.GroupHandleKey...)
+	observed := advHarvest(t, scene.world, scene.groupId, scene.paste.captured, haystack,
 		scene.joinCode, scene.bobBeforeJoin, scene.invite, scene.canaries)
 	advJudge(t, "P1-c2-replaced-pq", observed)
 }
@@ -493,21 +502,40 @@ func TestAdvSimFirstAppearanceLinksThisPastesMembersToTheirHandles(t *testing.T)
 
 // ── S3: an active attacker on the paste channel ──────────────────────────────────────────────
 
-// The attacker rewrites the invitation in flight into the plaintext format, carrying a pq_secret
-// and a group_handle_key IT chose, and recomputes the checksum.
+// The attacker rewrites the invitation in flight so that it carries a pq_secret and a
+// group_handle_key IT chose, and recomputes the checksum. Two forgeries, and neither may install
+// anything: the plaintext format, which this build no longer reads; and a version 3 invitation
+// whose seal the attacker made itself, to the joiner's published X-Wing key, under the honest
+// invitation's own authenticator. The second must be refused BY THE AUTHENTICATOR, before the seal
+// is opened: a refusal by anything later is reported, because it means a forged seal was opened.
 func TestAdvSimAnAttackerChosenSecretIsNotInstalled(t *testing.T) {
 	scene := advFounding(t, false)
-	_, fields := advInviteFields(t, scene.invite)
+	version, fields := advInviteFields(t, scene.invite)
+	if version != 0x0003 || len(fields) != 5 {
+		advHarness(t, "the honest invitation is version %#04x with %d fields, so there is no seal to forge", version, len(fields))
+	}
 	chosenPq := bytes.Repeat([]byte{0xA7}, 32)
 	chosenGhk := bytes.Repeat([]byte{0x5E}, 32)
-	forged := advEncodeInvite(0x0002, [][]byte{fields[0], fields[1], fields[2], chosenPq, chosenGhk})
 
 	observed := []string{}
-	parsed, err := urmessage.ParseInvite(forged)
+	plaintext := advEncodeInvite(0x0002, [][]byte{fields[0], fields[1], fields[2], chosenPq, chosenGhk})
+	parsed, err := urmessage.ParseInvite(plaintext)
 	if err == nil {
 		_, err = scene.bob.device.Join(scene.ctx, parsed)
 	}
-	t.Logf("the forged invitation was answered: %v", err)
+	t.Logf("the forged plaintext invitation was answered: %v", err)
+
+	// the joiner is the second leaf of a group its founder is the first of
+	forgedSeal := advForgedSeal(t, scene.groupId, fields[2], 1, chosenPq, chosenGhk)
+	parsed, err = urmessage.ParseInvite(advEncodeInvite(version, [][]byte{fields[0], fields[1], fields[2], forgedSeal, fields[4]}))
+	if err != nil {
+		advHarness(t, "the forged version 3 invitation does not parse, so the join was never reached: %v", err)
+	}
+	_, err = scene.bob.device.Join(scene.ctx, parsed)
+	t.Logf("the forged sealed invitation was answered: %v", err)
+	if err != nil && !errors.Is(err, urmessage.ErrJoinSealUnauthenticated) {
+		observed = append(observed, "forged-seal-opened")
+	}
 	if record := scene.recordOf(t, scene.bob); record != nil {
 		if bytes.Equal(record.PqSecret, chosenPq) || bytes.Equal(record.GroupHandleKey, chosenGhk) {
 			observed = append(observed, "installed:attacker-secret")
@@ -550,24 +578,25 @@ func TestAdvSimARefusedInvitationDoesNotSpendTheJoinCode(t *testing.T) {
 }
 
 // The same property as the refused invitation above, at the OTHER place a refusal is made: after
-// the engine has joined. The attacker shortens the fourth field by one octet and recomputes the
-// checksum, the welcome is the right group's, and the refusal is this package's own.
+// the engine has joined. The attacker flips one bit of the authenticator and recomputes the
+// checksum. The welcome is the right group's and the key that judges the authenticator is the
+// joined epoch's own, so this refusal cannot be made any earlier than it is.
 func TestAdvSimAnInvitationRefusedAfterTheEngineJoinedDoesNotSpendTheJoinCode(t *testing.T) {
 	scene := advFounding(t, false)
 	version, fields := advInviteFields(t, scene.invite)
-	if len(fields) < 4 {
-		advHarness(t, "the invite carries %d fields, so there is no fourth to shorten", len(fields))
+	if len(fields) != 5 || len(fields[4]) != 32 {
+		advHarness(t, "the invite carries %d fields, so there is no authenticator to bend", len(fields))
 	}
-	fields[3] = fields[3][:len(fields[3])-1]
+	fields[4][0] ^= 0x01
 	observed := []string{}
 	bent, err := urmessage.ParseInvite(advEncodeInvite(version, fields))
-	if err == nil {
-		_, err = scene.bob.device.Join(scene.ctx, bent)
+	if err != nil {
+		advHarness(t, "the bent invitation does not parse, so the join was never reached: %v", err)
 	}
-	if err == nil {
-		advHarness(t, "an invitation with a shortened fourth field was accepted")
+	if _, err = scene.bob.device.Join(scene.ctx, bent); err == nil {
+		advHarness(t, "an invitation with one bit of its authenticator flipped was accepted")
 	}
-	t.Logf("the shortened invitation was refused: %v", err)
+	t.Logf("the bent invitation was refused: %v", err)
 	honest, err := urmessage.ParseInvite(scene.invite)
 	if err != nil {
 		advHarness(t, "parsing the honest invite: %v", err)
@@ -675,6 +704,29 @@ func TestAdvSimACopiedStateDirectoryReadsTheJoinEpoch(t *testing.T) {
 	advJudge(t, "S4-state-thief", observed)
 }
 
+// THE RESIDUAL, PINNED ON PURPOSE. The same recorder as the harvest scenarios, and this time the
+// joiner's X-Wing seed as well, out of a copy of its state directory taken BEFORE the join. It
+// joins the recorded Welcome, opens the recorded seal and reads the join epoch: the seal is to a
+// static key, so whoever holds that key and the paste holds the epoch. It is also the harvest
+// scenarios' control, because the seed is the only thing they withhold.
+func TestAdvSimTheJoinersSeedAndTheRecordingReadTheJoinEpoch(t *testing.T) {
+	scene := advFounding(t, true)
+	observed := advHarvest(t, scene.world, scene.groupId, scene.paste.captured, scene.paste.haystack(),
+		scene.joinCode, scene.bobBeforeJoin, scene.invite, scene.canaries, advTrueSeed(t, scene.bobBeforeJoin))
+	advJudge(t, "S4-seed-plus-recorder", observed)
+}
+
+// THE SAME RESIDUAL ON THE LIVE ROAD, where the sealed secret is the rotated one. It is the control
+// for the live add's harvest row: that row reads nothing since the seal, and this one shows the
+// recorder reading the same epoch through the same pipeline once it holds the one thing that row
+// withholds.
+func TestAdvSimTheJoinersSeedAndTheRecordingReadALiveAddsEpoch(t *testing.T) {
+	live := advLiveAddScene(t)
+	observed := advHarvest(t, live.scene.world, live.scene.groupId, live.paste.captured, live.paste.haystack(),
+		live.joinCode, live.beforeJoin, live.invite, live.canaries, advTrueSeed(t, live.beforeJoin))
+	advJudge(t, "S4-seed-plus-recorder-live-add", observed)
+}
+
 // ── S7: an invitation over a group the device already holds ──────────────────────────────────
 
 // advHostile is an attacker's own group founded under the SAME group id the victim holds, with an
@@ -765,24 +817,24 @@ func TestAdvSimAValidInvitationUnderAHeldGroupIdReplacesNothing(t *testing.T) {
 	advJudge(t, "S7a-held-id-valid-invite", advHeldGroupOutcome(t, scene, before))
 }
 
-// The same invitation carrying a pq_secret one octet short: the session refuses it, which is a
-// refusal that arrives AFTER the engine has joined.
+// The same invitation with one bit of its authenticator flipped: a refusal that, without the gate,
+// arrives AFTER the engine has joined.
 func TestAdvSimAnInvitationRefusedLateUnderAHeldGroupIdReplacesNothing(t *testing.T) {
 	scene := advFounding(t, true)
 	version, fields := advInviteFields(t, advHostile(t, scene, scene.bob.device))
-	if len(fields) < 4 {
+	if len(fields) != 5 || len(fields[4]) != 32 {
 		advHarness(t, "the hostile invite carries %d fields", len(fields))
 	}
-	fields[3] = fields[3][:len(fields[3])-1]
+	fields[4][0] ^= 0x01
 	before := advGroupFiles(t, scene.bob.stateDir, scene.groupId)
 	parsed, err := urmessage.ParseInvite(advEncodeInvite(version, fields))
-	if err == nil {
-		_, err = scene.bob.device.Join(scene.ctx, parsed)
+	if err != nil {
+		advHarness(t, "the bent hostile invitation does not parse, so the join was never reached: %v", err)
 	}
-	if err == nil {
-		advHarness(t, "an invitation with a truncated fourth field was accepted")
+	if _, err = scene.bob.device.Join(scene.ctx, parsed); err == nil {
+		advHarness(t, "an invitation with one bit of its authenticator flipped was accepted")
 	}
-	t.Logf("the truncated invitation was answered: %v", err)
+	t.Logf("the bent invitation was answered: %v", err)
 	advJudge(t, "S7b-held-id-refused-late", advHeldGroupOutcome(t, scene, before))
 }
 

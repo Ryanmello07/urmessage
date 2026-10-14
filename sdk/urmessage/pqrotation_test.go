@@ -152,7 +152,8 @@ func (self *rotWorld) enroll(name string, dev *crossProcessDevice, handle messag
 
 // enrollAt is enroll with the ONE pq_secret row this member starts life holding, and that row is
 // the whole of what separates a founder from a member admitted later. [Device.Join] files exactly
-// one row -- `pqSecrets: {handle.Epoch(): invite.PqSecret}` -- so a device admitted at epoch k
+// one row -- `pqSecrets: {handle.Epoch(): pqSecret}`, the secret its join seal opened to -- so a
+// device admitted at epoch k
 // knows nothing of the values drawn below it, which is the subject of ledger ruling 43's first
 // residual. [rotWorld.admit] is the door that uses it; `enroll` passes the founding value because
 // every member of a world built by [newRotWorld] is named in the founding commit.

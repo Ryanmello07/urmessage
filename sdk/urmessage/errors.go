@@ -48,13 +48,30 @@ var (
 	// told, and never at the join or at the first Receive after it.
 	ErrInviteDamaged = errors.New("urmessage: this invite is damaged: it is not the octets the founder encoded")
 
-	// THE REFUSALS OF THE JOIN SEAL INSIDE THE JOIN. Each is made before the joined state reaches
-	// the store, so the store is as it was and the join code is not spent: the honest invite,
-	// pasted again, still joins.
+	// An invite at a version this build does not read. Version 0x0002 is among them, deliberately:
+	// it carried the join secrets in the clear, and reading one would be installing two secrets
+	// whoever pasted it chose.
+	ErrInviteVersion = errors.New("urmessage: this invite is at a version this build does not read")
+
+	// An invite whose join seal is not the shape version 0x0003 fixes: its length, its
+	// authenticator's length, or the four constants of its envelope. Refused at the paste, before
+	// a join code is touched.
+	ErrJoinSealShape = errors.New("urmessage: this invite's join seal is not the shape an invite carries")
+
+	// THE FOUR REFUSALS OF THE JOIN SEAL INSIDE THE JOIN. Each is made before the joined state
+	// reaches the store, so the store is as it was and the join code is not spent: the honest
+	// invite, pasted again, still joins.
 	//
+	// Unauthenticated: the seal's MAC is not one a member of the epoch this Welcome opened made
+	// for this leaf, this Welcome and this tree. A seal an outsider made to this device's public
+	// key, a seal lifted from another invite, and an invite altered on the way all answer this.
+	ErrJoinSealUnauthenticated = errors.New("urmessage: this invite's join seal was not made by a member of the group it joins, for this invite")
 	// Unreadable: the seal is authenticated and does not open to this device's leaf key, or opens
 	// to something that is not join_secrets_v1.
 	ErrJoinSealUnreadable = errors.New("urmessage: this invite's join seal does not open to this device")
+	// Wrong epoch: the seal opened, and the secret in it does not reproduce the digest of the keys
+	// the epoch this device joined was opened with. The adder sealed some other epoch's secret.
+	ErrJoinSealWrongEpoch = errors.New("urmessage: this invite's join seal carries a secret that is not the one the epoch it joins runs on")
 
 	// A record came back that a key should have opened and did not.
 	ErrRecordOpen = errors.New("urmessage: a record from a member of this group did not open")
@@ -834,4 +851,9 @@ var (
 	// invitation that was made and never opened. A group holds one leaf per identity it admits
 	// this way, so the leaf that stands is removed first.
 	ErrJoinerAlreadyHasALeaf = errors.New("urmessage: this identity already has an entry in this group, perhaps from an invitation that was never opened; remove that entry, then add the new join code")
+
+	// [Group.Open] found that the digest of the keys it is about to publish epoch one with is not
+	// the digest [Group.AddMember] sealed into the invite. The joiner would refuse that invite, so
+	// the group is not published under it.
+	ErrInviteDigestDrift = errors.New("urmessage: the keys this group would open with are not the keys its invite was sealed over")
 )

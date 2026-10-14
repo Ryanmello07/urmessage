@@ -42,11 +42,11 @@ func windowInvite(t *testing.T, joiner *Device) (*Invite, []byte) {
 // bentInvite is a copy of an invite with one thing changed.
 func bentInvite(invite *Invite, change func(*Invite)) *Invite {
 	bent := &Invite{
-		GroupId:        bytes.Clone(invite.GroupId),
-		Welcome:        bytes.Clone(invite.Welcome),
-		RatchetTree:    bytes.Clone(invite.RatchetTree),
-		PqSecret:       bytes.Clone(invite.PqSecret),
-		GroupHandleKey: bytes.Clone(invite.GroupHandleKey),
+		GroupId:     bytes.Clone(invite.GroupId),
+		Welcome:     bytes.Clone(invite.Welcome),
+		RatchetTree: bytes.Clone(invite.RatchetTree),
+		JoinSeal:    bytes.Clone(invite.JoinSeal),
+		JoinAuth:    bytes.Clone(invite.JoinAuth),
 	}
 	change(bent)
 	return bent
@@ -54,8 +54,8 @@ func bentInvite(invite *Invite, change func(*Invite)) *Invite {
 
 // EVERY REFUSAL INSIDE THE JOIN'S WINDOW BEGINS WITH ONE SENTENCE, AND COSTS NOTHING. Three
 // refusals, made at the three places the window can refuse: the engine (a Welcome for another
-// group), this package's own checks (a secret the session will not take), and the create-only
-// commit (a state already held at the joined epoch). Each answers [ErrJoinRefused] and begins with
+// group), this package's own checks (a join seal whose authenticator is not a member's), and the
+// create-only commit (a state already held at the joined epoch). Each answers [ErrJoinRefused] and begins with
 // its sentence; none answers [ErrJoinCodeSpent]; the device holds no group; and the honest invite
 // then joins OVER THE SAME JOIN CODE, which is what "not spent" means.
 //
@@ -83,8 +83,8 @@ func TestEveryRefusalInsideTheJoinWindowSaysTheJoinCodeIsNotSpent(t *testing.T) 
 	}{
 		{"a welcome for another group, refused by the engine",
 			func(invite *Invite) { invite.GroupId = bytes.Repeat([]byte{0x5D}, GroupIdBytes) }, false, nil},
-		{"a pq_secret one octet short, refused by this package",
-			func(invite *Invite) { invite.PqSecret = invite.PqSecret[:len(invite.PqSecret)-1] }, false, nil},
+		{"a join seal whose authenticator has one bit flipped, refused by this package",
+			func(invite *Invite) { invite.JoinAuth[0] ^= 0x01 }, false, ErrJoinSealUnauthenticated},
 		{"a state already held at the joined epoch, refused by the commit",
 			func(invite *Invite) {}, true, ErrJoinWouldOverwrite},
 	} {
@@ -221,7 +221,7 @@ func TestARefusalThatCannotPutTheJoinCodeBackSaysItIsSpent(t *testing.T) {
 		name string
 		bend func(*Invite)
 	}{
-		{"this package's refusal", func(invite *Invite) { invite.PqSecret = invite.PqSecret[:len(invite.PqSecret)-1] }},
+		{"this package's refusal", func(invite *Invite) { invite.JoinAuth[0] ^= 0x01 }},
 		{"the engine's refusal", func(invite *Invite) { invite.GroupId = bytes.Repeat([]byte{0x5D}, GroupIdBytes) }},
 	} {
 		store := &keyPackageSink{MemoryStateStore: NewMemoryStateStore()}

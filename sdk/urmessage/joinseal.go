@@ -236,6 +236,106 @@ func epochKeysDigestOver(groupId []byte, epoch uint64, mlsSecret []byte, pqSecre
 	return digest, err
 }
 
+// sealJoinLocked builds the join seal and its authenticator for one joiner, OFF THE STAGED COMMIT
+// that adds it: nothing has been merged and nothing has been submitted, so a failure here is a
+// commit the caller clears and an add that can simply be made again.
+//
+// pqSecret is the secret of the epoch the staged commit opens, and epochKeysDigest is the digest
+// that epoch's commit publishes; both are the caller's, because the founding add and a live add
+// come by them differently and this function must not guess which it is serving.
+func (self *Group) sealJoinLocked(joiner *joinerKeys, welcome []byte, ratchetTree []byte,
+	opensEpoch uint64, pqSecret []byte, epochKeysDigest []byte) (joinSeal []byte, joinAuth []byte, err error) {
+
+	leaf, err := joinerLeafIn(ratchetTree, joiner.keyPackage)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload, err := encodeJoinSecrets(pqSecret, self.groupHandleKey, epochKeysDigest)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer zeroizeState(payload)
+	joinSeal, err = messagegroup.SealWrapBody(self.device.random, joiner.xwing, messagegroup.WrapEnvelope{
+		FormatVersion: messagegroup.WrapFormatVersion,
+		TargetType:    wrapTargetTypeJoiner,
+		PayloadType:   wrapPayloadTypeJoinSecrets,
+		ContentEpoch:  0,
+	}, self.id, joinerLeafId(leaf), payload)
+	if err != nil {
+		return nil, nil, fmt.Errorf("urmessage: sealing the join secrets to leaf %d: %w", leaf, err)
+	}
+	if len(joinSeal) != joinSealBytes {
+		return nil, nil, fmt.Errorf("urmessage: the join seal is %d octets and invite version 3 carries exactly %d", len(joinSeal), joinSealBytes)
+	}
+	joinKey, err := self.handle.PendingExport(joinKeyExporterLabel, joinerLeafId(leaf), joinKeyBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("urmessage: the join key of epoch %d: %w", opensEpoch, err)
+	}
+	defer zeroizeState(joinKey)
+	preimage, err := joinAuthPreimage(self.id, opensEpoch, leaf, welcome, ratchetTree, joinSeal)
+	if err != nil {
+		return nil, nil, err
+	}
+	return joinSeal, self.device.crypto.Mac(joinKey, preimage), nil
+}
+
+// openJoinSeal is the joiner's half, in the order VERIFY, OPEN, CHECK: it answers the two secrets
+// only once the seal is authenticated, opens, has the right shape and reproduces the digest it
+// carries at the epoch this device joined.
+//
+// EVERY EXPECTATION IS THIS DEVICE'S OWN. The group id, the epoch and the leaf come off the handle
+// its own join built; the envelope's three octets and its zero epoch are constants; nothing is
+// copied out of the seal to judge the seal with.
+//
+// IT RUNS BEFORE THE JOINED STATE REACHES THE STORE, so every refusal here costs nothing: see
+// [joinStage].
+func (self *Device) openJoinSeal(handle messagegroup.GroupHandle, invite *Invite) (pqSecret []byte, groupHandleKey []byte, err error) {
+	leaf := handle.OwnLeafIndex()
+	epoch := handle.Epoch()
+
+	// VERIFY: join_auth over the received octets, under this epoch's own exporter.
+	joinKey, err := handle.Export(joinKeyExporterLabel, joinerLeafId(leaf), joinKeyBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("urmessage: the join key of epoch %d: %w", epoch, err)
+	}
+	defer zeroizeState(joinKey)
+	preimage, err := joinAuthPreimage(handle.GroupId(), epoch, leaf, invite.Welcome, invite.RatchetTree, invite.JoinSeal)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !self.crypto.MacVerify(joinKey, preimage, invite.JoinAuth) {
+		return nil, nil, ErrJoinSealUnauthenticated
+	}
+
+	// OPEN: to this device's own leaf key, stating the wrap it is honouring.
+	_, payload, err := self.openWrapToOwnLeaf(handle.GroupId(), 0, wrapTargetTypeJoiner,
+		joinerLeafId(leaf), wrapPayloadTypeJoinSecrets, invite.JoinSeal)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrJoinSealUnreadable, err)
+	}
+	defer zeroizeState(payload)
+
+	// CHECK: the shape, and that the secret is the one this epoch's published keys come from.
+	pqSecret, groupHandleKey, sealedDigest, err := decodeJoinSecrets(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	mlsSecret, err := handle.Export(storageExporterLabel, nil, storageExporterBytes)
+	if err != nil {
+		zeroizeState(pqSecret)
+		zeroizeState(groupHandleKey)
+		return nil, nil, fmt.Errorf("urmessage: the exporter of epoch %d: %w", epoch, err)
+	}
+	computed, err := epochKeysDigestOver(handle.GroupId(), epoch, mlsSecret, pqSecret)
+	zeroizeState(mlsSecret)
+	if err != nil || subtle.ConstantTimeCompare(computed, sealedDigest) != 1 {
+		zeroizeState(pqSecret)
+		zeroizeState(groupHandleKey)
+		return nil, nil, fmt.Errorf("%w: at epoch %d", ErrJoinSealWrongEpoch, epoch)
+	}
+	return pqSecret, groupHandleKey, nil
+}
+
 // sameDigest compares two H(epoch_keys) values, and answers false for one that is absent. The
 // values are published, so nothing here is secret; it goes through subtle because every comparison
 // of key-derived octets in this package does.

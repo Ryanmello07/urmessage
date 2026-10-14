@@ -9,12 +9,15 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
 	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
@@ -416,5 +419,263 @@ func TestTheJoinersLeafIsTheWholeLeafTheJoinCodePublished(t *testing.T) {
 	}
 	if leaf, err := joinerLeafIn(ratchetTree, decode(other)); err == nil {
 		t.Fatalf("a join code that was never added was answered leaf %d: the search matched its signature key and not its leaf", leaf)
+	}
+}
+
+type sealPair struct {
+	ctx        context.Context
+	alice, bob *Device
+	// the fake server alice's device talks to, which counts what it answered
+	aliceServer *answeringClient
+	aliceGroup  *Group
+	joinCode    []byte
+	invite      *Invite
+}
+
+// newSealPair founds a group on alice and adds bob's join code. Nothing reaches a server: the
+// founding add and the join are both local.
+func newSealPair(t *testing.T) *sealPair {
+	t.Helper()
+	ctx := context.Background()
+	alice, aliceServer := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	for _, device := range []*Device{alice, bob} {
+		if err := device.Connect(ctx); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+	}
+	aliceGroup, err := alice.CreateGroup(ctx, bytes.Repeat([]byte{0x47}, GroupIdBytes))
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	joinCode, err := bob.KeyPackage()
+	if err != nil {
+		t.Fatalf("bob's KeyPackage: %v", err)
+	}
+	invite, err := aliceGroup.AddMember(joinCode)
+	if err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+	return &sealPair{ctx: ctx, alice: alice, bob: bob, aliceServer: aliceServer, aliceGroup: aliceGroup, joinCode: joinCode, invite: invite}
+}
+
+// THE STRUCTURAL PROPERTY: the invite is version 3, the two secrets are NOWHERE in its octets, and
+// the joiner nevertheless ends up holding both. The second half is the control: without it, an
+// adder that sealed nothing at all would pass the first.
+func TestAnInviteCarriesNoSecretInTheClearAndTheJoinerStillHoldsBoth(t *testing.T) {
+	pair := newSealPair(t)
+	encoded, err := pair.invite.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if encoded[0] != 0x00 || encoded[1] != 0x03 {
+		t.Fatalf("the invite begins %x, want version 00 03", encoded[:2])
+	}
+	if len(pair.invite.JoinSeal) != 1253 || len(pair.invite.JoinAuth) != 32 {
+		t.Fatalf("the invite carries a %d octet seal and a %d octet authenticator, want 1253 and 32",
+			len(pair.invite.JoinSeal), len(pair.invite.JoinAuth))
+	}
+	pair.aliceGroup.mutex.Lock()
+	pqSecret := append([]byte(nil), pair.aliceGroup.pqSecretLocked()...)
+	groupHandleKey := append([]byte(nil), pair.aliceGroup.groupHandleKey...)
+	pair.aliceGroup.mutex.Unlock()
+	if len(pqSecret) != 32 || len(groupHandleKey) != 32 {
+		t.Fatalf("CONTROL FAILED: the founder holds a %d octet pq_secret and a %d octet group_handle_key", len(pqSecret), len(groupHandleKey))
+	}
+	for name, secret := range map[string][]byte{"pq_secret": pqSecret, "group_handle_key": groupHandleKey} {
+		if bytes.Contains(encoded, secret) {
+			t.Errorf("%s is in the clear in the encoded invite", name)
+		}
+	}
+
+	bobGroup, err := pair.bob.Join(pair.ctx, pair.invite)
+	if err != nil {
+		t.Fatalf("bob's Join: %v", err)
+	}
+	bobGroup.mutex.Lock()
+	defer bobGroup.mutex.Unlock()
+	if !bytes.Equal(bobGroup.pqSecretLocked(), pqSecret) {
+		t.Error("the joiner does not hold the founder's pq_secret for the epoch it joined")
+	}
+	if !bytes.Equal(bobGroup.groupHandleKey, groupHandleKey) {
+		t.Error("the joiner does not hold the group's group_handle_key")
+	}
+}
+
+// EVERY ALTERATION OF THE SEAL OR ITS MAC IS REFUSED INSIDE THE WINDOW, AND THE JOIN CODE SURVIVES.
+// Each bent invite is refused as unauthenticated, because the MAC is over the seal's hash and is
+// checked first; and after all of them the honest invite still joins, over the same join code.
+func TestABentSealIsRefusedAndTheHonestInviteStillJoins(t *testing.T) {
+	pair := newSealPair(t)
+	bend := func(change func(*Invite)) *Invite {
+		bent := &Invite{
+			GroupId:     bytes.Clone(pair.invite.GroupId),
+			Welcome:     bytes.Clone(pair.invite.Welcome),
+			RatchetTree: bytes.Clone(pair.invite.RatchetTree),
+			JoinSeal:    bytes.Clone(pair.invite.JoinSeal),
+			JoinAuth:    bytes.Clone(pair.invite.JoinAuth),
+		}
+		change(bent)
+		return bent
+	}
+	for _, one := range []struct {
+		name string
+		bent *Invite
+	}{
+		{"one bit of the authenticator", bend(func(i *Invite) { i.JoinAuth[0] ^= 0x01 })},
+		{"the last octet of the seal's ciphertext", bend(func(i *Invite) { i.JoinSeal[len(i.JoinSeal)-1] ^= 0x01 })},
+		{"one octet of the KEM ciphertext", bend(func(i *Invite) { i.JoinSeal[40] ^= 0x01 })},
+		{"an authenticator of zeros", bend(func(i *Invite) { i.JoinAuth = make([]byte, joinAuthBytes) })},
+	} {
+		if _, err := pair.bob.Join(pair.ctx, one.bent); !errors.Is(err, ErrJoinSealUnauthenticated) {
+			t.Errorf("%s answered %v, want ErrJoinSealUnauthenticated", one.name, err)
+		}
+		if held := len(pair.bob.Groups()); held != 0 {
+			t.Fatalf("%s left bob holding %d group(s)", one.name, held)
+		}
+	}
+	if _, err := pair.bob.Join(pair.ctx, pair.invite); err != nil {
+		t.Fatalf("the honest invite after four refused ones: %v", err)
+	}
+}
+
+// A seal an OUTSIDER makes opens under the AEAD and is refused by the MAC. Anybody can encapsulate
+// to a public key, so this forger seals secrets of its own choosing to bob's leaf, with every
+// envelope octet right; what it cannot make is the MAC, whose key is the join epoch's exporter.
+func TestAnOutsidersSealOpensAndIsRefusedByTheMac(t *testing.T) {
+	pair := newSealPair(t)
+	joiner, err := pair.alice.joinerOf(pair.joinCode)
+	if err != nil {
+		t.Fatalf("joinerOf: %v", err)
+	}
+	leaf, err := joinerLeafIn(pair.invite.RatchetTree, joiner.keyPackage)
+	if err != nil {
+		t.Fatalf("joinerLeafIn: %v", err)
+	}
+	chosen, err := encodeJoinSecrets(bytes.Repeat([]byte{0xA7}, 32), bytes.Repeat([]byte{0x5E}, 32), bytes.Repeat([]byte{0x01}, 32))
+	if err != nil {
+		t.Fatalf("encodeJoinSecrets: %v", err)
+	}
+	forgedSeal, err := messagegroup.SealWrapBody(pair.alice.random, joiner.xwing, messagegroup.WrapEnvelope{
+		FormatVersion: messagegroup.WrapFormatVersion,
+		TargetType:    wrapTargetTypeJoiner,
+		PayloadType:   wrapPayloadTypeJoinSecrets,
+	}, pair.invite.GroupId, joinerLeafId(leaf), chosen)
+	if err != nil {
+		t.Fatalf("the forger's SealWrapBody: %v", err)
+	}
+	// THE CONTROL: the forged seal really does open to bob's leaf, so the refusal below is the MAC's
+	if _, opened, err := pair.bob.openWrapToOwnLeaf(pair.invite.GroupId, 0, wrapTargetTypeJoiner,
+		joinerLeafId(leaf), wrapPayloadTypeJoinSecrets, forgedSeal); err != nil || !bytes.Equal(opened, chosen) {
+		t.Fatalf("CONTROL FAILED: the forged seal does not open to the joiner's leaf (%v), so nothing below is about the MAC", err)
+	}
+	// the forger's best MAC: the right preimage under a key it can compute, which is not the exporter
+	preimage, err := joinAuthPreimage(pair.invite.GroupId, 1, leaf, pair.invite.Welcome, pair.invite.RatchetTree, forgedSeal)
+	if err != nil {
+		t.Fatalf("joinAuthPreimage: %v", err)
+	}
+	guessedKey := sha256.Sum256(pair.invite.Welcome)
+	forged := &Invite{
+		GroupId: pair.invite.GroupId, Welcome: pair.invite.Welcome, RatchetTree: pair.invite.RatchetTree,
+		JoinSeal: forgedSeal, JoinAuth: pair.alice.crypto.Mac(guessedKey[:], preimage),
+	}
+	if _, err := pair.bob.Join(pair.ctx, forged); !errors.Is(err, ErrJoinSealUnauthenticated) {
+		t.Fatalf("an outsider's seal answered %v, want ErrJoinSealUnauthenticated", err)
+	}
+	if _, err := pair.bob.Join(pair.ctx, pair.invite); err != nil {
+		t.Fatalf("the honest invite after the forged one: %v", err)
+	}
+}
+
+// failingRandom fails every read while it is armed, and is the device's own source otherwise.
+type failingRandom struct {
+	armed bool
+	under io.Reader
+}
+
+func (self *failingRandom) Read(octets []byte) (int, error) {
+	if self.armed {
+		return 0, errors.New("the test's random source is failing")
+	}
+	return self.under.Read(octets)
+}
+
+// A SEAL THAT CANNOT BE MADE LEAVES NOTHING BEHIND. The founder's random source fails while the
+// seal is being made: the staged commit is cleared, the founder is still at epoch 0, and the SAME
+// join code is added once the source works again and joins.
+func TestAFailedSealLeavesTheFounderWhereItWasAndTheAddCanBeMadeAgain(t *testing.T) {
+	ctx := context.Background()
+	alice, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	for _, device := range []*Device{alice, bob} {
+		if err := device.Connect(ctx); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+	}
+	group, err := alice.CreateGroup(ctx, bytes.Repeat([]byte{0x47}, GroupIdBytes))
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	joinCode, err := bob.KeyPackage()
+	if err != nil {
+		t.Fatalf("bob's KeyPackage: %v", err)
+	}
+	source := &failingRandom{armed: true, under: alice.random}
+	alice.random = source
+	_, err = group.AddMember(joinCode)
+	if err == nil || !strings.Contains(err.Error(), "sealing the join secrets") {
+		t.Fatalf("an add whose seal could not be made answered %v, want the seal's own failure", err)
+	}
+	if epoch := group.handle.Epoch(); epoch != 0 {
+		t.Fatalf("the failed seal left the founder's handle at epoch %d", epoch)
+	}
+	if _, err := group.handle.PendingEpoch(); err == nil {
+		t.Fatal("the failed seal left a commit staged on the founder")
+	}
+	source.armed = false
+	invite, err := group.AddMember(joinCode)
+	if err != nil {
+		t.Fatalf("the same join code after the failed seal: %v", err)
+	}
+	if _, err := bob.Join(ctx, invite); err != nil {
+		t.Fatalf("bob's Join over the invite the second add made: %v", err)
+	}
+}
+
+// THE FOUNDER PUBLISHES THE DIGEST ITS INVITE WAS SEALED OVER, OR NOTHING. The digest AddMember
+// kept is bent by one bit, and Open refuses before a request leaves the device.
+func TestOpenRefusesToPublishKeysItsInviteWasNotSealedOver(t *testing.T) {
+	pair := newSealPair(t)
+	if len(pair.aliceGroup.foundingJoinDigest) != sha256.Size {
+		t.Fatalf("CONTROL FAILED: AddMember kept a %d octet founding digest", len(pair.aliceGroup.foundingJoinDigest))
+	}
+	// The fake server answers no submit, so an Open that gets as far as one ends on this deadline.
+	brief, cancel := context.WithTimeout(pair.ctx, 250*time.Millisecond)
+	defer cancel()
+	pair.aliceGroup.foundingJoinDigest[0] ^= 0x01
+	before := pair.aliceServer.answered()
+	if err := pair.aliceGroup.Open(brief); !errors.Is(err, ErrInviteDigestDrift) {
+		t.Fatalf("Open over a bent founding digest answered %v, want ErrInviteDigestDrift", err)
+	}
+	if after := pair.aliceServer.answered(); after != before {
+		t.Fatalf("the refused Open sent %d request(s)", after-before)
+	}
+	// THE CONTROL: the same group with the digest put back is not refused for drift.
+	pair.aliceGroup.foundingJoinDigest[0] ^= 0x01
+	if err := pair.aliceGroup.Open(brief); errors.Is(err, ErrInviteDigestDrift) {
+		t.Fatalf("CONTROL FAILED: Open over the untouched founding digest answered %v", err)
+	}
+}
+
+// THE VERSION AN INVITE IS WRITTEN AT IS THE VERSION ITS AUTHENTICATOR IS OVER. The preimage of
+// join_auth names invite version 0x0003 by a constant of its own, so that its 181 octets do not
+// move if the codec's version does; this is what holds the two together. A build that wrote
+// invites at another version would otherwise authenticate a preimage that names this one.
+func TestTheInviteVersionIsTheOneJoinAuthIsOver(t *testing.T) {
+	if InviteVersion != joinAuthInviteVersion {
+		t.Fatalf("an invite is written at version %#04x and join_auth is over version %#04x", InviteVersion, joinAuthInviteVersion)
+	}
+	if InviteVersion != 0x0003 {
+		t.Fatalf("an invite is written at version %#04x, and the sealed invite is version 0x0003", InviteVersion)
 	}
 }

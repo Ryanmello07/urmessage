@@ -318,6 +318,10 @@ var epochKeySinks = map[string]epochKeySink{
 			"holds. See publishCommitLocked|call self.submitLocked for the same correction at the " +
 			"other commit path.",
 	},
+	"Open|call sameDigest": {
+		carries: []string{"foundingDigest"},
+		why:     "THE DIGEST THE INVITE WAS SEALED OVER, held against the one this Open is about to publish. H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes. The comparison answers a bool.",
+	},
 }
 
 // The types in this package's production source that are built AROUND an epoch key, as

@@ -79,9 +79,11 @@ import (
 //     `table` are wide on purpose: they are the names the value has when it has no name of its
 //     own, which is the gap the wrap-seed gate's `parts` entry was added to close.
 //   - `into` IS THE INVITE DECODE'S POINTER TABLE, and it is here for one shape: `field.into` is
-//     a `*[]byte` aimed at `invite.PqSecret`, so a `%x` of `*field.into` in ParseInvite's own
-//     refusal would be a secret in an error string. Without this name that expression carries only
-//     `field`, which the refusal is already permitted to format.
+//     a `*[]byte` aimed at a field of the invite, so a `%x` of `*field.into` in ParseInvite's own
+//     refusal would be that field in an error string. Since invite version 3 no field it aims at
+//     is a secret in the clear. The name stays, so that a secret field given to an invite later is
+//     in this net from the day it is added. Without it that expression carries only `field`,
+//     which the refusal is already permitted to format.
 //   - `parts` IS THE DURABLE RECORD'S ROAD, in BOTH directions, and it is here because a mutant
 //     survived without it. It is seeded as a PARAMETER only -- [groupRecordOf] on the read side,
 //     [DurableStateStore.writeRecord] and [encodeStateRecord] on the write side -- which is what
@@ -90,6 +92,7 @@ import (
 //     inside the group record's own decode, survived the whole suite while that decode was the
 //     body of a loop and its record had no name a walk could seed.
 var pqSecretProducerNames = map[string]bool{
+	"openJoinSeal":          true,
 	"decodeJoinSecrets":     true,
 	"NewPqSecret":           true,
 	"OpenWrapBody":          true,
@@ -131,22 +134,15 @@ var pqSecretProducerSites = map[string]string{
 	"decodeJoinSecrets|result groupHandleKey":  "the second third: the group's handle key, which is secret, and is held to the same dispositions as the secret beside it.",
 	"decodeJoinSecrets|result pqSecret":        "the first third of the payload: the secret of the epoch the joiner is admitted at.",
 	"decodeJoinSecrets|parameter pqSecret":     "the named result the first third of an opened join_secrets_v1 is answered through.",
-	"AddMemberAndPublish|self.pqSecretLocked": "the same read after the rotation has run, so the invite carries pq_secret[n+1] and not " +
-		"the secret the group is standing on.",
-	"AddMember|self.pqSecretLocked": "THE FOUNDING EPOCH'S SECRET READ BACK FOR THE WELCOME. Epoch one's secret travels in " +
-		"[Invite.PqSecret] -- MASTER section 7's out-of-band delivery -- because the only other " +
+	"AddMember|self.pqSecretLocked": "THE FOUNDING EPOCH'S SECRET, READ FOR THE JOIN SEAL. Epoch one's secret travels sealed " +
+		"inside [Invite.JoinSeal], to the key the joiner's leaf publishes, because the only other " +
 		"member is holding the Welcome and has no leaf to address a wrap to yet.",
 	"CreateGroup|messagegroup.NewPqSecret": "THE FOUNDING DRAW. The group's first pq_secret, at epoch zero, and the only one drawn " +
 		"outside [Group.stageEpochRotationLocked].",
-	"Encode|self.PqSecret": "the wire write: the same field going out under an LP prefix.",
-	"Join|invite.PqSecret": "the joiner's arrival: the secret of the epoch it is admitted at, off the invite it was " +
-		"handed.",
 	"ParseInvite|field.into":                        "T",
-	"ParseInvite|invite.PqSecret":                   "the wire decode's DESTINATION, in the five-field table ParseInvite walks.",
 	"PutGroupRecord|encodePqSecretTable":            "the table as the one octet string part six is.",
 	"PutGroupRecord|record.PqSecret":                "the scalar the record still carries, part two.",
 	"PutGroupRecord|record.PqSecrets":               "the table, part six, or nil for a caller that built neither.",
-	"check|self.PqSecret":                           "the invite's own validity check, which refuses one carrying no secret.",
 	"decodePqSecretTable|result rows":               "the rows read back out of it.",
 	"dropPqSecretsBelowWindowLocked|self.pqSecrets": "the window's own pass: every entry PastEpochWindow behind is erased and dropped.",
 	"dropWrapCandidatesLocked|candidate.secret":     "every staged candidate for a resolved epoch, on its way to the erase.",
@@ -244,6 +240,13 @@ var pqSecretProducerSites = map[string]string{
 		"wrapseedgate_test.go added for the seed, seeded by the same clause.",
 	"zeroizePqSecretsLocked|self.pqSecrets":        "the whole-table erase at [Group.Close].",
 	"zeroizeWrapCandidatesLocked|candidate.secret": "the same, whatever epoch it is for, at Close.",
+	"openJoinSeal|self.openWrapToOwnLeaf":          "THE OPEN: the join seal, to this device's own X-Wing key, through the one door every later epoch's wrap is opened through.",
+	"openJoinSeal|decodeJoinSecrets":               "the three values cut out of the opened payload.",
+	"openJoinSeal|parameter pqSecret":              "the named result the joiner's half answers the secret through.",
+	"sealJoinLocked|parameter pqSecret":            "the secret of the epoch the staged commit opens, handed in by whichever adder is sealing.",
+	"Join|self.openJoinSeal":                       "THE JOINER'S ARRIVAL SINCE INVITE VERSION 3: the two secrets of the epoch it is admitted at, opened from the invite's join seal inside the join's window. An invite no longer carries either in the clear.",
+	"openJoinSeal|result pqSecret":                 "what the joiner's half answers once the seal is authenticated, opened and checked.",
+	"openJoinSeal|result groupHandleKey":           "the same, for the group's handle key.",
 }
 
 var pqSecretSinks = map[string]pqSecretSink{
@@ -295,22 +298,9 @@ var pqSecretSinks = map[string]pqSecretSink{
 		carries: []string{"payload", "pqSecret"},
 		why:     "the payload's assembly, into a buffer of exactly its length.",
 	},
-	"AddMemberAndPublish|call append": {
-		carries: []string{"self.pqSecretLocked"},
-		why:     "the same copy after the rotation.",
-	},
-	"AddMemberAndPublish|literal Invite.PqSecret": {
-		carries: []string{"self.pqSecretLocked"},
-		why: "the same delivery, now carrying pq_secret[n+1] because the rotation has already filed " +
-			"it.",
-	},
 	"AddMember|assign self.session": {
 		carries: []string{"session"},
 		why:     "that session parked on the group.",
-	},
-	"AddMember|call append": {
-		carries: []string{"self.pqSecretLocked"},
-		why:     "the copy the invite carries.",
 	},
 	"AddMember|call messagegroup.NewGroupSession": {
 		carries: []string{"foundingSecret"},
@@ -320,12 +310,6 @@ var pqSecretSinks = map[string]pqSecretSink{
 		carries: []string{"foundingSecret"},
 		why: "the founding epoch's secret filed at the epoch the handle is standing at, which is where " +
 			"the table's first row comes from for a founder that has not yet committed.",
-	},
-	"AddMember|literal Invite.PqSecret": {
-		carries: []string{"self.pqSecretLocked"},
-		why: "THE OUT-OF-BAND DELIVERY, MASTER section 7's founding arm. It is the one place a secret " +
-			"leaves this package unsealed, and the invite is a value the caller hands over some " +
-			"channel of its own.",
 	},
 	"CreateGroup|call messagegroup.GroupHandleKey": {
 		carries: []string{"pqSecret"},
@@ -363,19 +347,6 @@ var pqSecretSinks = map[string]pqSecretSink{
 		carries: []string{"group"},
 		why:     "the same group handed back.",
 	},
-	"Encode|call writer.WriteOpaqueLP": {
-		carries: []string{"self.PqSecret"},
-		why: "THE INVITE'S WIRE WRITE. The secret goes out under an LP prefix, in the clear, because " +
-			"the invite itself is the out-of-band channel.",
-	},
-	"Join|call append": {
-		carries: []string{"invite.PqSecret"},
-		why:     "the joiner's own copy for its table.",
-	},
-	"Join|call messagegroup.NewGroupSession": {
-		carries: []string{"invite.PqSecret"},
-		why:     "the joiner's session, built over the secret of the epoch it is admitted at.",
-	},
 	"Join|call self.holdReplacing": {
 		carries: []string{"group"},
 		why: "the group going onto the device, in place of the one a commit removed this device from " +
@@ -385,10 +356,6 @@ var pqSecretSinks = map[string]pqSecretSink{
 		carries: []string{"group"},
 		why:     "the group's first record going to disk.",
 	},
-	"Join|literal ?.handle.Epoch(...)": {
-		carries: []string{"invite.PqSecret"},
-		why:     "that copy filed at the handle's epoch.",
-	},
 	"Join|literal Group.session": {
 		carries: []string{"session"},
 		why:     "the session parked on the group.",
@@ -396,23 +363,6 @@ var pqSecretSinks = map[string]pqSecretSink{
 	"Join|return": {
 		carries: []string{"group"},
 		why:     "the same group handed back.",
-	},
-	"ParseInvite|call fmt.Errorf": {
-		carries: []string{"field"},
-		why: "THE ONE FORMATTING SITE IN THE INVITE'S DECODE, and the operand is `field.name` -- one " +
-			"of five string constants written three lines above. It carries `field` because `field` " +
-			"is a struct the walk taints wholesale through the `&invite.PqSecret` in its literal. A " +
-			"`%x` of `field.into` would carry `field.into`, which this entry does not list, and would " +
-			"be refused.",
-	},
-	"ParseInvite|literal ?.element 1": {
-		carries: []string{"invite.PqSecret"},
-		why: "the ADDRESS of the field the decoder fills, in the five-field table. What lands is a " +
-			"*[]byte and never octets.",
-	},
-	"ParseInvite|return": {
-		carries: []string{"field"},
-		why:     "that error.",
 	},
 	"PutGroupRecord|call encodePqSecretTable": {
 		carries: []string{"rows"},
@@ -1025,13 +975,92 @@ var pqSecretSinks = map[string]pqSecretSink{
 		why: "THE ERASE. [zeroizeState] is this package's one overwrite and it is the only thing that " +
 			"can still reach these octets. Here it is every candidate at all, at Close.",
 	},
+	"sealJoinLocked|call messagegroup.SealWrapBody": {
+		carries: []string{"payload"},
+		why:     "THE ONE PLACE THE JOIN SECRETS LEAVE THIS DEVICE: sealed to the X-Wing key the joiner's own leaf publishes.",
+	},
+	"sealJoinLocked|call encodeJoinSecrets": {
+		carries: []string{"pqSecret"},
+		why:     "into join_secrets_v1.",
+	},
+	"sealJoinLocked|call joinAuthPreimage": {
+		carries: []string{"joinSeal"},
+		why:     "the SEALED octets, hashed into the authenticator's preimage. Ciphertext.",
+	},
+	"sealJoinLocked|return": {
+		carries: []string{"joinSeal", "preimage"},
+		why:     "the seal and its authenticator, to the adder that puts them in the invite.",
+	},
+	"openJoinSeal|return": {
+		carries: []string{"groupHandleKey", "pqSecret"},
+		why:     "the two secrets, to Join, only once the seal is authenticated, opened and checked.",
+	},
+	"AddMember|literal Invite.JoinSeal": {
+		carries: []string{"joinSeal"},
+		why:     "THE INVITE'S FOURTH FIELD SINCE VERSION 3: the two secrets sealed to the joiner's X-Wing key, where they used to stand in the clear.",
+	},
+	"sealJoinLocked|call zeroizeState": {
+		carries: []string{"payload"},
+		why:     "the erase of the payload, deferred from the moment it exists.",
+	},
+	"openJoinSeal|call epochKeysDigestOver": {
+		carries: []string{"pqSecret"},
+		why:     "THE CHECK: the opened secret must reproduce, under this device's own exporter, the digest sealed beside it.",
+	},
+	"openJoinSeal|call zeroizeState": {
+		carries: []string{"groupHandleKey", "payload", "pqSecret"},
+		why:     "the erase of the payload always, and of both secrets on every refusal after they were cut out.",
+	},
+	"AddMember|literal Invite.JoinAuth": {
+		carries: []string{"joinAuth"},
+		why:     "the invite's authenticator. It is an HMAC over public values under an exporter key, and carries no secret.",
+	},
+	"AddMember|assign self.foundingJoinDigest": {
+		carries: []string{"joinDigest"},
+		why:     "the digest the invite was sealed over, kept so that Open can hold what it publishes against it. H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes.",
+	},
+	"sealJoinLocked|call self.device.crypto.Mac": {
+		carries: []string{"preimage"},
+		why:     "the authenticator over the preimage, which is public values and three hashes.",
+	},
+	"AddMember|call self.sealFoundingJoinLocked": {
+		carries: []string{"foundingSecret"},
+		why:     "THE FOUNDING ADD'S SEAL. pq_secret[1] goes into the join seal, off the staged commit, and into nothing else of the invite.",
+	},
+	"openJoinSeal|call decodeJoinSecrets": {
+		carries: []string{"payload"},
+		why:     "the opened payload, to be cut into its three values.",
+	},
+	"Join|literal Group.groupHandleKey": {
+		carries: []string{"groupHandleKey"},
+		why:     "the group's handle key, into the joiner's group.",
+	},
+	"openJoinSeal|call subtle.ConstantTimeCompare": {
+		carries: []string{"computed", "sealedDigest"},
+		why:     "two digests, compared in constant time. H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes.",
+	},
+	"Join|call append": {
+		carries: []string{"pqSecret"},
+		why:     "the joiner's own copy for its table, of the secret the seal opened to.",
+	},
+	"Join|call messagegroup.NewGroupSession": {
+		carries: []string{"groupHandleKey", "pqSecret"},
+		why:     "the joiner's session, built over the two secrets the seal opened to.",
+	},
+	"Join|call zeroizeState": {
+		carries: []string{"groupHandleKey", "pqSecret"},
+		why:     "THE TWO ERASES OF THE JOIN: this function's copy of the epoch's secret when it returns, the group having filed a copy of its own; and the handle key, on a refusal made after the seal opened and before the join committed. Once the join has committed the handle key is the group's.",
+	},
+	"Join|literal ?.handle.Epoch(...)": {
+		carries: []string{"pqSecret"},
+		why:     "the one row of the joiner's table: the epoch it is admitted at, and that epoch's secret.",
+	},
 }
 
 var pqSecretCountedNotCarriedSites = map[string]string{
 	"encodeJoinSecrets|len pqSecret":     "the encoder's width check and its refusal text: three 32 octet values or nothing.",
 	"PutGroupRecord|len record.PqSecret": "the durable writer's 'this record carries neither' refusal.",
 	"PutGroupRecord|len rows":            "the arity of the table about to be written.",
-	"check|len self.PqSecret":            "the invite's own emptiness check, and its refusal text.",
 	"encodePqSecretTable|len row.PqSecret": "THE ENCODER'S WIDTH, at the one place a secret's own length is read and formatted. It is " +
 		"the site the ADV-M1 shape would attack from: one edit turns the count into the value, " +
 		"and the sink census refuses it.",
@@ -1074,15 +1103,13 @@ var pqSecretCountedNotCarriedSites = map[string]string{
 	"restoredPqSecrets|len record.PqSecrets": "the six-part arm's row count, and the refusal text for a table that does not cover its " +
 		"own epoch.",
 	"sortEpochPqSecrets|len rows": "the sort's bound.",
+	"sealJoinLocked|len joinSeal": "the seal's exact length, asserted before it is handed on, and that refusal's text. A count of ciphertext.",
 }
 
 var pqSecretAccumulatorSites = map[string]string{
 	"CreateGroup|accumulate self.hold": "THE DEVICE. A group whose table holds the founding secret goes into [Device.groups], and " +
 		"what that map does with it afterwards is not a thing this walk over names can follow. It " +
 		"is bounded: the group's own table is censused wherever it is read.",
-	"Encode|accumulate writer.WriteOpaqueLP": "THE INVITE'S BUFFER. The secret goes into the syntax writer and the walk does not follow " +
-		"it into that object; it comes back out as the encoded invite, which is the out-of-band " +
-		"value by design.",
 	"Join|accumulate self.holdReplacing": "the same, for a joiner.",
 	"Join|accumulate self.persistGroup": "THE DISK, one frame out. [Device.persistGroup] hands the record to the store, whose own " +
 		"write path IS censused -- PutGroupRecord, and the two calls under it -- so the blindness " +
@@ -1115,6 +1142,8 @@ var pqSecretAccumulatorSites = map[string]string{
 	"writeRecord|accumulate temp.Write": "THE DISK. What happens to those octets after this call is the filesystem's and not a " +
 		"value any walk over this package's names can follow. It is the honest end of this census " +
 		"on the durable road.",
+	"sealJoinLocked|accumulate self.device.crypto.Mac": "the MAC's input. What goes in is the preimage, which is public values and three hashes; the provider keeps nothing of it.",
+	"AddMember|accumulate self.sealFoundingJoinLocked": "THE FOUNDING SEAL, one frame out. The secret goes into [Group.sealJoinLocked], whose own body IS censused, so the blindness here is bounded by one call.",
 }
 
 func TestEveryPqSecretInThisPackageGoesWhereTheDispositionSaysItGoes(t *testing.T) {

@@ -138,8 +138,8 @@ var _ DeviceStore = (*DurableStateStore)(nil)
 //
 // EVERYTHING ON IT IS SECRET IN FULL. The identity private key speaks as this device in every
 // group it is in; the wrap seed opens every X-Wing encapsulation addressed to this device's leaf;
-// a [GroupRecord] carries two of the [Invite]'s four values, and whoever holds those plus the MLS
-// state this store keeps beside them is in the group.
+// a [GroupRecord] carries the two values an [Invite]'s join seal delivers, and whoever holds those
+// plus the MLS state this store keeps beside them is in the group.
 type DeviceStore interface {
 	mls.StateStore
 
@@ -291,7 +291,8 @@ type SentRecord struct {
 // GroupRecord is the urmessage-side state of one group: the values that do not live in MLS and
 // that [Device.Restore] cannot rebuild a session without.
 //
-// IT IS SECRET IN FULL. PqSecret and GroupHandleKey are two of the [Invite]'s four values; see
+// IT IS SECRET IN FULL. PqSecret and GroupHandleKey are the two values an [Invite]'s join seal
+// delivers; see
 // [DurableStateStore] for what does and does not protect them on the disk.
 type GroupRecord struct {
 	// The 32 octet group id the server keys its rows by.
