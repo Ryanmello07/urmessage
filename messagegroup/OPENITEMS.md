@@ -846,12 +846,14 @@ owed exactly as before.
 The sealed invite (`sdk/urmessage/joinseal.go`, invite version `0x0003`) is the second user of this
 door. It takes two more code points and it is the first wrap whose version octet is authenticated.
 
-- **Code points, still provisional, now with two users.** The join seal's envelope is
+- **Code points, now with two users, and the join seal's two are ruled.** The join seal's envelope is
   `u8(0x01) ‖ u8(target_type = 0x03 JOINER) ‖ u8(payload_type = 0x04 JOIN_SECRETS_V1) ‖ u64(0)`,
   with `target_id = u32(joiner_leaf)`. The device wrap keeps target `0x01` and payloads `0x01` and
   `0x02`; target `0x02` and payload `0x03` stay unassigned for the recovery wrap. This package still
   takes all of them as parameters and chooses none: the table this item asks MASTER §7 for now has
-  five rows to write down and not three.
+  five rows and not three. The join seal's two, target `0x03` and payload `0x04`, stand by the
+  lead's ruling of 2026-10-09 and are written down in MASTER §7.3 (message-server ledger item 296);
+  the device wrap's three stay provisional here until this item is ruled.
 - **The content epoch is the constant zero**, so that the epoch a member joined at is not in the
   clear. The seal's own key therefore names no epoch, and a seal made for one add of a device opens,
   as a wrap, under a later add of the same device at the same leaf. What refuses it is not this

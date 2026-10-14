@@ -50,7 +50,9 @@ import (
 const (
 	// The three MASTER section 7 octets of a join seal. The device wrap takes target 0x01 and
 	// payloads 0x01 and 0x02 (pqepoch.go); target 0x02 and payload 0x03 are left for the recovery
-	// wrap. Like those, these are provisional until MG-7 is ruled.
+	// wrap. Unlike those, these two stand: the lead ruled them on 2026-10-09, and MASTER section
+	// 7.3 writes them down (message-server ledger item 296). The device wrap's stay provisional
+	// until MG-7 is ruled.
 	wrapTargetTypeJoiner       uint8 = 0x03
 	wrapPayloadTypeJoinSecrets uint8 = 0x04
 
@@ -59,7 +61,8 @@ const (
 	joinSealBytes = messagegroup.WrapEnvelopeBytes + 2 + 4 + messagegroup.XwingCiphertextSize + 4 + joinSecretsBytes + 16
 	joinAuthBytes = sha256.Size
 
-	// HMAC-SHA-256, as MASTER section 7.1 would register it. Proposed, with the code points above.
+	// HMAC-SHA-256, as MASTER section 7.1 registers it (ledger item 296), ruled with the code
+	// points above.
 	joinAuthAlgId uint16 = 0x0041
 
 	// THE INVITE VERSION join_auth IS OVER, AND IT IS THIS FORMAT'S OWN CONSTANT. The preimage
