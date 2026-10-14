@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"unsafe"
 
 	"github.com/urnetwork/message/sdk/urmessage"
 )
@@ -32,8 +33,14 @@ func transientRecordPath(t *testing.T, stateDir string, groupId []byte) string {
 	return found
 }
 
-// transientHold opens one file with share mode 0, which is what a scanner or a backup tool does: no
-// other open of it succeeds, a read included, until the answered release is called.
+// transientLockFileEx is kernel32's LockFileEx, which package syscall does not carry.
+var transientLockFileEx = syscall.NewLazyDLL("kernel32.dll").NewProc("LockFileEx")
+
+// transientHold holds one file as a scanner or a backup tool does, until the answered release is
+// called: it is opened with share mode 0, and the whole of it is locked exclusively on that handle,
+// so a read fails whichever of the two a host enforces. THE CONTROL is that a plain read of the file
+// fails while it is held, for a reason that is not "not found": a hold that did not take would make
+// every assertion below a statement about an ordinary read.
 func transientHold(t *testing.T, path string) func() {
 	t.Helper()
 	name, err := syscall.UTF16PtrFromString(path)
@@ -44,6 +51,17 @@ func transientHold(t *testing.T, path string) func() {
 		syscall.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
 		t.Fatalf("holding %s: %v", path, err)
+	}
+	const lockExclusive = 0x2 // LOCKFILE_EXCLUSIVE_LOCK
+	var overlapped syscall.Overlapped
+	if locked, _, lockErr := transientLockFileEx.Call(uintptr(handle), lockExclusive, 0, 0xFFFFFFFF, 0xFFFFFFFF,
+		uintptr(unsafe.Pointer(&overlapped))); locked == 0 {
+		syscall.CloseHandle(handle)
+		t.Fatalf("locking %s: %v", path, lockErr)
+	}
+	if _, readErr := os.ReadFile(path); readErr == nil || errors.Is(readErr, os.ErrNotExist) {
+		syscall.CloseHandle(handle)
+		t.Fatalf("CONTROL FAILED: a plain read of %s while it is held answered %v, so the hold did not take", path, readErr)
 	}
 	released := false
 	release := func() {
