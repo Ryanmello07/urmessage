@@ -90,6 +90,7 @@ import (
 //     inside the group record's own decode, survived the whole suite while that decode was the
 //     body of a loop and its record had no name a walk could seed.
 var pqSecretProducerNames = map[string]bool{
+	"decodeJoinSecrets":     true,
 	"NewPqSecret":           true,
 	"OpenWrapBody":          true,
 	"openWrapToOwnLeaf":     true,
@@ -124,6 +125,12 @@ type pqSecretSink struct {
 }
 
 var pqSecretProducerSites = map[string]string{
+	"epochKeysDigestOver|parameter pqSecret":   "the candidate a joiner, or the founder, recomputes H(epoch_keys) from.",
+	"encodeJoinSecrets|parameter pqSecret":     "the secret of the epoch an add opens, arriving at the payload's encoder.",
+	"decodeJoinSecrets|result epochKeysDigest": "the last third, which is the PUBLIC digest. It is in this census because the net takes every result of a producer.",
+	"decodeJoinSecrets|result groupHandleKey":  "the second third: the group's handle key, which is secret, and is held to the same dispositions as the secret beside it.",
+	"decodeJoinSecrets|result pqSecret":        "the first third of the payload: the secret of the epoch the joiner is admitted at.",
+	"decodeJoinSecrets|parameter pqSecret":     "the named result the first third of an opened join_secrets_v1 is answered through.",
 	"AddMemberAndPublish|self.pqSecretLocked": "the same read after the rotation has run, so the invite carries pq_secret[n+1] and not " +
 		"the secret the group is standing on.",
 	"AddMember|self.pqSecretLocked": "THE FOUNDING EPOCH'S SECRET READ BACK FOR THE WELCOME. Epoch one's secret travels in " +
@@ -240,6 +247,50 @@ var pqSecretProducerSites = map[string]string{
 }
 
 var pqSecretSinks = map[string]pqSecretSink{
+	"epochKeysDigestOver|return": {
+		carries: []string{"digest"},
+		why:     "H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes. It is not a key.",
+	},
+	"epochKeysDigestOver|call message.EpochKeysDigest": {
+		carries: []string{"readKey", "writeKey"},
+		why:     "the pair, into the digest.",
+	},
+	"epochKeysDigestOver|call zeroizeState": {
+		carries: []string{"readKey", "root", "writeKey"},
+		why:     "the erase of the root and of both keys, before the digest is answered.",
+	},
+	"epochKeysDigestOver|call message.ReadKey": {
+		carries: []string{"root"},
+		why:     "the read key off that root, to be digested.",
+	},
+	"epochKeysDigestOver|call message.WriteKey": {
+		carries: []string{"root"},
+		why:     "the write key off that root, to be digested.",
+	},
+	"epochKeysDigestOver|call messagegroup.StorageRoot": {
+		carries: []string{"pqSecret"},
+		why:     "the storage root of the epoch, from the exporter and the candidate secret.",
+	},
+	"decodeJoinSecrets|return": {
+		carries: []string{"epochKeysDigest", "groupHandleKey", "pqSecret"},
+		why:     "the three values, as copies, to the joiner's half.",
+	},
+	"decodeJoinSecrets|call zeroizeState": {
+		carries: []string{"groupHandleKey", "pqSecret"},
+		why:     "the erase of both copies on that refusal.",
+	},
+	"decodeJoinSecrets|call subtle.ConstantTimeCompare": {
+		carries: []string{"groupHandleKey", "pqSecret"},
+		why:     "the refusal of an all-zero secret, in constant time. It answers an int.",
+	},
+	"encodeJoinSecrets|return": {
+		carries: []string{"payload"},
+		why:     "join_secrets_v1, to its one caller, which seals it and erases it.",
+	},
+	"encodeJoinSecrets|call append": {
+		carries: []string{"payload", "pqSecret"},
+		why:     "the payload's assembly, into a buffer of exactly its length.",
+	},
 	"AddMemberAndPublish|call append": {
 		carries: []string{"self.pqSecretLocked"},
 		why:     "the same copy after the rotation.",
@@ -973,6 +1024,7 @@ var pqSecretSinks = map[string]pqSecretSink{
 }
 
 var pqSecretCountedNotCarriedSites = map[string]string{
+	"encodeJoinSecrets|len pqSecret":     "the encoder's width check and its refusal text: three 32 octet values or nothing.",
 	"PutGroupRecord|len record.PqSecret": "the durable writer's 'this record carries neither' refusal.",
 	"PutGroupRecord|len rows":            "the arity of the table about to be written.",
 	"check|len self.PqSecret":            "the invite's own emptiness check, and its refusal text.",

@@ -48,6 +48,14 @@ var (
 	// told, and never at the join or at the first Receive after it.
 	ErrInviteDamaged = errors.New("urmessage: this invite is damaged: it is not the octets the founder encoded")
 
+	// THE REFUSALS OF THE JOIN SEAL INSIDE THE JOIN. Each is made before the joined state reaches
+	// the store, so the store is as it was and the join code is not spent: the honest invite,
+	// pasted again, still joins.
+	//
+	// Unreadable: the seal is authenticated and does not open to this device's leaf key, or opens
+	// to something that is not join_secrets_v1.
+	ErrJoinSealUnreadable = errors.New("urmessage: this invite's join seal does not open to this device")
+
 	// A record came back that a key should have opened and did not.
 	ErrRecordOpen = errors.New("urmessage: a record from a member of this group did not open")
 
