@@ -180,3 +180,57 @@ func TestARecordAnotherProcessHoldsIsNotDamageAndTheOwnerIsStillAsked(t *testing
 		}
 	}
 }
+
+// AN EPOCH STATE ANOTHER PROCESS HOLDS DURING A RESTORE IS NOT DAMAGE EITHER, AND THE OWNER IS STILL
+// ASKED (R26, the fix review's V1; the reviewer's probe, kept as the regression it found). F1's
+// promise is about the group's restore, whichever of its files failed: here every epoch state of
+// alice's group is held while she restores, in the app's own order (restore, then leave). The
+// Restore reports the group as not read now; once the files are released, the leave is the one a
+// device that has not restored that group gets, and the next Restore brings it back and asks the
+// owner's question.
+//
+// WHAT WOULD GO RED: note any restore failure as "will not come back", and the leave after the
+// release erases the owner's group, with bob in it, unasked -- measured, 3 files to 0.
+func TestAnEpochStateAnotherProcessHoldsDuringRestoreIsNotDamageAndTheOwnerIsStillAsked(t *testing.T) {
+	ctx := t.Context()
+	alice, groupId := transientOwnerPair(t)
+	sum := sha256.Sum256(groupId)
+	name := hex.EncodeToString(sum[:])
+	epochFiles := []string{}
+	filepath.WalkDir(alice.stateDir, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && filepath.Base(filepath.Dir(path)) == "epoch" &&
+			filepath.Base(filepath.Dir(filepath.Dir(path))) == name {
+			epochFiles = append(epochFiles, path)
+		}
+		return nil
+	})
+	if len(epochFiles) == 0 {
+		t.Fatalf("CONTROL FAILED: no epoch state of the group is on alice's disk")
+	}
+	before := len(advGroupFiles(t, alice.stateDir, groupId))
+	releases := []func(){}
+	for _, path := range epochFiles {
+		releases = append(releases, transientHold(t, path))
+	}
+	restored, err := alice.device.Restore(ctx)
+	t.Logf("the Restore while the epoch states are held: %d group(s), %v", len(restored), err)
+	if len(restored) != 0 || !errors.Is(err, urmessage.ErrRestore) || !errors.Is(err, urmessage.ErrGroupRecordNotReadNow) {
+		t.Errorf("the Restore while the epoch states are held answered %d group(s), %v, want none, ErrRestore and ErrGroupRecordNotReadNow", len(restored), err)
+	}
+	for _, release := range releases {
+		release()
+	}
+	err = alice.device.ForgetGroup(groupId)
+	if !errors.Is(err, urmessage.ErrGroupNotRestored) {
+		t.Errorf("the owner's leave after the release answered %v, want ErrGroupNotRestored", err)
+	}
+	if after := len(advGroupFiles(t, alice.stateDir, groupId)); after != before {
+		t.Fatalf("the owner's group lost files: %d before, %d after", before, after)
+	}
+	if restored, err := alice.device.Restore(ctx); err != nil || len(restored) != 1 {
+		t.Fatalf("the next Restore answered %d group(s), %v, want the group back", len(restored), err)
+	}
+	if err := alice.device.ForgetGroup(groupId); !errors.Is(err, urmessage.ErrOwnerMustTransfer) {
+		t.Errorf("the restored owner's leave answered %v, want ErrOwnerMustTransfer", err)
+	}
+}

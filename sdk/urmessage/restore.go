@@ -277,7 +277,21 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 		if err != nil {
 			// REMEMBERED, so that [Device.ForgetGroup] can leave a group that will not come back:
 			// its record is still on the disk, and a join into it is refused while it is.
-			self.noteUnrestored(record.GroupId)
+			//
+			// UNLESS IT FAILED FOR A MOMENT (R26, the fix review's V1). A file of this group that
+			// another process held -- the record, an epoch state, any of them: the subject is the
+			// group's restore, not a file -- is no reason the group will not come back, and a
+			// group noted here is left WITHOUT the owner's question. So a transient failure
+			// ([transientRead]) is reported under [ErrGroupRecordNotReadNow] and noted nowhere;
+			// the next Restore tries it again, and until one succeeds a leave of it answers
+			// [ErrGroupNotRestored].
+			if transientRead(err) {
+				// begun as the list's own report of a record not read now begins, so an app reads
+				// one sentence for both
+				err = fmt.Errorf("%w: %w: group %x: %w", ErrRestore, ErrGroupRecordNotReadNow, record.GroupId, err)
+			} else {
+				self.noteUnrestored(record.GroupId)
+			}
 			if firstFailure == nil {
 				firstFailure = err
 			}

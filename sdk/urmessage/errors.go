@@ -780,15 +780,16 @@ var (
 	// tells the two apart.
 	ErrGroupRecordDamaged = errors.New("urmessage: a group record on this device's disk does not read, so that group cannot be restored; ForgetGroup leaves it, and it can then be joined again")
 
-	// A group's record is on this device's disk and its file COULD NOT BE READ JUST NOW: another
-	// process holds it open with no read sharing or locked (a scanner, a backup tool, the search
-	// indexer), a sharing or lock violation and nothing else ([transientRead], R26). Nothing is
-	// known about the record, so it is NOT
+	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ JUST NOW -- its record,
+	// or an epoch state a restore needs (R26, the fix review's V1): another process holds it open
+	// with no read sharing or locked (a scanner, a backup tool, the search indexer), a sharing or
+	// lock violation and nothing else ([transientRead]). Nothing is known about the group, so it
+	// is NOT
 	// [ErrGroupRecordDamaged], and nothing that damage permits is done to it: [Device.Restore]
 	// brings the other groups back and reports this one beside them, and [Device.ForgetGroup] of
 	// that group is refused before anything is written, so an owner is still asked the owner's
 	// question once the file reads again. Restore again later.
-	ErrGroupRecordNotReadNow = errors.New("urmessage: a group record on this device's disk could not be read just now, so that group was not restored this time; nothing of it was changed, and the next Restore tries it again")
+	ErrGroupRecordNotReadNow = errors.New("urmessage: a file of a group on this device's disk could not be read just now, so that group was not restored this time; nothing of it was changed, and the next Restore tries it again")
 
 	// [Device.ForgetGroup] LEFT the group -- it is closed, its keys are gone from memory, and this
 	// device no longer holds it -- but the erase of its copy on the disk did not finish. The leave
