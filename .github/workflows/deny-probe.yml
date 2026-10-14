@@ -1,0 +1,68 @@
+# THROWAWAY (ruling R31), on the fork's branch ci/t1fix3-deny only: why a deny ACL did not hold
+# on fork-ci's windows leg (run 38598995529, job 115973034633), measured in minutes, not test.sh.
+name: deny-probe (throwaway, R31)
+
+on:
+  push:
+    branches: [ci/t1fix3-deny]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the branch as message
+        uses: actions/checkout@v4
+        with:
+          path: message
+          persist-credentials: false
+
+      - name: Set up Go, go1.27.2
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+
+      - name: Build the probe
+        run: |
+          cd message/ci-probe/denyprobe
+          GOWORK=off GOFLAGS= go build -o "$RUNNER_TEMP/denyprobe.exe" .
+          go version
+          echo "built $RUNNER_TEMP/denyprobe.exe"
+
+      - name: whoami /priv, from bash
+        env:
+          MSYS_NO_PATHCONV: '1'
+        run: |
+          # Git Bash's own whoami is coreutils', so the Windows one is named by its path
+          "$SYSTEMROOT/System32/whoami.exe"
+          "$SYSTEMROOT/System32/whoami.exe" /priv
+          echo "TMP=$TMP TEMP=$TEMP RUNNER_TEMP=$RUNNER_TEMP"
+
+      - name: whoami /priv, from pwsh
+        shell: pwsh
+        run: |
+          whoami
+          whoami /priv
+
+      - name: The table, readers started from bash
+        run: bash message/ci-probe/table.sh "$RUNNER_TEMP/denyprobe.exe"
+
+      - name: The table, readers started from pwsh
+        shell: pwsh
+        run: pwsh -NoProfile -File message/ci-probe/table.ps1 -Probe "$env:RUNNER_TEMP/denyprobe.exe"
+
+      - name: The deny case itself, with -v (only when the branch carries the fix)
+        if: hashFiles('message/ci-probe/run-the-case') != ''
+        run: |
+          cd message
+          for name in connect sdk message-server glog gvisor goidenticons; do bash scripts/siblings.sh "$name"; done
+          go version
+          GOWORK=off go -C sdk/cp3b test -count=1 -v -race -run 'TestADenyAtStartupLiftedThenALockAtTheLeaveErasesNothing$' .
