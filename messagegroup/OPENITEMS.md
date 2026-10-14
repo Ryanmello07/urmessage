@@ -1214,6 +1214,35 @@ an environmental reason (a permission, the medium) cannot be left from the app u
 fixed, and fixing the access is the way through. `TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused`
 (`sdk/urmessage/failclosed_test.go`) holds the refusal.
 
+**R33 grows it again, by A REQUIRED FILE ABSENT.** An absence is no longer proof of anything: an
+antivirus quarantine, a sync tool or a backup tool moves a file away and puts it back, and Go on
+Windows folds ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND and ERROR_BAD_NETPATH into one
+`os.ErrNotExist`. So a group whose epoch state, private key or record is missing is unproven too: it
+is not restored, its leave is refused "so nothing was left", and it cannot be left from the app until
+the file is back, or until the export below exists. The unproven row's advice, "Check that URmessage
+can read its folder", is the right advice for a quarantine or a sync tool. Three shapes of it are
+worth naming:
+- a group whose RECORD is missing is not reported by Restore at all: the list skips a directory with
+  no record in it and erases nothing (it never could name the group: a directory's name is a hash),
+  and a ForgetGroup that names the group by its id refuses it as unproven;
+- an erase interrupted after the epoch states and before the record, where no leave mark stands --
+  `Device.abandonJoined`'s erase, a failed admission erasing what it wrote -- leaves a record whose
+  states are gone, which is now unproven where it used to be left;
+- `TestAnEpochStateMovedAwayIsNeverTheReasonForAnErase` and
+  `TestARecordMovedAwayIsNeverTheReasonForAnErase` (`sdk/cp3b/quarantine_test.go`) hold the two
+  quarantines the round-3 review made, with a rename standing in for the quarantine.
+
+**And the sweep keeps one narrow window (R33 (2)).** `Device.Restore` erases a group directory that
+holds the store's own `pending` mark and no record: the mark is written when a call CREATES the
+directory, before its first epoch state, and taken away once the record is synced. A crash after the
+record is synced and before the mark is removed leaves the mark beside the record, and the next
+Restore takes it away. If the record then vanishes BEFORE that Restore -- moved away in the window
+between the crash and the next launch -- the sweep erases the group's epoch states on the stale
+mark. The same is true of a live group whose WHOLE directory is removed under it and then written
+into again (its seal persists an epoch state, which creates the directory, and so marks it): if the
+process stops before the group's record is written again, the next Restore sweeps what the seal
+wrote, as it did before R33.
+
 ### What a fix would be
 
 An explicit export, "erase this copy anyway", that a person chooses knowing what it costs, with the

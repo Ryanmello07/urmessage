@@ -2509,7 +2509,8 @@ func (self *DurableStateStore) SentRecords(groupId []byte) ([]*SentRecord, error
 		// answers a listing of a regular file ERROR_PATH_NOT_FOUND, which reads as not-found, so a
 		// file standing where this directory goes would have restored the group as one with no
 		// copies of its own lines, silently. It is a path of the wrong type, and it fails through
-		// the same wrap as every other failure of this listing, with the OS's own errno.
+		// the same wrap as every other failure of this listing, with the platform's own errno for
+		// a path that is not a directory.
 		if errors.Is(err, os.ErrNotExist) && !stateIsNotADirectory(dir) {
 			return []*SentRecord{}, nil
 		}

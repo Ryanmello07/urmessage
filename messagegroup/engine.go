@@ -776,8 +776,9 @@ func (self *connectMlsEngine) CreateGroup(groupId []byte, policy []byte, leafKey
 //
 // WHAT A CALLER DOES WITH A REFUSAL HERE IS ITS OWN, and sdk/urmessage's is fail-closed: a group whose
 // load failed is erased without its owner's question only on proof that it can never be read, and a
-// failure it cannot classify -- this method's ErrEngineLoadedEpoch among them -- keeps the group, for
-// ever if the failure does (open item MG-15).
+// failure it cannot classify -- this method's ErrEngineLoadedEpoch among them, and a state the store
+// does not hold, since an absence is no longer proof -- keeps the group, for ever if the failure does
+// (open item MG-15).
 func (self *connectMlsEngine) LoadGroup(groupId []byte, epoch uint64) (GroupHandle, error) {
 	group, err := mls.LoadGroup(&mls.GroupConfig{
 		Crypto:  self.crypto,
