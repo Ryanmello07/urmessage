@@ -1217,11 +1217,11 @@ fixed, and fixing the access is the way through. `TestARestoreFailureThisBuildCa
 **R33 grows it again, by A REQUIRED FILE ABSENT.** An absence is no longer proof of anything: an
 antivirus quarantine, a sync tool or a backup tool moves a file away and puts it back, and Go on
 Windows folds ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND and ERROR_BAD_NETPATH into one
-`os.ErrNotExist`. So a group whose epoch state, private key or record is missing is unproven too: it
-is not restored, its leave is refused "so nothing was left", and it cannot be left from the app until
-the file is back, or until the export below exists. The unproven row's advice, "Check that URmessage
-can read its folder", is the right advice for a quarantine or a sync tool. Three shapes of it are
-worth naming:
+`os.ErrNotExist`. So a group whose epoch state is missing is unproven too: it is not restored, its
+leave is refused "so nothing was left", and it cannot be left from the app until the file is back,
+or until the export below exists. The unproven row's advice, "Check that URmessage can read its
+folder", is the right advice for a quarantine or a sync tool. Three shapes of it are worth
+naming:
 - a group whose RECORD is missing is not reported by Restore at all: the list skips a directory with
   no record in it and erases nothing (it never could name the group: a directory's name is a hash),
   and a ForgetGroup that names the group by its id refuses it as unproven;
