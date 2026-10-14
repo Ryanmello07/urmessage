@@ -340,6 +340,26 @@ func main() {
 	check(len(back) == 1 && back[0].Text == reply, "A read %s for B's one answer", texts(back))
 	fmt.Fprintf(out, "  the string crossed both ways; B's sender_handle %x\n", back[0].SenderHandle)
 
+	// ── the join seal, 3 of 4 ────────────────────────────────────────────────────────────
+	step("the invitation B already joined is pasted again and is refused, and B's group is the one it holds")
+	fmt.Fprintf(out, "  WHAT THIS IS FOR: a join writes an epoch state, a record and a map entry under the group's\n"+
+		"  id, so a join over a group a device holds would be that group replaced by whatever the\n"+
+		"  invitation carries, and an invitation authenticates nobody. Until this build an invitation\n"+
+		"  into a held group was honoured. It is refused now, before B's join code is looked at, and\n"+
+		"  the next step is B reading what A sends in the group it still holds.\n")
+	again, err := urmessage.ParseInvite(encoded)
+	if err != nil {
+		fail("parse invite: %v", err)
+	}
+	_, err = b.device.Join(ctx, again)
+	check(errors.Is(err, urmessage.ErrGroupAlreadyHeld),
+		"the invitation B had already joined, pasted again, answered %v, want ErrGroupAlreadyHeld", err)
+	bHolds := b.device.Groups()
+	check(len(bHolds) == 1 && bHolds[0] == bGroup,
+		"B holds %d group(s) after the refused invitation, and the one it joined is not the one it holds", len(bHolds))
+	check(bGroup.Epoch() == 1, "B's group is at epoch %d after the refused invitation, want 1", bGroup.Epoch())
+	fmt.Fprintf(out, "  refused; B holds the group it joined, at the epoch it joined at\n")
+
 	// ── 4 ────────────────────────────────────────────────────────────────────────────────
 	step(fmt.Sprintf("%d messages in order, which is what crosses a fetch page", lineCount))
 	fmt.Fprintf(out, "  WHAT THIS IS FOR: 4.3.4 truncates a page by `limit` OR by `max_response_bytes` and\n"+
