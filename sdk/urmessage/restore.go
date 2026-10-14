@@ -225,6 +225,17 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 			unfinished = fmt.Errorf("%w: group %x: %w", ErrForgetUnfinished, groupId, err)
 		}
 	}
+	// EPOCH STATE WITH NO RECORD BESIDE IT IS ERASED, and that is not a refusal (Task 57, F3). It
+	// is what a join that died between its commit and its record leaves, or a founder that died
+	// before Open: a leaf's private keys that nothing restores, lists or leaves. A group this
+	// device holds is skipped, because a group founded here has no record until it is opened, and
+	// so is anything with a record or a leave mark. What was erased is
+	// [DurableStateStore.ErasedWithNoRecord]; an erase that fails is tried again next time.
+	if sweeper, sweeps := store.(interface {
+		eraseGroupsWithNoRecord(held [][]byte) ([]string, error)
+	}); sweeps {
+		sweeper.eraseGroupsWithNoRecord(self.heldGroupIds())
+	}
 	nonce, nonceEpoch, err := self.nonce()
 	if err != nil {
 		return nil, err
@@ -559,6 +570,17 @@ func (self *Device) pastEpochLoader(groupId []byte) messagegroup.PastEpochLoader
 	return func(epoch uint64) (messagegroup.GroupHandle, error) {
 		return self.engine.LoadGroup(id, epoch)
 	}
+}
+
+// heldGroupIds is the id of every group this device holds in memory, for the sweep in Restore.
+func (self *Device) heldGroupIds() [][]byte {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	held := [][]byte{}
+	for id := range self.groups {
+		held = append(held, []byte(id))
+	}
+	return held
 }
 
 // holdsGroup reports whether this device already has a live view of that group, so that a second

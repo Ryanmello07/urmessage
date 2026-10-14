@@ -84,6 +84,9 @@ type DurableStateStore struct {
 	// It is a field and not a returned error because the sweep is not fatal; see that function
 	// for why, and [DurableStateStore.UnsweptWrites] for what a caller is owed.
 	unswept []string
+	// erasedWithNoRecord is every group directory [DurableStateStore.eraseGroupsWithNoRecord] has
+	// erased since open, by the store's name for it. See [DurableStateStore.ErasedWithNoRecord].
+	erasedWithNoRecord []string
 
 	// flushes counts every write that passed through writeRecord, taken AFTER the Sync returns
 	// rather than before it.
@@ -1456,6 +1459,121 @@ func (self *DurableStateStore) deleteEpochsLocked(groupId []byte, before uint64)
 		}
 	}
 	return nil
+}
+
+// deleteGroupStateAt erases ONE epoch's state of one group, and then the group's epoch and group
+// directories if that left them empty. It is [Device.abandonJoined]'s erase: a join that failed
+// after its commit takes the state it wrote and nothing beside it.
+func (self *DurableStateStore) deleteGroupStateAt(groupId []byte, epoch uint64) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return err
+	}
+	if err := self.removeLocked(filepath.Join(self.epochDir(groupId), stateEpochName(epoch))); err != nil {
+		return err
+	}
+	// best effort, and only when empty: os.Remove refuses a directory with anything in it
+	os.Remove(self.epochDir(groupId))
+	os.Remove(self.groupDir(groupId))
+	return nil
+}
+
+// eraseGroupsWithNoRecord erases every group directory that holds EPOCH STATE AND NO RECORD, and
+// answers the directories it erased (Task 57, F3). [Device.Restore] runs it, and it is not a
+// refusal: a directory it cannot erase is answered as the error beside the list, and tried again
+// at the next Restore.
+//
+// WHAT SUCH A DIRECTORY IS. A join that died between its commit and its record, a join whose
+// record could not be written, or a founder that died before [Group.Open] wrote its first record.
+// None of them restores -- a group with no record is one this device has to be invited to again --
+// and each holds a leaf's private keys and its path-secret ladder, which nothing else lists or
+// erases. A join's stays useful to a thief of the disk for as long as the adder's group keeps the
+// leaf.
+//
+// WHAT IT LEAVES ALONE, each for its own reason:
+//   - a group the caller holds (held): a group founded in this process has epoch state and no
+//     record until it is opened, by design;
+//   - a group being left: the leave mark is the erase's own instruction, and Restore finishes it;
+//   - a directory with a record in it, whether the record reads, does not read, or could not be
+//     read just now: that is a group, and its fate is the record's;
+//   - a directory whose record or mark cannot even be asked about;
+//   - a directory with no epoch state: nothing secret is in it.
+func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string, error) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return nil, err
+	}
+	root := filepath.Join(self.dataDir, "group")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, root, err)
+	}
+	keep := map[string]bool{}
+	for _, groupId := range held {
+		keep[stateNameOf(groupId)] = true
+	}
+	absent := func(path string) bool {
+		_, err := os.Lstat(path)
+		return errors.Is(err, os.ErrNotExist)
+	}
+	erased := []string{}
+	var first error
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || keep[name] {
+			continue
+		}
+		dir := filepath.Join(root, name)
+		if !absent(filepath.Join(dir, "forgetting")) || !absent(filepath.Join(dir, "meta")) {
+			continue
+		}
+		epochDir := filepath.Join(dir, "epoch")
+		epochs, err := os.ReadDir(epochDir)
+		if err != nil || len(epochs) == 0 {
+			if err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
+				first = fmt.Errorf("%w: %s could not be read: %v", ErrStateStoreState, epochDir, err)
+			}
+			continue
+		}
+		failed := false
+		for _, epoch := range epochs {
+			if err := self.removeLocked(filepath.Join(epochDir, epoch.Name())); err != nil {
+				failed = true
+				if first == nil {
+					first = err
+				}
+				break
+			}
+		}
+		if failed {
+			continue
+		}
+		os.Remove(epochDir)
+		os.Remove(dir)
+		erased = append(erased, name)
+	}
+	self.erasedWithNoRecord = append(self.erasedWithNoRecord, erased...)
+	if first != nil {
+		return erased, fmt.Errorf("urmessage: a group directory holding epoch state and no record could not be erased; the next Restore tries again: %w", first)
+	}
+	return erased, nil
+}
+
+// ErasedWithNoRecord is every group directory holding epoch state and no record that a
+// [Device.Restore] over this store has erased since it was opened, by the store's name for it.
+//
+// IT IS THE ERASE'S LOG, in [DurableStateStore.UnsweptWrites]'s shape: this package has no logger,
+// and an erase nobody can see is not one a caller can tell a person about or a probe can assert.
+// Nothing in this package makes a decision on it.
+func (self *DurableStateStore) ErasedWithNoRecord() []string {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	return append([]string(nil), self.erasedWithNoRecord...)
 }
 
 // PutPrivateKey writes one MLS private key under its public half.

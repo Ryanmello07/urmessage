@@ -1556,20 +1556,60 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 		ownFloorHeld: handle.Epoch() <= 1,
 	}
 	group.initTables()
+	// EVERY FAILURE FROM HERE IS PAST THE COMMIT, so it goes through [Device.abandonJoined]: the
+	// state the commit wrote is erased with the group, and nothing of the join outlives it.
 	if err := self.persistGroup(group.groupRecordLocked(true)); err != nil {
-		// the session first and the handle after it, which is [Group.Close]'s own order: the
-		// session owns the loop that the handle is reached through.
-		session.Close()
-		handle.Close()
-		return nil, fmt.Errorf(
-			"%w: this group joined and its record could not be persisted, so a restart would not come back into it: %w", ErrJoinCodeSpent, err)
+		return nil, self.abandonJoined(group, readd, fmt.Errorf(
+			"%w: this group joined and its record could not be persisted, so a restart would not come back into it: %w", ErrJoinCodeSpent, err))
 	}
 	if err := self.holdReplacing(group, replaces); err != nil {
-		session.Close()
-		handle.Close()
-		return nil, err
+		return nil, self.abandonJoined(group, readd, err)
 	}
 	return group, nil
+}
+
+// abandonJoined is what a join that failed AFTER ITS COMMIT leaves behind, which is nothing: the
+// group is closed, and the epoch state the commit wrote is erased (Task 57, F3).
+//
+// WHY THE STATE GOES. It is the joined leaf's private keys and its path-secret ladder. With no
+// record beside it, nothing lists it, no Restore restores it and no ForgetGroup reaches it (it
+// answers [ErrGroupNotHeld]), while the adder's group keeps the leaf and goes on wrapping to this
+// device. A later thief of the disk could follow that group for as long as the leaf stands, in a
+// group the person was told they never joined. The join code is spent either way, so erasing it
+// costs nothing that was not already lost.
+//
+// EXACTLY THE JOINED EPOCH IS ERASED, and no other. A re-add joins over a group this device was
+// removed from, whose own epoch states, below the one joined, stand in the same directory and are
+// that group's history; they are not this join's to take. A store with no single-epoch erase is
+// asked for everything below the joined epoch's successor only when the join was not a re-add.
+//
+// An erase that fails is said in the answer, after the cause, and does not replace it.
+func (self *Device) abandonJoined(group *Group, readd bool, cause error) error {
+	// the session first and the handle after it, which is [Group.Close]'s own order: the
+	// session owns the loop that the handle is reached through.
+	group.session.Close()
+	group.handle.Close()
+	if err := self.eraseJoinedState(group.id, group.epoch, readd); err != nil {
+		return fmt.Errorf("%w, and the joined epoch state could not be erased: %w", cause, err)
+	}
+	return cause
+}
+
+// groupStateEraser is a store that can erase ONE epoch's state of one group. Both stores this
+// package ships are one.
+type groupStateEraser interface {
+	deleteGroupStateAt(groupId []byte, epoch uint64) error
+}
+
+// eraseJoinedState erases the epoch state a join committed: see [Device.abandonJoined].
+func (self *Device) eraseJoinedState(groupId []byte, epoch uint64, readd bool) error {
+	if eraser, exact := self.stateStore.(groupStateEraser); exact {
+		return eraser.deleteGroupStateAt(groupId, epoch)
+	}
+	if readd {
+		return fmt.Errorf("urmessage: this store cannot erase one epoch's state, and group %x's earlier epochs are not this join's to erase", groupId)
+	}
+	return self.joinStage.DeleteGroupStateBefore(groupId, epoch+1)
 }
 
 // AddMember adds one device to this group and answers the [Invite] it joins with.

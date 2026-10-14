@@ -72,6 +72,16 @@ func (self *MemoryStateStore) DeleteGroupStateBefore(groupId []byte, epoch uint6
 	return nil
 }
 
+// deleteGroupStateAt erases one epoch's state of one group: see [Device.abandonJoined].
+func (self *MemoryStateStore) deleteGroupStateAt(groupId []byte, epoch uint64) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	key := fmt.Sprintf("%x/%d", groupId, epoch)
+	zeroizeState(self.groupStates[key])
+	delete(self.groupStates, key)
+	return nil
+}
+
 func (self *MemoryStateStore) PutPrivateKey(pub []byte, priv []byte) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()

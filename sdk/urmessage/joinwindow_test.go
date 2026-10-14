@@ -246,10 +246,20 @@ func TestARefusalThatCannotPutTheJoinCodeBackSaysItIsSpent(t *testing.T) {
 	}
 }
 
-// recordSink is a durable store that will not write a group record once it is armed.
+// recordSink is a durable store that will not write a group record once it is armed. It notes
+// each group state written while it is armed, so that a case can tell a failure past the commit
+// from one inside the window after the commit's state has been erased again.
 type recordSink struct {
 	*DurableStateStore
-	armed bool
+	armed     bool
+	statesPut int
+}
+
+func (self *recordSink) PutGroupState(groupId []byte, epoch uint64, state []byte) error {
+	if self.armed {
+		self.statesPut += 1
+	}
+	return self.DurableStateStore.PutGroupState(groupId, epoch, state)
 }
 
 func (self *recordSink) PutGroupRecord(record *GroupRecord) error {
@@ -274,7 +284,7 @@ func TestAJoinWhoseRecordCannotBeWrittenSaysTheJoinCodeIsSpent(t *testing.T) {
 	t.Cleanup(func() { durable.Close() })
 	store := &recordSink{DurableStateStore: durable}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
-	honest, groupId := windowInvite(t, joiner)
+	honest, _ := windowInvite(t, joiner)
 	store.armed = true
 	_, err = joiner.Join(ctx, honest)
 	if !errors.Is(err, ErrJoinCodeSpent) {
@@ -286,8 +296,9 @@ func TestAJoinWhoseRecordCannotBeWrittenSaysTheJoinCodeIsSpent(t *testing.T) {
 	if held := len(joiner.Groups()); held != 0 {
 		t.Errorf("the device holds %d group(s) after a join that did not complete", held)
 	}
-	// what "past the window" means: the joined state did reach the store
-	if _, err := durable.GetGroupState(groupId, 1); err != nil {
-		t.Errorf("CONTROL FAILED: the store holds no state for the joined epoch (%v), so this failure was inside the window and not after it", err)
+	// what "past the window" means: the joined state did reach the store. It is counted as it is
+	// written, because since Task 57's F3 a join that fails past the commit erases it again.
+	if store.statesPut == 0 {
+		t.Errorf("CONTROL FAILED: no state was written to the store for the joined epoch, so this failure was inside the window and not after it")
 	}
 }

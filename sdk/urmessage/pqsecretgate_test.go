@@ -356,6 +356,11 @@ var pqSecretSinks = map[string]pqSecretSink{
 		carries: []string{"group"},
 		why:     "the group's first record going to disk.",
 	},
+	"Join|call self.abandonJoined": {
+		carries: []string{"group"},
+		why: "a join that failed after its commit (Task 57, F3): the group is closed, which erases its " +
+			"own table, and the joined epoch's state is erased from the store.",
+	},
 	"Join|literal Group.session": {
 		carries: []string{"session"},
 		why:     "the session parked on the group.",
@@ -1111,6 +1116,10 @@ var pqSecretAccumulatorSites = map[string]string{
 		"what that map does with it afterwards is not a thing this walk over names can follow. It " +
 		"is bounded: the group's own table is censused wherever it is read.",
 	"Join|accumulate self.holdReplacing": "the same, for a joiner.",
+	"Join|accumulate self.abandonJoined": "A JOIN THAT FAILED AFTER ITS COMMIT (Task 57, F3), and a horizon by the letter " +
+		"of the rule rather than a blind spot in fact: [Device.abandonJoined] is in this census's own " +
+		"sources, and what it does with the group is close it -- the session, the handle and the " +
+		"table's erase -- and erase the joined epoch's state from the store. It keeps nothing.",
 	"Join|accumulate self.persistGroup": "THE DISK, one frame out. [Device.persistGroup] hands the record to the store, whose own " +
 		"write path IS censused -- PutGroupRecord, and the two calls under it -- so the blindness " +
 		"here is bounded by one function body.",
