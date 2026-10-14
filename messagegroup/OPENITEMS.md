@@ -841,6 +841,29 @@ names and leaves to the implementation — *"may or may not compare the carried 
 and refuse a mismatch"* — so it rules nothing: the wire does not move, and the ruling M1-55 owes is
 owed exactly as before.
 
+### What the join seal takes, and what it settles for itself
+
+The sealed invite (`sdk/urmessage/joinseal.go`, invite version `0x0003`) is the second user of this
+door. It takes two more code points and it is the first wrap whose version octet is authenticated.
+
+- **Code points, still provisional, now with two users.** The join seal's envelope is
+  `u8(0x01) ‖ u8(target_type = 0x03 JOINER) ‖ u8(payload_type = 0x04 JOIN_SECRETS_V1) ‖ u64(0)`,
+  with `target_id = u32(joiner_leaf)`. The device wrap keeps target `0x01` and payloads `0x01` and
+  `0x02`; target `0x02` and payload `0x03` stay unassigned for the recovery wrap. This package still
+  takes all of them as parameters and chooses none: the table this item asks MASTER §7 for now has
+  five rows to write down and not three.
+- **The content epoch is the constant zero**, so that the epoch a member joined at is not in the
+  clear. The seal's own key therefore names no epoch, and a seal made for one add of a device opens,
+  as a wrap, under a later add of the same device at the same leaf. What refuses it is not this
+  door: it is the invite's authenticator.
+- **The version octet of a join seal IS authenticated.** `join_auth` is an HMAC-SHA-256, keyed by
+  the join epoch's exporter, over a preimage that carries `SHA-256(join_seal)`: all eleven envelope
+  octets and the whole body. The joiner verifies it before it opens the seal, and refuses any
+  envelope that is not the four constants above before that. So this item's second half is closed
+  **for the join seal and for no other wrap**: a device wrap's version octet is authenticated by
+  nothing, exactly as this item's reproduction measures, and `M1-52` and `M1-54` are owed exactly
+  as before.
+
 ### What a ruling has to choose
 
 1. **The three code points**, as a table: which octet a device leaf is and which a member's
