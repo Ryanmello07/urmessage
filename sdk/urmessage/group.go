@@ -1457,13 +1457,18 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 			joined, err = nil, fmt.Errorf("%w: %w", ErrJoinCodeSpent, err)
 			return
 		}
-		// A JOIN CODE THE STORE HOLDS AND COULD NOT READ FOR A MOMENT IS NOT A MISSING ONE (Task
-		// 57, F4; R26, V3b). The engine carries the store's own refusal. Only a TRANSIENT one
-		// ([classifyRead]'s transient class: another process held the file, so the file is there) is the window's,
-		// and its sentence is true of it: nothing was written, the join code is still on the disk,
-		// and the same invite joins once it reads. A join code that will never read -- its octets
-		// damaged, or a read that failed for good -- is no join code, and is said so below.
-		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && classifyRead(err) == readTransient {
+		// A JOIN CODE THE STORE HOLDS AND COULD NOT READ IS NOT A MISSING ONE (Task 57, F4; R26,
+		// V3b; R33's X1). The engine carries the store's own refusal. A take the store REFUSED for
+		// any reason not PROVEN permanent -- another process held the file for a moment, a
+		// permission refused, the medium, anything [classifyRead] cannot classify -- removed
+		// nothing, so the window's sentence is true of it: nothing was written, the join code is
+		// not spent, and the same invite joins once the store reads it. It used to be the
+		// transient class alone, and a deny ACL on the join code was told "make a new join code"
+		// while the same invite joined once the deny was lifted, measured. A store that holds NO
+		// SUCH join code, and one whose octets are damaged or whose path is of the wrong type, is
+		// no join code, and is said so below.
+		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && errors.Is(err, ErrStateStoreState) &&
+			!errors.Is(err, ErrStateNotFound) && classifyRead(err) != readPermanent {
 			joined, err = nil, fmt.Errorf("%w: %w", ErrJoinRefused, err)
 			return
 		}

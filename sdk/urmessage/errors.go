@@ -864,15 +864,17 @@ var (
 	// is no join code for that to be true of, and pasting the same invite again can never work. A
 	// refusal says what it cost; this one says what is missing, and the remedy.
 	//
-	// WHICH OF THE THREE SENTENCES A FAILED TAKE GETS (Task 57, F4; R26, V3). The engine's refusal
-	// (messagegroup.ErrEngineNoKeyPackageForWelcome) is the same one for a Welcome addressed to
-	// nobody here and for a store that would not hand over the join code it holds, and it carries
-	// the store's last refusal WRAPPED. A store that failed to read the join code FOR A MOMENT
-	// ([classifyRead]'s transient class: another process held the file) gets [ErrJoinRefused]'s, which is then
-	// true: the join code is still there, and the same invite joins once the store reads it. A
-	// take that removed the file and then failed gets [ErrJoinCodeSpent]'s. Everything else gets
-	// this one: no join code at all, a join code whose octets are damaged, or a read that failed
-	// for good. None of those will ever join.
+	// WHICH OF THE THREE SENTENCES A FAILED TAKE GETS (Task 57, F4; R26, V3; R33's X1). The
+	// engine's refusal (messagegroup.ErrEngineNoKeyPackageForWelcome) is the same one for a
+	// Welcome addressed to nobody here and for a store that would not hand over the join code it
+	// holds, and it carries the store's last refusal WRAPPED. A take the store REFUSED for any
+	// reason [classifyRead] cannot prove permanent -- another process held the file for a moment,
+	// a permission refused, the medium, a failure it cannot classify -- removed nothing, and gets
+	// [ErrJoinRefused]'s, which is then true: the join code is still there, and the same invite
+	// joins once the store reads it. A take that removed the file and then failed gets
+	// [ErrJoinCodeSpent]'s. Everything else gets this one: a store that holds no such join code
+	// (an absence answers "nothing is there", and erases nothing), or a join code whose octets
+	// are damaged or whose path is of the wrong type. None of those will ever join.
 	ErrNoJoinCodeForInvite = errors.New("urmessage: this device holds no join code this invitation was made for; make a new join code")
 
 	// THE ONE REFUSAL OF [Device.Join] THAT COSTS THE JOIN CODE. Every check a join makes runs
