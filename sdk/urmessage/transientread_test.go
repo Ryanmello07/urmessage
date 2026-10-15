@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -140,5 +141,102 @@ func TestADamagedRecordIsSaidToNotReadAndNotToBeAnotherBuilds(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "this build wrote") {
 		t.Errorf("the refusal for a record this build wrote says this build did not write it: %v", err)
+	}
+}
+
+// A WRONG-TYPE CODE IS PROOF ONLY BESIDE THE TYPE IT CLAIMS (R36, item 4: the round-5 review's L2).
+// Each of this platform's wrong-type errnos ([permanentErrnos]) is answered for a group's record, as
+// the store's read carries one:
+//   - with the RECORD ITSELF standing there, a regular file and intact -- what a WinFsp or Dokan mount
+//     (rclone, Cryptomator, SSHFS-Win) or a minifilter answers ERROR_INVALID_FUNCTION for -- the
+//     store's own Lstat confirms nothing, and the failure is UNPROVEN;
+//   - with a DIRECTORY standing at the record's name, the Lstat confirms the type, and the failure is
+//     proven permanent, as the store's own read of that directory is, end to end: a group whose
+//     record can never be read stays one a device can leave;
+//   - with nothing standing there, nothing confirms it.
+//
+// AND A NAME THAT CANNOT BE ASKED ABOUT is judged by the nearest name above it, inside the store's
+// directory: a file standing where the store keeps a group's `epoch` folder confirms a code answered
+// for an epoch state below it, and that folder standing as a folder confirms nothing.
+//
+// WHAT WOULD GO RED: a wrong-type code taken for proof without the Lstat -- an owner's intact group
+// erased without the owner's question, over a mount type.
+func TestAWrongTypeCodeIsProofOnlyBesideTheTypeItClaims(t *testing.T) {
+	store := openTestStore(t, t.TempDir())
+	groupId := bytes.Repeat([]byte{0x79}, GroupIdBytes)
+	if err := store.PutGroupRecord(&GroupRecord{
+		GroupId: groupId, PqSecret: bytes.Repeat([]byte{0x2A}, 32), GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32), Epoch: 1, Opened: true,
+	}); err != nil {
+		t.Fatalf("PutGroupRecord: %v", err)
+	}
+	if len(permanentErrnos) == 0 {
+		t.Fatalf("CONTROL FAILED: this platform's wrong-type set is empty, so nothing below is held")
+	}
+	carried := func(path string, errno syscall.Errno) error {
+		cause := store.confirmWrongType(path, false, &os.PathError{Op: "read", Path: path, Err: errno})
+		return fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, path, cause)
+	}
+	record := store.groupRecordPath(groupId)
+
+	// THE RECORD ITSELF, intact
+	if _, err := store.GroupRecord(groupId); err != nil {
+		t.Fatalf("CONTROL FAILED: the record does not read: %v", err)
+	}
+	for _, errno := range permanentErrnos {
+		if got := classifyRead(carried(record, errno)); got != readUnproven {
+			t.Errorf("errno %d (%v), answered for an intact regular file at the record's name, is classed %d, want unproven", uint(errno), errno, got)
+		}
+	}
+
+	// A DIRECTORY at the record's name
+	if err := os.Rename(record, record+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(record, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, errno := range permanentErrnos {
+		if got := classifyRead(carried(record, errno)); got != readPermanent {
+			t.Errorf("errno %d (%v), answered for a directory at the record's name, is classed %d, want proven permanent", uint(errno), errno, got)
+		}
+	}
+	if _, err := store.GroupRecord(groupId); !errors.Is(err, ErrGroupRecordDamaged) || classifyRead(err) != readPermanent {
+		t.Errorf("the store's own read of a directory at the record's name answered %v, want damage, proven permanent", err)
+	}
+
+	// NOTHING at the record's name
+	if err := os.Remove(record); err != nil {
+		t.Fatal(err)
+	}
+	for _, errno := range permanentErrnos {
+		if got := classifyRead(carried(record, errno)); got != readUnproven {
+			t.Errorf("errno %d (%v), answered for a name nothing stands at, is classed %d, want unproven", uint(errno), errno, got)
+		}
+	}
+
+	// THE NEAREST NAME ABOVE: a file where the `epoch` folder goes, and then that folder as a folder
+	state := filepath.Join(store.epochDir(groupId), stateEpochName(1))
+	if err := os.WriteFile(store.epochDir(groupId), []byte("a file where the epoch folder goes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := classifyRead(carried(state, permanentErrnos[0])); got != readPermanent {
+		t.Errorf("a wrong-type code below a file standing where the epoch folder goes is classed %d, want proven permanent", got)
+	}
+	if err := os.Remove(store.epochDir(groupId)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store.epochDir(groupId), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := classifyRead(carried(state, permanentErrnos[0])); got != readUnproven {
+		t.Errorf("a wrong-type code below an epoch folder that is a folder is classed %d, want unproven", got)
+	}
+	// and never above the store's own directory
+	outside := filepath.Join(t.TempDir(), "a file", "below it")
+	if err := os.WriteFile(filepath.Dir(outside), []byte("not the store's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := classifyRead(carried(outside, permanentErrnos[0])); got != readUnproven {
+		t.Errorf("a wrong-type code below a file outside the store's directory is classed %d, want unproven", got)
 	}
 }

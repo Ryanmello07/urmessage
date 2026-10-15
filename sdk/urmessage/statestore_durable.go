@@ -10,10 +10,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
@@ -1340,8 +1342,9 @@ func (self *DurableStateStore) readRecord(path string, kind byte) ([][]byte, err
 		}
 		// THE OS ERROR IS WRAPPED, NOT FORMATTED (R26, R29): [classifyRead] reads its errno to tell
 		// a file another process holds for a moment, or one that will never read, from one it
-		// cannot classify
-		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, path, err)
+		// cannot classify -- and a wrong-type errno is proof only with this store's own Lstat of the
+		// name beside it (R36, item 4)
+		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, path, self.confirmWrongType(path, false, err))
 	}
 	return decodeStateRecord(raw, kind)
 }
@@ -2895,11 +2898,12 @@ func (self *DurableStateStore) SentRecords(groupId []byte) ([]*SentRecord, error
 		}
 		// AND IT SAYS SO UNAMBIGUOUSLY (R33): Windows' 3 is also an absence, which proves nothing,
 		// so once the Lstat has said this path is a file the listing's failure carries the
-		// platform's not-a-directory errno instead
+		// platform's not-a-directory errno instead, CONFIRMED by that Lstat (R36, item 4); a
+		// wrong-type errno the listing answered over a directory confirms nothing
 		if stateIsNotADirectory(dir) {
 			err = &os.PathError{Op: "readdir", Path: dir, Err: stateNotADirectory}
 		}
-		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, dir, err)
+		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, dir, self.confirmWrongType(dir, true, err))
 	}
 	records := []*SentRecord{}
 	for _, entry := range entries {
@@ -3030,6 +3034,72 @@ func (self *DurableStateStore) groupFolder(groupId []byte) groupFolderState {
 func stateIsNotADirectory(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && !info.IsDir()
+}
+
+// stateWrongType is a wrong-type errno this store CONFIRMED (R36, item 4): its own Lstat of the name,
+// at the verdict, showed a type the store never writes there. [classifyRead] reads a wrong-type errno
+// ([permanentErrnos]) as proof only inside one. It is made by [DurableStateStore.confirmWrongType]
+// and by nothing else.
+type stateWrongType struct {
+	err error
+}
+
+func (self *stateWrongType) Error() string {
+	return self.err.Error()
+}
+
+func (self *stateWrongType) Unwrap() error {
+	return self.err
+}
+
+// confirmWrongType answers err as it came, or, when err carries a wrong-type errno
+// ([permanentErrnos]) AND this store's own Lstat of path, now, shows a type the store never writes
+// there, inside a [stateWrongType] (R36, item 4). wantDir says what the store keeps at path: a
+// directory, or a file.
+//
+// WHY THE CODE ALONE IS NOT PROOF. Each of those errnos is the platform's word for a path of the wrong
+// type, and each can also be answered for an intact file: Windows' ERROR_INVALID_FUNCTION comes from
+// ReadFile on a directory, and from a WinFsp or Dokan mount (rclone, Cryptomator, SSHFS-Win) or a
+// minifilter that does not implement a request, over a file whose octets are whole. A leave that took
+// that for proof would erase an owner's group without the owner's question, irreversibly, over a
+// mount type. So the code is proof only beside the type it claims, read here, under the lock the
+// verdict is made under: a directory where the store writes a file, a file where it keeps a
+// directory, or a link or a reparse point at either -- the store never writes one. A wrong-type code
+// on an entry whose own type is right is UNPROVEN.
+func (self *DurableStateStore) confirmWrongType(path string, wantDir bool, err error) error {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) || !slices.Contains(permanentErrnos, errno) {
+		return err
+	}
+	if !self.wrongTypeStands(path, wantDir) {
+		return err
+	}
+	return &stateWrongType{err: err}
+}
+
+// wrongTypeStands is confirmWrongType's Lstat. A name that stands is judged by its own type. A name
+// that cannot be asked about -- a file standing where one of the folders above it goes answers
+// ENOTDIR off Windows, for the name and not for the folder -- is judged by the nearest name above it
+// that can be, inside this store's directory and never above it: the store keeps a directory at each
+// of those, so anything else standing there is the wrong type. A name with nothing above it that can
+// be asked about confirms nothing.
+func (self *DurableStateStore) wrongTypeStands(path string, wantDir bool) bool {
+	if info, err := os.Lstat(path); err == nil {
+		if wantDir {
+			return !info.Mode().IsDir()
+		}
+		return !info.Mode().IsRegular()
+	}
+	root := filepath.Clean(self.dataDir)
+	for name, above := filepath.Clean(path), filepath.Dir(filepath.Clean(path)); above != name; name, above = above, filepath.Dir(above) {
+		if !strings.HasPrefix(above, root+string(filepath.Separator)) {
+			return false
+		}
+		if info, err := os.Lstat(above); err == nil {
+			return !info.Mode().IsDir()
+		}
+	}
+	return false
 }
 
 // The width of one [PeerHead] on the disk: epoch, leaf, wire byte, window and head, big endian,

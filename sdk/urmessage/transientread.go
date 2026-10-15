@@ -64,7 +64,11 @@ const (
 //     record whose decode or id does not match), and an epoch state that does not decode (the
 //     syntax package's decode sentinels, which are its whole error contract);
 //     (2) a refusal by name: [ErrGroupPredatesJoinSeal];
-//     (3) a path of the wrong type, unambiguously: the platform's errnos for it ([permanentErrnos]).
+//     (3) a path of the wrong type: one of the platform's errnos for it ([permanentErrnos]), and only
+//     when the store's own Lstat of that name, at the verdict, showed a type the store never writes
+//     there ([stateWrongType], R36, item 4). Every one of those codes can also be answered for an
+//     intact file -- a mount type, or a filter driver that does not implement a request -- so a
+//     wrong-type code on an entry whose own type is right is UNPROVEN.
 //   - TRANSIENT: a failure of this store's carrying a sharing or lock violation
 //     ([transientErrnos], R26's list, unchanged).
 //   - UNPROVEN: everything else -- an absence (ErrStateNotFound, ENOENT; Windows 2, 3, 53), a
@@ -91,7 +95,12 @@ func classifyRead(err error) readClass {
 			case slices.Contains(transientErrnos, errno):
 				return readTransient
 			case slices.Contains(permanentErrnos, errno):
-				return readPermanent
+				// AND ONLY BESIDE THE TYPE IT CLAIMS (R36, item 4): the store's own Lstat of the name,
+				// at the verdict, showed a type the store never writes there
+				var confirmed *stateWrongType
+				if errors.As(err, &confirmed) {
+					return readPermanent
+				}
 			}
 			return readUnproven
 		}
