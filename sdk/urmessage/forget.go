@@ -104,9 +104,18 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 	// A LEAVE ALREADY UNDER WAY is finished whatever state it stopped in: closed or not, held or
 	// not. The owner question was asked when the mark went down, and is not asked again of a group
 	// whose keys may already be gone.
+	//
+	// WHILE THE MARK STILL NAMES THE JOIN OF THE GROUP THAT STANDS (R36, item 2). A mark naming an
+	// earlier join than what stands -- put back by another program after this device was removed and
+	// joined again -- is no instruction: the store removes it, and this leave goes on below as the
+	// leave of the group that stands, with the owner's question. A mark that cannot be held against
+	// what stands decides nothing, and the leave is refused with that class's sentence.
 	if durable {
 		marked, err := store.GroupBeingForgotten(groupId)
 		if err != nil {
+			if errors.Is(err, ErrGroupReadUnproven) || errors.Is(err, ErrGroupRecordNotReadNow) {
+				return fmt.Errorf("urmessage: a leave of group %x this device recorded could not be held against what stands beside it on the disk, so nothing was left: %w", groupId, err)
+			}
 			return err
 		}
 		if marked {
@@ -115,7 +124,7 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 				self.drop(groupId, group)
 			}
 			if err := store.DeleteGroupRecord(groupId); err != nil {
-				return fmt.Errorf("%w: %w", ErrForgetUnfinished, err)
+				return leaveUnfinished(groupId, err)
 			}
 			return nil
 		}
@@ -191,9 +200,21 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 		return nil
 	}
 	if err := store.DeleteGroupRecord(groupId); err != nil {
-		return fmt.Errorf("%w: %w", ErrForgetUnfinished, err)
+		return leaveUnfinished(groupId, err)
 	}
 	return nil
+}
+
+// leaveUnfinished is what a leave answers when the erase that finishes it does not: the erase stopped
+// part way ([ErrForgetUnfinished]), or, at the erase, the leave mark named an earlier join of the
+// group than what stood on the disk (R36, item 2). Then the store removed the mark and erased nothing:
+// the group that stands was not left, it is on the disk and not restored, and the next Restore hands
+// it back ([ErrGroupNotRestored]).
+func leaveUnfinished(groupId []byte, err error) error {
+	if errors.Is(err, errLeaveMarkStale) {
+		return fmt.Errorf("%w: %x: %w", ErrGroupNotRestored, groupId, err)
+	}
+	return fmt.Errorf("%w: %w", ErrForgetUnfinished, err)
 }
 
 // recordOnDisk asks the store about ONE group: whether it holds a record for it, and whether that
@@ -264,7 +285,7 @@ func (self *Device) forgetUnrestored(store DeviceStore, groupId []byte) error {
 		}
 	}
 	if err := store.DeleteGroupRecord(groupId); err != nil {
-		return fmt.Errorf("%w: %w", ErrForgetUnfinished, err)
+		return leaveUnfinished(groupId, err)
 	}
 	self.mutex.Lock()
 	delete(self.unrestored, string(groupId))
@@ -276,20 +297,32 @@ func (self *Device) forgetUnrestored(store DeviceStore, groupId []byte) error {
 // id that has not finished erasing (msgrepo ledger §7, 2026-10-03, re-check R1). The mark is the
 // erase's own instruction, so state written beside it is erased with it at the next Restore: a
 // group re-joined over a standing mark worked until the restart and was then gone, with no
-// warning. The erase is finished first, or the join is refused.
-func (self *Device) finishLeaveBefore(groupId []byte) error {
+// warning. The erase is finished first, or the join is refused. refused says what is refused, in
+// the caller's words.
+//
+// A MARK NAMING AN EARLIER JOIN THAN WHAT STANDS IS NO LEAVE UNDER WAY (R36, item 2): the store
+// removes it, here or at the erase, nothing is erased, and the caller's own gate decides on what
+// stands. A mark that cannot be held against what stands decides nothing, and refuses the call with
+// that class's sentence.
+func (self *Device) finishLeaveBefore(groupId []byte, refused string) error {
 	store, durable := self.stateStore.(DeviceStore)
 	if !durable {
 		return nil
 	}
 	marked, err := store.GroupBeingForgotten(groupId)
 	if err != nil {
+		if errors.Is(err, ErrGroupReadUnproven) || errors.Is(err, ErrGroupRecordNotReadNow) {
+			return fmt.Errorf("urmessage: a leave of group %x this device recorded could not be held against what stands beside it on the disk, so %s: %w", groupId, refused, err)
+		}
 		return err
 	}
 	if !marked {
 		return nil
 	}
 	if err := store.DeleteGroupRecord(groupId); err != nil {
+		if errors.Is(err, errLeaveMarkStale) {
+			return nil
+		}
 		return fmt.Errorf("%w: group %x cannot be joined or made until the erase of the leave before it has finished: %w",
 			ErrForgetUnfinished, groupId, err)
 	}

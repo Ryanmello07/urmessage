@@ -2370,6 +2370,15 @@ func (self *DurableStateStore) groupRecordInLocked(name string) (*GroupRecord, e
 	if _, err := os.Stat(filepath.Join(dir, stateGroupForgettingName)); err == nil {
 		return nil, fmt.Errorf("%w: the group in %s is being left", ErrStateNotFound, name)
 	}
+	return self.readGroupRecordLocked(name)
+}
+
+// readGroupRecordLocked is the read of the record in one group directory itself, whatever mark
+// stands beside it, with groupRecordInLocked's answers: the record, [ErrStateNotFound], damage, or
+// the read's own error. A leave mark is held against it ([DurableStateStore.leaveMarkLocked]), and
+// that is the one reader that asks about a record while the mark stands.
+func (self *DurableStateStore) readGroupRecordLocked(name string) (*GroupRecord, error) {
+	dir := filepath.Join(self.dataDir, "group", name)
 	parts, err := self.readRecord(filepath.Join(dir, stateGroupRecordName), stateKindGroupRecord)
 	if err != nil {
 		if errors.Is(err, ErrStateNotFound) || classifyRead(err) != readPermanent {
@@ -2404,8 +2413,8 @@ func (self *DurableStateStore) groupRecordInLocked(name string) (*GroupRecord, e
 // on.
 //
 // IT IS A FUNCTION RATHER THAN PART OF THE READ THAT CALLS IT BECAUSE OF A MEASUREMENT, which is
-// the part worth keeping. Inside that read ([DurableStateStore.groupRecordInLocked], which the list
-// and the one-id read share) the record's parts are a LOCAL called
+// the part worth keeping. Inside that read ([DurableStateStore.readGroupRecordLocked], which the
+// list, the one-id read and a leave mark's verdict share) the record's parts are a LOCAL called
 // `parts` -- a generic record off a generic read -- and no census in this package could taint it:
 // pqsecretgate_test.go's walk seeds a PARAMETER, and wrapseedgate_test.go's `parts` entry seeds
 // the WRITE path's three functions and not this one. Mutant pq-M2 measured it: a `%x` of
@@ -2502,11 +2511,25 @@ func groupRecordOf(name string, parts [][]byte) (*GroupRecord, error) {
 // whole path-secret ladder left on the disk for a group it has left. The epoch discard runs FIRST
 // and its failure is the call's, so there is no path on which the record is gone and the keys are
 // not.
+//
+// AND A LEAVE MARK IS HELD AGAINST WHAT STANDS, HERE, AT THE ERASE (R36, item 2). Every leave road
+// ends in this call -- [Device.Restore], [Device.ForgetGroup] (twice), the fresh verdict's leave and
+// [Device.Join]'s and [Device.CreateGroup]'s finishing of a leave before them -- so the mark's own
+// reason is checked under the store's lock at the moment of the erase, and not only where a caller
+// asked first. A mark naming an earlier join of the group than what stands is no instruction: it is
+// removed, nothing is erased, and the answer wraps [errLeaveMarkStale]. A mark that cannot be held
+// against what stands decides nothing, and is the refusal, with its class. With no mark standing,
+// the caller's own decision, made just now, is the erase's reason, as before.
 func (self *DurableStateStore) DeleteGroupRecord(groupId []byte) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if err := self.refuseIfClosed(); err != nil {
 		return err
+	}
+	if _, verdict, err := self.leaveMarkLocked(stateNameOf(groupId)); err != nil {
+		return err
+	} else if verdict == leaveMarkStale {
+		return fmt.Errorf("%w: group %x", errLeaveMarkStale, groupId)
 	}
 	if err := self.deleteEpochsLocked(groupId, ^uint64(0)); err != nil {
 		return err
@@ -2559,34 +2582,177 @@ func (self *DurableStateStore) DeleteGroupRecord(groupId []byte) error {
 // process that tried, refused by every Restore after it, and still holding this device's own
 // lines on the disk. With the mark it is neither restored nor lost: [Device.Restore] and
 // [Device.ForgetGroup] both finish it.
+//
+// AND IT NAMES THE INCARNATION IT DECIDED ON (R36, item 2). The mark carries the group id and E: the
+// highest epoch this device holds of the group at the decision, read here, under the store's lock,
+// off the disk as it stands ([DurableStateStore.highestEpochHeldLocked]). A leave is finished only
+// while nothing of a LATER incarnation stands above E ([DurableStateStore.leaveMarkLocked]). It used
+// to name the group alone, and Restore finished any mark that named its folder: a mark a quarantine
+// moved away while a leave stopped part way, and put back after the device was removed, added and
+// joined again, emptied the live group's folder at the next start (the round-5 review's Z2).
 func (self *DurableStateStore) MarkGroupForgetting(groupId []byte) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if err := self.refuseIfClosed(); err != nil {
 		return err
 	}
-	return self.writeRecord(self.forgettingPath(groupId), stateKindForgetting, groupId)
+	decided, err := self.highestEpochHeldLocked(groupId)
+	if err != nil {
+		return err
+	}
+	var epochOctets [8]byte
+	binary.BigEndian.PutUint64(epochOctets[:], decided)
+	return self.writeRecord(self.forgettingPath(groupId), stateKindForgetting, groupId, epochOctets[:])
 }
 
-// GroupBeingForgotten reports whether that mark stands for one group.
+// highestEpochHeldLocked is a leave mark's E (R36, item 2): the highest epoch this device holds of
+// one group, off the disk now -- the record's epoch, when the record reads and names its own folder,
+// or the highest epoch state the folder holds, whichever is higher. A record that does not read, or
+// that cannot be read just now, adds nothing: the states it names stand beside it, and an E read LOW
+// only makes a later finish find this group's own states above it, which erases nothing. An epoch
+// folder that cannot be listed is the refusal, because an E read low there would undo the very leave
+// the mark records; a path of another type at its name holds no state, and adds nothing either.
+func (self *DurableStateStore) highestEpochHeldLocked(groupId []byte) (uint64, error) {
+	var highest uint64
+	if record, err := self.readGroupRecordLocked(stateNameOf(groupId)); err == nil {
+		highest = record.Epoch
+	}
+	dir := self.epochDir(groupId)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || stateIsNotADirectory(dir) {
+			return highest, nil
+		}
+		return 0, fmt.Errorf("%w: %s could not be listed, so the epoch this leave decides on could not be read: %w", ErrStateStoreState, dir, err)
+	}
+	for _, entry := range entries {
+		if epoch, named := stateEpochOfName(entry.Name()); named && entry.Type().IsRegular() && highest < epoch {
+			highest = epoch
+		}
+	}
+	return highest, nil
+}
+
+// leaveMarkVerdict is what one group folder's leave mark is, held against what stands beside it now
+// (R36, item 2).
+type leaveMarkVerdict int
+
+const (
+	// leaveMarkNone: no leave mark stands.
+	leaveMarkNone leaveMarkVerdict = iota
+	// leaveMarkFinish: the mark names the incarnation that stands, and nothing of a later one stands:
+	// the leave it records is finished.
+	leaveMarkFinish
+	// leaveMarkStale: something of a LATER incarnation stands -- a record that reads above the epoch
+	// the mark names, or an epoch state named above it. The mark is no instruction: it was removed,
+	// which erases no value of the group, and the group is not being left.
+	leaveMarkStale
+	// leaveMarkUndecided: the mark, or what stands beside it, cannot be read now. The mark stays and
+	// decides nothing, and the error beside it says why, with its class.
+	leaveMarkUndecided
+)
+
+// leaveMarkLocked reads the leave mark in one group's folder and holds it against what stands beside
+// it NOW, under the store's lock (R36, item 2), and answers the group id the mark names with its
+// verdict. A stale mark is removed here. A mark that does not read, that names another folder's
+// group, or that names no epoch -- every mark this build writes names one, and none written before
+// it stands after the T1 reset -- decides nothing: none of them can say which join of the group it
+// decided on. Each of those is the unproven class, but a mark naming another group, which keeps the
+// format sentinel it always had.
+func (self *DurableStateStore) leaveMarkLocked(name string) ([]byte, leaveMarkVerdict, error) {
+	path := filepath.Join(self.dataDir, "group", name, stateGroupForgettingName)
+	parts, err := self.readRecord(path, stateKindForgetting)
+	if errors.Is(err, ErrStateNotFound) {
+		return nil, leaveMarkNone, nil
+	}
+	if err != nil {
+		return nil, leaveMarkUndecided, fmt.Errorf("%w: the leave mark in %s could not be read, so it decides nothing: %w",
+			notReadSentinel(classifyRead(err)), name, err)
+	}
+	// THE MARK MUST NAME THE DIRECTORY IT SITS IN: one copied in from another group's directory would
+	// otherwise send the erase to a group nobody left
+	if len(parts) < 1 || stateNameOf(parts[0]) != name {
+		return nil, leaveMarkUndecided, fmt.Errorf("%w: the leave mark in %s does not name its own group", ErrStateStoreFormat, name)
+	}
+	groupId := parts[0]
+	if len(parts) != 2 || len(parts[1]) != 8 {
+		return groupId, leaveMarkUndecided, fmt.Errorf("%w: the leave mark in %s names no epoch it decided on, so it decides nothing", ErrGroupReadUnproven, name)
+	}
+	decided := binary.BigEndian.Uint64(parts[1])
+	later, err := self.laterIncarnationLocked(name, decided)
+	if err != nil {
+		return groupId, leaveMarkUndecided, err
+	}
+	if !later {
+		return groupId, leaveMarkFinish, nil
+	}
+	if err := self.removeLocked(path); err != nil {
+		return groupId, leaveMarkUndecided, fmt.Errorf("%w: the leave mark in %s names epoch %d, something of a later join stands above it, and the mark could not be removed: %w",
+			notReadSentinel(classifyRead(err)), name, decided, err)
+	}
+	return groupId, leaveMarkStale, nil
+}
+
+// laterIncarnationLocked answers whether anything of a LATER incarnation of one group stands in its
+// folder: a record that reads above the epoch a leave decided on, or an epoch state named above it
+// (R36, item 2). A record that does not read is not a record that reads, and is no later
+// incarnation. A record, or an epoch folder, that cannot be read just now decides nothing: that is
+// the error, with its class.
+func (self *DurableStateStore) laterIncarnationLocked(name string, decided uint64) (bool, error) {
+	record, err := self.readGroupRecordLocked(name)
+	switch {
+	case err == nil:
+		if decided < record.Epoch {
+			return true, nil
+		}
+	case errors.Is(err, ErrStateNotFound), errors.Is(err, ErrGroupRecordDamaged):
+	default:
+		return false, fmt.Errorf("%w: the leave mark in %s names epoch %d, and whether a record above it stands could not be read, so the mark decides nothing yet: %w",
+			notReadSentinel(classifyRead(err)), name, decided, err)
+	}
+	dir := filepath.Join(self.dataDir, "group", name, stateGroupEpochsName)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || stateIsNotADirectory(dir) {
+			return false, nil
+		}
+		err = fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, dir, err)
+		return false, fmt.Errorf("%w: the leave mark in %s names epoch %d, and whether an epoch state above it stands could not be read, so the mark decides nothing yet: %w",
+			notReadSentinel(classifyRead(err)), name, decided, err)
+	}
+	for _, entry := range entries {
+		if epoch, named := stateEpochOfName(entry.Name()); named && decided < epoch {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// errLeaveMarkStale is [DurableStateStore.DeleteGroupRecord]'s answer when the leave mark it would
+// finish names an earlier join of the group than what stands (R36, item 2): the mark was removed,
+// and nothing was erased.
+var errLeaveMarkStale = errors.New("urmessage: the leave mark named an earlier join of this group than what stands on the disk, so it was removed and nothing was erased")
+
+// GroupBeingForgotten reports whether a leave mark stands for one group AND still names the join of
+// it that stands (R36, item 2). A stale mark is removed here and answered as no mark; a mark that
+// cannot be held against what stands beside it is the error, with its class.
 func (self *DurableStateStore) GroupBeingForgotten(groupId []byte) (bool, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if err := self.refuseIfClosed(); err != nil {
 		return false, err
 	}
-	if _, err := os.Stat(self.forgettingPath(groupId)); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("%w: %w", ErrStateStoreState, err)
+	_, verdict, err := self.leaveMarkLocked(stateNameOf(groupId))
+	if err != nil {
+		return false, err
 	}
-	return true, nil
+	return verdict == leaveMarkFinish, nil
 }
 
-// GroupsBeingForgotten is every group that mark stands for, by the group id the mark itself
-// carries: the name of a directory is a hash and cannot be turned back into an id. A non-nil error
-// beside a list reports a mark it skipped.
+// GroupsBeingForgotten is every group a leave mark stands for and still names (R36, item 2), by the
+// group id the mark itself carries: the name of a directory is a hash and cannot be turned back into
+// an id. A stale mark is removed and skipped: its group is not being left. A non-nil error beside a
+// list reports a mark it skipped.
 func (self *DurableStateStore) GroupsBeingForgotten() ([][]byte, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -2601,31 +2767,26 @@ func (self *DurableStateStore) GroupsBeingForgotten() ([][]byte, error) {
 		}
 		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, root, err)
 	}
-	// A MARK THAT CANNOT BE READ, or that names another directory, is REPORTED and skipped: one bad
-	// mark does not stop every other leave from being finished. Its group is not restored either
-	// (GroupRecords skips any directory with a mark), so it waits for somebody to look.
+	// A MARK THAT CANNOT BE READ, that names another directory, that names no epoch, or that cannot
+	// be held against what stands beside it now, is REPORTED and skipped: one bad mark does not stop
+	// every other leave from being finished. Its group is not restored either (GroupRecords skips any
+	// directory with a mark), so it waits for a later read, or for somebody to look.
 	ids := [][]byte{}
 	var bad error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		parts, err := self.readRecord(filepath.Join(root, entry.Name(), stateGroupForgettingName), stateKindForgetting)
+		groupId, verdict, err := self.leaveMarkLocked(entry.Name())
 		if err != nil {
-			if !errors.Is(err, ErrStateNotFound) && bad == nil {
+			if bad == nil {
 				bad = err
 			}
 			continue
 		}
-		// THE MARK MUST NAME THE DIRECTORY IT SITS IN: one copied in from another group's directory
-		// would otherwise send the erase to a group nobody left.
-		if len(parts) != 1 || stateNameOf(parts[0]) != entry.Name() {
-			if bad == nil {
-				bad = fmt.Errorf("%w: the leave mark in %s does not name its own group", ErrStateStoreFormat, entry.Name())
-			}
-			continue
+		if verdict == leaveMarkFinish {
+			ids = append(ids, groupId)
 		}
-		ids = append(ids, parts[0])
 	}
 	return ids, bad
 }
