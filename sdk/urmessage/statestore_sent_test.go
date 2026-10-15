@@ -95,7 +95,15 @@ func TestASecondCopyAtOneStreamIndexIsRefusedAndTheFirstIsKept(t *testing.T) {
 	}
 }
 
-func TestASentCopyMovedUnderAnotherIndexOrBesideAStrangerIsRefused(t *testing.T) {
+// A COPY MOVED UNDER ANOTHER INDEX IS REFUSED, AND A STRANGER BESIDE THE COPIES IS SKIPPED (R38, item
+// 1). The copy at index 1 moved under index 9 is read at one of the store's own names and found
+// wrong: refused. A file the store did not write -- a Thumbs.db -- is skipped, as an unfinished write
+// is, and the copies are answered; a plain directory standing at a copy's name is refused.
+//
+// THIS CASE WAS CHANGED BY R38, TRUTHFULLY: it held that the stranger was refused, a format verdict,
+// and a verdict is what a leave takes a group on without the owner's question (the writer's F1 at
+// T1 FIX 6).
+func TestASentCopyMovedUnderAnotherIndexIsRefusedAndAStrangerBesideItIsSkipped(t *testing.T) {
 	dir := t.TempDir()
 	store := openTestStore(t, dir)
 	if err := store.PutSentRecord(testGroupId, testSentRecord(1, "said at index 1")); err != nil {
@@ -117,8 +125,15 @@ func TestASentCopyMovedUnderAnotherIndexOrBesideAStrangerIsRefused(t *testing.T)
 	if err := os.WriteFile(filepath.Join(sent, "Thumbs.db"), []byte("not ours"), 0o600); err != nil {
 		t.Fatalf("planting a stranger: %v", err)
 	}
+	if got, err := store.SentRecords(testGroupId); err != nil || len(got) != 1 || string(got[0].Body) != "said at index 1" {
+		t.Fatalf("beside a stranger the sent directory answered %d copy/copies, %v, want the one copy and no refusal", len(got), err)
+	}
+	// THE CONTROL: a plain directory at a copy's name is the store's own name of the wrong type
+	if err := os.Mkdir(filepath.Join(sent, stateEpochName(2)), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.SentRecords(testGroupId); !errors.Is(err, ErrStateStoreFormat) {
-		t.Fatalf("a stranger in the sent directory answered %v, want ErrStateStoreFormat", err)
+		t.Fatalf("a directory at a copy's name answered %v, want ErrStateStoreFormat", err)
 	}
 }
 

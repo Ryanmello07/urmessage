@@ -1128,6 +1128,23 @@ func stateNameOf(key []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// stateNamedAsAKey answers whether name is one this store gives a key: [stateNameOf]'s shape,
+// sixty-four lowercase hex digits. A listing of the groups' root that decides anything reads only
+// folders named this way (R38, item 1): a folder another program left there -- a copy of a group's
+// folder renamed by a sync tool or the shell, "New folder" -- is no group's, and nothing read in
+// it is a verdict about one.
+func stateNamedAsAKey(name string) bool {
+	if len(name) != 2*sha256.Size {
+		return false
+	}
+	for _, digit := range name {
+		if !('0' <= digit && digit <= '9' || 'a' <= digit && digit <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func (self *DurableStateStore) privatePath(pub []byte) string {
 	return filepath.Join(self.dataDir, "priv", stateNameOf(pub))
 }
@@ -1740,7 +1757,9 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 	var first error
 	for _, entry := range entries {
 		name := entry.Name()
-		if !entry.IsDir() || keep[name] {
+		// a folder not named as this store names a group's is none of its own, and nothing in it is a
+		// reason (R38, item 1)
+		if !entry.IsDir() || !stateNamedAsAKey(name) || keep[name] {
 			continue
 		}
 		dir := filepath.Join(root, name)
@@ -2303,9 +2322,11 @@ func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 		}
 		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, root, err)
 	}
+	// ONLY A FOLDER NAMED AS THIS STORE NAMES A GROUP'S IS ASKED (R38, item 1): a copy of a group's
+	// folder another program renamed is no group's, and a record found in it is no verdict about one
 	names := []string{}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() && stateNamedAsAKey(entry.Name()) {
 			names = append(names, entry.Name())
 		}
 	}
@@ -2815,11 +2836,13 @@ func (self *DurableStateStore) GroupsBeingForgotten() ([][]byte, error) {
 	// A MARK THAT CANNOT BE READ, that names another directory, that names no epoch, or that cannot
 	// be held against what stands beside it now, is REPORTED and skipped: one bad mark does not stop
 	// every other leave from being finished. Its group is not restored either (GroupRecords skips any
-	// directory with a mark), so it waits for a later read, or for somebody to look.
+	// directory with a mark), so it waits for a later read, or for somebody to look. A folder not
+	// named as this store names a group's is no group's, and a mark found in it is not asked (R38,
+	// item 1).
 	ids := [][]byte{}
 	var bad error
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || !stateNamedAsAKey(entry.Name()) {
 			continue
 		}
 		groupId, verdict, err := self.leaveMarkLocked(entry.Name())
@@ -2873,11 +2896,16 @@ func (self *DurableStateStore) PutSentRecord(groupId []byte, record *SentRecord)
 
 // SentRecords answers every [SentRecord] one group holds, ascending by stream index.
 //
-// AN ENTRY IN THE DIRECTORY THAT IS NOT A COPY IS A REFUSAL, which is this store's discipline
-// everywhere: the one exception is an unfinished write a killed process left, which the sweep at
-// open already tried to remove and which is not a record. A copy whose own group id or index is not
-// the one its name says is refused rather than shown, because a copy moved under another index would
-// be shown as the user's line at a position where they said something else.
+// AN ENTRY NOT NAMED THE WAY THE STORE NAMES A COPY IS SKIPPED, AS AN UNFINISHED WRITE IS (R38,
+// item 1). It used to be a refusal, a format verdict, and a verdict is what a leave takes a group on
+// without the owner's question: a desktop.ini or a sync tool's conflict copy in an owner's `sent`
+// folder made her group read as damaged, and her leave erased it while others were still in it. A
+// file the store did not write says nothing about the copies it did; the leave's own erase still
+// stops at it, which is the cost R38 accepts. What is refused is what this store reads at one of
+// its own names and finds wrong: a plain directory standing at a copy's name, as the listing itself
+// reports the entry's type, and a copy whose own group id or index is not the one its name says --
+// shown, a copy moved under another index would be the user's line at a position where they said
+// something else.
 func (self *DurableStateStore) SentRecords(groupId []byte) ([]*SentRecord, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -2911,7 +2939,10 @@ func (self *DurableStateStore) SentRecords(groupId []byte) ([]*SentRecord, error
 			continue
 		}
 		index, named := stateEpochOfName(entry.Name())
-		if !named || entry.IsDir() {
+		if !named {
+			continue
+		}
+		if entry.IsDir() {
 			return nil, fmt.Errorf("%w: %s stands in group %x's sent directory and it is not a copy this store wrote",
 				ErrStateStoreFormat, entry.Name(), groupId)
 		}
