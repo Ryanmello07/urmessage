@@ -1264,19 +1264,65 @@ join's would, and the failed join takes it as its own.
 **And two cells of R34's authority-by-adversary table are accepted rather than closed.**
 - A stray at one of the store's OWN names, of the wrong type -- a file where the store keeps `sent`,
   a directory where it keeps `meta`, `heads` or an epoch state -- is a path of the wrong type, which
-  R29 and R33 rule proof that the group can never be read: a leave then takes the group without the
-  owner's question, although taking the stray away would have made it readable again. A stray under
-  any other name proves nothing and is never taken.
+  R29 and R33 rule proof that the group can never be read, when the store's own Lstat of the name,
+  at the verdict, finds that type (R36): a leave then takes the group without the owner's question,
+  although taking the stray away would have made it readable again. A stray under any other name is
+  never taken, and proves nothing -- except inside `sent/`: there a restore refuses a file the store
+  did not write as a copy it did not write, which is a format verdict, so a group whose `sent/`
+  folder holds a stray does not restore, and the person's leave of it takes the group without the
+  owner's question. That was found and reproduced at T1 FIX 6, is not fixed by that change, and is
+  open.
 - A folder REPLACED by another program between a decision and the erase it decides -- a leave's
   fresh verdict and its erase, or the sweep's reading of the creating state and its removals -- is
   erased on the decision made about the folder that was there before. Both run inside one call
   under the store's lock, so the window is that call's.
+
+**R36 closes the table's column 7, ONE STORE FILE PUT BACK, and names what stays.** R33's adversary
+also puts back single files -- a quarantine restored, a sync tool's re-download -- and every
+authority but the fresh verdict and the epoch window is a fact read from one small file. Each such
+fact is now one that a single file put back cannot bring back false:
+- the creating mark's: `recorded`, the creation's retraction, is kept for the group's life, and only
+  a leave or a failed join takes it, so a creation mark put back beside it is never a creation;
+- the leave mark's: the mark names E, the highest epoch the device held of the group at the
+  decision, and a leave is finished only while nothing of a later join stands above E, so a mark
+  put back after the group was joined again is removed and erases nothing;
+- an empty `epoch` or `sent` folder holds nothing of a group, so one a leave could not remove -- an
+  open handle with no delete sharing on it -- no longer refuses every re-join of the group;
+- and a wrong-type code is proof only beside the type the store's own Lstat finds at the name.
+
+What stays:
+- **A quarantined leave mark undoes a leave.** A leave that stopped part way -- a file held while
+  its erase ran -- and whose mark another program then moves away is a group on the disk that is not
+  being left: its leave answers that the group has not been restored, and Restore brings it back.
+  Nothing is erased that the person did not ask for, and the group can be left again, but the
+  person's leave did not hold.
+- **A file of a finished leave, put back, is never taken.** An epoch state or a copy of a sent line
+  that a quarantine held while a leave finished, and later puts back, stands in a folder with no
+  record and no mark. It is one of the store's own entries, so an invite into the group is refused
+  as unproven, and so is a leave of it, until the file goes; deleting it, or URmessage's folder, is
+  the way out.
+- **A single `meta` put back during a join** (R36's L3), into a folder the join gate read as holding
+  nothing of a group or a creation that never finished: if the join then fails after its commit,
+  `eraseJoinedRecord` takes that file unread as the join's own record; if the join succeeds, the
+  join's own record write replaces it. Neither half can be produced without interleaving inside
+  `Device.Join`.
+- **Anything that needs two or more of the store's files moved or put back in a sequence.** For
+  example, the creation mark put back while the record AND its retraction are both away, which is
+  the creating state again, so the sweep takes the group's epoch states; or the double failure above.
+  By R36's budget these are not fixed inside T1: each is filed here with its sequence, for the store
+  track below.
 
 ### What a fix would be
 
 An explicit export, "erase this copy anyway", that a person chooses knowing what it costs, with the
 owner's question asked where the roster can still be read. Until then, the way out is deleting
 URmessage's folder, which this file says so that nobody has to find it out.
+
+And for the whole class above -- an authority kept as a fact in one small file, which another program
+that moves or puts back the store's files can make false -- the fix is a different store: THE STORE
+TRACK. A store in which a group's files change in one transaction needs no mark at all, and so has
+none to bring back; Spec A §8.1 describes such a store, on SQLite. It is filed after T1 as its own
+plan (R36's budget), and until then this item holds the class.
 
 ### What is owed elsewhere
 

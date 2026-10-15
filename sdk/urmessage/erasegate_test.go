@@ -58,7 +58,11 @@ import (
 // another function's absence, and (c)'s mark made false by a later event -- and this gate passed
 // over both. Whether each authority is true is held by the AUTHORITY x ADVERSARY table of R34's
 // item 10: every authority against every move an adversary on the machine can make, each cell a
-// test with real file moves, holds and denies, or a reason the cell cannot arise.
+// test with real file moves, holds and denies, or a reason the cell cannot arise. R36 added its
+// seventh column, one of the store's own files put back, after the round-5 review found two erases
+// whose authority a single file put back had made false; and it is why a removal of `recorded` is
+// listed here under the authority of the erase that takes it, never as not a group's file: removing
+// it is what re-arms (c).
 func TestEveryEraseInThisRepositoryNamesItsAuthority(t *testing.T) {
 	files := eraseGateSources(t)
 	found, tracked := eraseGateScan(files)

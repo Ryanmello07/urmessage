@@ -180,3 +180,91 @@ func TestT1V5AMarkAwayWhenTheRecordLanded(t *testing.T) {
 	t.Logf("the mark put back: %v", putBackListing(dir))
 	putBackRecordAwayAtTheNextStart(t, world, alice, groupId, dir)
 }
+
+// A STORE FILE PUT BACK IS NEVER A FRESH PROVEN VERDICT (R36, item 6: the table's cell (b)7, on every
+// platform). Bob holds a group with alice; his record at epoch 1 is copied aside, as a backup tool
+// keeps one. He leaves, alice removes him and adds him again, and he joins at epoch 3. The OLD record
+// is put back over the new one. A file the store wrote reads as the store's, so what it brings back
+// is an absence -- the record names an epoch whose state is gone -- and never proof: his Restore
+// reports the group as unproven, his leave is refused "so nothing was left", and nothing of the
+// folder changes. With the new record back, the group comes back.
+//
+// WHAT WOULD GO RED: an absence read as proof again (R33), and the fresh verdict at the leave would
+// take a live group on a record another program put back.
+func TestAStoreFilePutBackIsNeverAFreshProvenVerdict(t *testing.T) {
+	ctx := t.Context()
+	world := newWorld(t)
+	alice := world.newPersona(t, "alice")
+	bob := world.newPersona(t, "bob")
+	for _, who := range []*persona{alice, bob} {
+		if err := who.device.Connect(ctx); err != nil {
+			t.Fatalf("%s's Connect: %v", who.name, err)
+		}
+	}
+	groupId := newGroupId(t)
+	aliceGroup, _ := openPair(t, ctx, alice, bob, groupId)
+	dir := erasescopeFolder(bob.stateDir, groupId)
+	old, err := os.ReadFile(filepath.Join(dir, "meta"))
+	if err != nil {
+		t.Fatalf("CONTROL FAILED: bob holds no record: %v", err)
+	}
+	if err := bob.device.ForgetGroup(groupId); err != nil {
+		t.Fatalf("bob's leave: %v", err)
+	}
+	members, err := aliceGroup.Members()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bobIdentity []byte
+	for _, member := range members {
+		if !member.Mine {
+			bobIdentity = member.IdentityPub
+		}
+	}
+	if err := aliceGroup.RemoveMember(ctx, bobIdentity); err != nil {
+		t.Fatalf("alice's RemoveMember of bob: %v", err)
+	}
+	keyPackage, err := bob.device.KeyPackage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := aliceGroup.AddMemberAndPublish(ctx, keyPackage)
+	if err != nil {
+		t.Fatalf("alice's re-add of bob: %v", err)
+	}
+	if _, err := bob.device.Join(ctx, gcReencodeInvite(t, invite)); err != nil {
+		t.Fatalf("bob's re-join: %v", err)
+	}
+	current, err := os.ReadFile(filepath.Join(dir, "meta"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta"), old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("bob re-joined, and his OLD record put back: %v", putBackListing(dir))
+	bob = world.restart(t, bob)
+	if err := bob.device.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := advGroupFiles(t, bob.stateDir, groupId)
+	restored, err := bob.device.Restore(ctx)
+	t.Logf("bob's Restore with the old record put back: %d group(s), %v", len(restored), err)
+	if len(restored) != 0 || !errors.Is(err, urmessage.ErrGroupReadUnproven) || errors.Is(err, urmessage.ErrGroupRecordDamaged) {
+		t.Errorf("the Restore over an old record put back answered %d group(s), %v, want the group unproven and not damaged", len(restored), err)
+	}
+	err = bob.device.ForgetGroup(groupId)
+	t.Logf("bob's leave: %v", err)
+	if !errors.Is(err, urmessage.ErrGroupReadUnproven) || !strings.Contains(err.Error(), "so nothing was left") {
+		t.Errorf("the leave over an old record put back answered %v, want it refused as unproven, with nothing left", err)
+	}
+	quarantineUnchanged(t, bob, groupId, before)
+	if err := os.WriteFile(filepath.Join(dir, "meta"), current, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restored, err = bob.device.Restore(ctx)
+	t.Logf("bob's Restore with his record back: %d group(s), %v", len(restored), err)
+	if err != nil || len(restored) != 1 {
+		t.Errorf("with his record back bob's group answered %d group(s), %v, want it restored", len(restored), err)
+	}
+}
