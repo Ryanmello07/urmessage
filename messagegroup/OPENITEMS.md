@@ -1253,6 +1253,14 @@ group's creation finished. That founding's mark then stands beside its record wi
 retracting it, and if the record goes missing before a later write of it or a Restore that reads it,
 the sweep erases the group's epoch states as an unfinished creation.
 
+**And R34 (items 1 and 2) leaves one in a join.** A join that fails after its commit erases what it
+wrote and nothing else: its own epoch state, and the record that only it can have written, because
+the join gate, under the admission mutex, found no record and read the folder as holding nothing of
+a group or a creation that never finished. That reading is the gate's, at the start of the join. If
+another program puts a whole group folder back WHILE the join is in flight -- a backup restore, a
+sync tool's copy -- and the join then fails, a record the folder brought back stands where the
+join's would, and the failed join takes it as its own.
+
 ### What a fix would be
 
 An explicit export, "erase this copy anyway", that a person chooses knowing what it costs, with the

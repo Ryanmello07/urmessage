@@ -1604,8 +1604,10 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 //
 // EXACTLY THE JOINED EPOCH IS ERASED, and no other. A re-add joins over a group this device was
 // removed from, whose own epoch states, below the one joined, stand in the same directory and are
-// that group's history; they are not this join's to take. A store with no single-epoch erase is
-// asked for everything below the joined epoch's successor only when the join was not a re-add.
+// that group's history; they are not this join's to take. Off a re-add the folder may hold a
+// creation that never finished, whose states the sweep takes on its own authority. A store with no
+// single-epoch erase is refused, re-add or not (R34, item 2): everything below the joined epoch's
+// successor is more than this join wrote whenever anything else stands in the folder.
 //
 // THE GROUP IS CLOSED WITH [Group.Close] AND NOT PIECE BY PIECE (Task 57, F6). Closing its session
 // and its handle left the group's own copy of the join epoch's pq_secret in its table, never erased;
@@ -1615,17 +1617,28 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 // An erase that fails is said in the answer, after the cause, and does not replace it.
 func (self *Device) abandonJoined(group *Group, readd bool, cause error) error {
 	group.Close()
-	if err := self.eraseJoinedState(group.id, group.epoch, readd); err != nil {
+	if err := self.eraseJoinedState(group.id, group.epoch); err != nil {
 		return fmt.Errorf("%w, and the joined epoch state could not be erased: %w", cause, err)
 	}
-	// AND THE RECORD, WHEN IT IS THIS JOIN'S (R26, the fix review's V4b). A record whose write
-	// landed and then reported a failure (its directory sync), or that was written before the hold
-	// refused, is on the disk with no state behind it, holding the joined epoch's pq_secret and the
-	// group's handle key. Off a re-add, nothing else of the group is on this disk -- the gate said
-	// so -- so the group's whole directory goes. On a re-add the record may be the removed
-	// group's, which is not this join's to take (open item MG-14 in messagegroup/OPENITEMS.md).
+	// AND THE RECORD, WHEN IT IS THIS JOIN'S (R26, the fix review's V4b; R34, item 2). A record whose
+	// write landed and then reported a failure (its directory sync, or the double failure of its
+	// creation mark), or that was written before the hold refused, is on the disk with no state
+	// behind it, holding the joined epoch's pq_secret and the group's handle key. Off a re-add the
+	// gate found NO record under the admission mutex, so any record standing now is this join's,
+	// and it goes -- that and nothing else of the folder: the gate let the join in over a folder
+	// holding nothing of a group, or a creation that never finished, and either may hold files
+	// this join did not write (a stray file, or the states of the earlier creation, which the sweep
+	// takes on its own authority). It used to take the whole folder through DeleteGroupRecord, on
+	// the gate's word that nothing else was there, and the gate had read that from a record moved
+	// away: a removed group's state and the person's own sent line went with it, measured. On a
+	// re-add the record may be the removed group's, which is not this join's to take (open item
+	// MG-14 in messagegroup/OPENITEMS.md).
 	if store, durable := self.stateStore.(DeviceStore); durable && !readd {
-		if err := store.DeleteGroupRecord(group.id); err != nil {
+		eraser, exact := store.(interface{ eraseJoinedRecord([]byte) error })
+		if !exact {
+			return fmt.Errorf("%w, and the joined group's record was not erased: this store cannot erase one join's record alone", cause)
+		}
+		if err := eraser.eraseJoinedRecord(group.id); err != nil {
 			return fmt.Errorf("%w, and the joined group's record could not be erased: %w", cause, err)
 		}
 	}
@@ -1638,15 +1651,13 @@ type groupStateEraser interface {
 	deleteGroupStateAt(groupId []byte, epoch uint64) error
 }
 
-// eraseJoinedState erases the epoch state a join committed: see [Device.abandonJoined].
-func (self *Device) eraseJoinedState(groupId []byte, epoch uint64, readd bool) error {
+// eraseJoinedState erases the epoch state a join committed, and no other: see
+// [Device.abandonJoined]. A store that cannot erase one epoch's state is refused (R34, item 2).
+func (self *Device) eraseJoinedState(groupId []byte, epoch uint64) error {
 	if eraser, exact := self.stateStore.(groupStateEraser); exact {
 		return eraser.deleteGroupStateAt(groupId, epoch)
 	}
-	if readd {
-		return fmt.Errorf("urmessage: this store cannot erase one epoch's state, and group %x's earlier epochs are not this join's to erase", groupId)
-	}
-	return self.joinStage.DeleteGroupStateBefore(groupId, epoch+1)
+	return fmt.Errorf("urmessage: this store cannot erase one epoch's state, so group %x's joined state was not erased: whatever else of the group stands beside it is not this join's to take", groupId)
 }
 
 // AddMember adds one device to this group and answers the [Invite] it joins with.

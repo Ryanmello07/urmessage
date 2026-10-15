@@ -1573,6 +1573,40 @@ func (self *DurableStateStore) deleteEpochsLocked(groupId []byte, before uint64)
 	return nil
 }
 
+// eraseJoinedRecord erases what a join that failed after its commit wrote BESIDE its epoch state, and
+// nothing else (R34, item 2): the group's record, which only that join can have written -- the join
+// gate found none standing, under the admission mutex -- and `recorded`, which the record's erase
+// makes false. The creation mark goes, and the folder with it if that leaves it empty, only when no
+// epoch state is left beside it; beside others it stays, because it is then the earlier creation's
+// mark and the sweep's authority over those states. THE CHOICE, AND WHY: removing a mark erases no
+// value of a group, so taking it with the last state is only tidiness, and leaving it beside states
+// this join did not write is what keeps the sweep's reason true of what it will take. A folder whose
+// epoch directory cannot be listed keeps its mark.
+func (self *DurableStateStore) eraseJoinedRecord(groupId []byte) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return err
+	}
+	if err := self.removeLocked(self.groupRecordPath(groupId)); err != nil {
+		return err
+	}
+	if err := self.removeLocked(self.recordedPath(groupId)); err != nil {
+		return err
+	}
+	epochs, err := os.ReadDir(self.epochDir(groupId))
+	if (err != nil && !errors.Is(err, os.ErrNotExist)) || len(epochs) != 0 {
+		return nil
+	}
+	if err := self.clearPendingLocked(groupId); err != nil {
+		return err
+	}
+	// the now-empty epoch and group directories, best effort, as DeleteGroupRecord removes them
+	os.Remove(self.epochDir(groupId))
+	os.Remove(self.groupDir(groupId))
+	return nil
+}
+
 // deleteGroupStateAt erases ONE epoch's state of one group, and then the group's epoch and group
 // directories if that left them empty. It is [Device.abandonJoined]'s erase: a join that failed
 // after its commit takes the state it wrote and nothing beside it.

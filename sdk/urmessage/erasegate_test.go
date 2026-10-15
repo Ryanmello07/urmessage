@@ -50,6 +50,15 @@ import (
 // another path is another key. A site with no entry is an erase nobody weighed; an entry with no
 // site is a sentence that has stopped describing the code. Both are refused, and the whole
 // classification is printed, the complement included. The planted-call control is the next case.
+//
+// WHAT THIS GATE HOLDS, AND WHAT IT DOES NOT (R34, item 12). It holds that EVERY ERASE NAMES AN
+// AUTHORITY. It does not hold that the authority is TRUE of everything the erase takes at the
+// moment it takes it, which is the property itself: the round-4 review found two erases that
+// carried a label whose premise was false for part of what they took -- (d)'s scope read from
+// another function's absence, and (c)'s mark made false by a later event -- and this gate passed
+// over both. Whether each authority is true is held by the AUTHORITY x ADVERSARY table of R34's
+// item 10: every authority against every move an adversary on the machine can make, each cell a
+// test with real file moves, holds and denies, or a reason the cell cannot arise.
 func TestEveryEraseInThisRepositoryNamesItsAuthority(t *testing.T) {
 	files := eraseGateSources(t)
 	found, tracked := eraseGateScan(files)
@@ -148,14 +157,14 @@ var eraseGateAllowList = map[string]eraseGateEntry{
 	"sdk/urmessage/forget.go|Device.finishLeaveBefore|DeleteGroupRecord(groupId)#1":                                                                         {eraseLeaveMark, "a standing leave mark, finished before a Join or a CreateGroup writes anything beside it."},
 	"sdk/urmessage/restore.go|Device.Restore|DeleteGroupRecord(groupId)#1":                                                                                  {eraseLeaveMark, "every group a standing leave mark names (GroupsBeingForgotten), finished before anything is restored."},
 	"sdk/urmessage/restore.go|Device.Restore|eraseGroupsWithNoRecord(self.heldGroupIds())#1":                                                                {eraseOwnMark, "the sweep, which erases a directory only when it holds the store's own pending mark and no record (R33 (2))."},
-	"sdk/urmessage/group.go|Device.abandonJoined|DeleteGroupRecord(group.id)#1":                                                                             {eraseOwnAdmitted, "a join that failed after its commit, when it was not a re-add: the record it may have landed, in a directory the gate said held nothing else of the group (Task 57, F3; R26, V4b)."},
+	"sdk/urmessage/group.go|Device.abandonJoined|eraseJoinedRecord(group.id)#1":                                                                             {eraseOwnAdmitted, "a join that failed after its commit, when it was not a re-add: the record only it can have written (the gate found none under the admission mutex) and the retraction that erase makes false, and the creation mark only beside no other state (R34, item 2)."},
 	"sdk/urmessage/group.go|Device.eraseJoinedState|deleteGroupStateAt(groupId, epoch)#1":                                                                   {eraseOwnAdmitted, "the one epoch state a failed join committed, and no other."},
-	"sdk/urmessage/group.go|Device.eraseJoinedState|DeleteGroupStateBefore(groupId, epoch + 1)#1":                                                           {eraseOwnAdmitted, "the same on a store with no single-epoch erase, and only when the join was not a re-add: everything below the joined epoch's successor, which is all that join wrote."},
 	"mls/group.go|Group.MergePendingCommit|DeleteGroupStateBefore(cloneBytes(self.context.GroupId), cutoff)#1":                                              {eraseWindow, "the states of epochs this group has moved PastEpochWindow past, on the commit that moved it: section 5.12's discard, decided on the epoch the library committed itself."},
 	"sdk/urmessage/joinstage.go|joinStage.DeleteGroupStateBefore|DeleteGroupStateBefore(groupId, epoch)#1":                                                  {eraseStep, "the stage forwarding (e), and (d) through eraseJoinedState, to the store; for the group being joined it erases nothing."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.DeleteGroupStateBefore|deleteEpochsLocked(groupId, epoch)#1":                                     {eraseStep, "the store's half of (e), and of eraseJoinedState's (d)."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.deleteEpochsLocked|os.Remove(filepath.Join(dir, entry.Name()))#1":                                {eraseStep, "an unfinished write in the epoch directory, discarded with the epochs it stands among: section 5.12 has no half erase."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.deleteEpochsLocked|os.Remove(filepath.Join(dir, entry.Name()))#2":                                {eraseStep, "one epoch below the caller's cutoff."},
+	"sdk/urmessage/statestore_durable.go|DurableStateStore.eraseJoinedRecord|removeLocked(self.groupRecordPath(groupId))#1":                                 {eraseStep, "the record (d) names: this join's, and no other."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.deleteGroupStateAt|removeLocked(filepath.Join(self.epochDir(groupId), stateEpochName(epoch)))#1": {eraseStep, "the one epoch (d) names."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.eraseGroupsWithNoRecord|removeLocked(filepath.Join(epochDir, epoch.Name()))#1":                   {eraseStep, "each epoch state of a directory (c) authorizes."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.DeleteGroupRecord|deleteEpochsLocked(groupId, ^uint64(0))#1":                                     {eraseStep, "every epoch state of the group, first."},
@@ -169,6 +178,9 @@ var eraseGateAllowList = map[string]eraseGateEntry{
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.PutGroupRecord|removeLocked(self.recordedPath(record.GroupId))#1":                                {eraseNotGroup, "the creation mark's retraction, once the mark itself is gone (R34, item 3): a note about the store's own write."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.DeleteGroupRecord|removeLocked(self.recordedPath(groupId))#1":                                    {eraseNotGroup, "the creation mark's retraction, with the group, before the leave mark (R34, item 5)."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.eraseGroupsWithNoRecord|removeLocked(self.recordedPath(record.GroupId))#1":                       {eraseNotGroup, "the retraction beside a record that reads, after the stale mark it retracted (R34, item 5)."},
+	"sdk/urmessage/statestore_durable.go|DurableStateStore.eraseJoinedRecord|removeLocked(self.recordedPath(groupId))#1":                                    {eraseNotGroup, "the creation mark's retraction, made false by the record's erase (R34, item 2)."},
+	"sdk/urmessage/statestore_durable.go|DurableStateStore.eraseJoinedRecord|os.Remove(self.epochDir(groupId))#1":                                           {eraseNotGroup, "the epoch directory, only when empty."},
+	"sdk/urmessage/statestore_durable.go|DurableStateStore.eraseJoinedRecord|os.Remove(self.groupDir(groupId))#1":                                           {eraseNotGroup, "the group directory, only when empty."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.clearPendingLocked|removeLocked(self.pendingPath(groupId))#1":                                    {eraseNotGroup, "the creation mark: the store's note about its own write, and with it gone nothing of the directory is ever swept."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.DeleteGroupRecord|os.Remove(self.epochDir(groupId))#1":                                           {eraseNotGroup, "the epoch directory, empty by then: os.Remove refuses a directory with anything in it."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.DeleteGroupRecord|os.Remove(self.sentDir(groupId))#1":                                            {eraseNotGroup, "the sent directory, empty by then."},
