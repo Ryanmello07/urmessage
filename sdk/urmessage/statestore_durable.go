@@ -128,6 +128,13 @@ type DurableStateStore struct {
 	// in a test binary; there is no production path that sets it and no way to set it from
 	// outside this package.
 	skipRemove bool
+
+	// lstat is the injected Lstat of [DurableStateStore.confirmWrongType], set by tests in this
+	// package and by nothing else, for skipRemove's reason: the type it stands in for -- a reparse
+	// point Go reports as irregular, a cloud placeholder or a junction -- is not one any filesystem
+	// this suite runs on off Windows can make, and a rule that must answer it (R38, item 2) is a rule
+	// nobody could tell is still answered right everywhere else. nil is os.Lstat.
+	lstat func(name string) (os.FileInfo, error)
 }
 
 var _ mls.StateStore = (*DurableStateStore)(nil)
@@ -3067,10 +3074,11 @@ func stateIsNotADirectory(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// stateWrongType is a wrong-type errno this store CONFIRMED (R36, item 4): its own Lstat of the name,
-// at the verdict, showed a type the store never writes there. [classifyRead] reads a wrong-type errno
-// ([permanentErrnos]) as proof only inside one. It is made by [DurableStateStore.confirmWrongType]
-// and by nothing else.
+// stateWrongType is a wrong-type errno this store CONFIRMED (R36, item 4, amended by R38, item 2): its
+// own Lstat of the name, at the verdict, showed a type the store never writes there -- a plain
+// directory, a plain regular file or a symbolic link, never anything Go reports as irregular.
+// [classifyRead] reads a wrong-type errno ([permanentErrnos]) as proof only inside one. It is made by
+// [DurableStateStore.confirmWrongType] and by nothing else.
 type stateWrongType struct {
 	err error
 }
@@ -3094,9 +3102,18 @@ func (self *stateWrongType) Unwrap() error {
 // minifilter that does not implement a request, over a file whose octets are whole. A leave that took
 // that for proof would erase an owner's group without the owner's question, irreversibly, over a
 // mount type. So the code is proof only beside the type it claims, read here, under the lock the
-// verdict is made under: a directory where the store writes a file, a file where it keeps a
-// directory, or a link or a reparse point at either -- the store never writes one. A wrong-type code
-// on an entry whose own type is right is UNPROVEN.
+// verdict is made under: a PLAIN directory where the store writes a file, a PLAIN regular file where
+// it keeps a directory, or a symbolic link at either -- the store never writes one
+// ([stateTypeConfirms]). A wrong-type code on an entry whose own type is right is UNPROVEN.
+//
+// AND A REPARSE POINT GO REPORTS AS IRREGULAR NEVER CONFIRMS ONE (R38, item 2, amending R36's item
+// 4, which named "a link or a reparse point at either"). A cloud placeholder is this store's own
+// file, dehydrated by OneDrive's Files On-Demand or any cloud filter, and Go reports it as
+// irregular, as it reports a WOF-compressed file, a junction, a mount point and every reparse tag it
+// does not name, a directory reparse point included. A placeholder at one of the store's names, its
+// filter answering ERROR_INVALID_FUNCTION, would otherwise erase an owner's group without the
+// owner's question over an intact file -- the mount-type class this paragraph opened with. So
+// anything irregular answers UNPROVEN, at the name and in the walk above it alike.
 func (self *DurableStateStore) confirmWrongType(path string, wantDir bool, err error) error {
 	var errno syscall.Errno
 	if !errors.As(err, &errno) || !slices.Contains(permanentErrnos, errno) {
@@ -3112,25 +3129,52 @@ func (self *DurableStateStore) confirmWrongType(path string, wantDir bool, err e
 // that cannot be asked about -- a file standing where one of the folders above it goes answers
 // ENOTDIR off Windows, for the name and not for the folder -- is judged by the nearest name above it
 // that can be, inside this store's directory and never above it: the store keeps a directory at each
-// of those, so anything else standing there is the wrong type. A name with nothing above it that can
-// be asked about confirms nothing.
+// of those, so a plain regular file or a symbolic link standing there is the wrong type, and anything
+// irregular is not proof there either (R38, item 2). A name with nothing above it that can be asked
+// about confirms nothing.
 func (self *DurableStateStore) wrongTypeStands(path string, wantDir bool) bool {
-	if info, err := os.Lstat(path); err == nil {
-		if wantDir {
-			return !info.Mode().IsDir()
-		}
-		return !info.Mode().IsRegular()
+	if info, err := self.lstatOf(path); err == nil {
+		return stateTypeConfirms(info.Mode(), wantDir)
 	}
 	root := filepath.Clean(self.dataDir)
 	for name, above := filepath.Clean(path), filepath.Dir(filepath.Clean(path)); above != name; name, above = above, filepath.Dir(above) {
 		if !strings.HasPrefix(above, root+string(filepath.Separator)) {
 			return false
 		}
-		if info, err := os.Lstat(above); err == nil {
-			return !info.Mode().IsDir()
+		if info, err := self.lstatOf(above); err == nil {
+			return stateTypeConfirms(info.Mode(), true)
 		}
 	}
 	return false
+}
+
+// stateTypeConfirms answers whether a type the store's Lstat found at one of its names confirms a
+// wrong-type code there (R36, item 4, amended by R38, item 2). wantDir says what the store keeps at
+// that name. Anything Go reports as irregular -- a reparse point it does not name: a cloud
+// placeholder, a WOF-compressed file, a junction or a mount point, a directory reparse point
+// included -- NEVER confirms, whatever else its mode says. A symbolic link at either confirms, and
+// otherwise only a PLAIN directory where the store writes a file, or a PLAIN regular file where it
+// keeps a directory. A named pipe, a socket or a device confirms nothing either.
+func stateTypeConfirms(mode os.FileMode, wantDir bool) bool {
+	switch {
+	case mode&os.ModeIrregular != 0:
+		return false
+	case mode&os.ModeSymlink != 0:
+		return true
+	case wantDir:
+		return mode.IsRegular()
+	default:
+		return mode.IsDir()
+	}
+}
+
+// lstatOf is the store's Lstat: [DurableStateStore.lstat] when a test set one, and os.Lstat
+// otherwise.
+func (self *DurableStateStore) lstatOf(path string) (os.FileInfo, error) {
+	if self.lstat != nil {
+		return self.lstat(path)
+	}
+	return os.Lstat(path)
 }
 
 // The width of one [PeerHead] on the disk: epoch, leaf, wire byte, window and head, big endian,

@@ -20,7 +20,9 @@ var transientErrnos = []syscall.Errno{
 // ReadFile answers on a directory, and also what a WinFsp or Dokan mount (rclone, Cryptomator,
 // SSHFS-Win) or a minifilter answers for an intact file whose request it does not implement. So
 // [classifyRead] takes any of these as proof only inside a [stateWrongType]: the store's own Lstat of
-// the name, at the verdict, showed a type the store never writes there.
+// the name, at the verdict, showed a type the store never writes there -- and never a reparse point
+// Go reports as irregular, a cloud placeholder of the store's own file or a junction among them
+// (R38, item 2).
 //
 // NOT HERE, AND WHY. A permission refused (5) and the medium (23, 27, 30) are facts about the
 // environment, which can change while the data is intact (R30). And AN ABSENCE IS NEVER PROOF (R33):

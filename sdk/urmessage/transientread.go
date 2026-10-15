@@ -66,9 +66,12 @@ const (
 //     (2) a refusal by name: [ErrGroupPredatesJoinSeal];
 //     (3) a path of the wrong type: one of the platform's errnos for it ([permanentErrnos]), and only
 //     when the store's own Lstat of that name, at the verdict, showed a type the store never writes
-//     there ([stateWrongType], R36, item 4). Every one of those codes can also be answered for an
-//     intact file -- a mount type, or a filter driver that does not implement a request -- so a
-//     wrong-type code on an entry whose own type is right is UNPROVEN.
+//     there ([stateWrongType], R36, item 4): a plain directory where it writes a file, a plain
+//     regular file where it keeps a directory, or a symbolic link at either. Every one of those
+//     codes can also be answered for an intact file -- a mount type, or a filter driver that does
+//     not implement a request -- so a wrong-type code on an entry whose own type is right is
+//     UNPROVEN, and so is one beside anything Go reports as irregular, a cloud placeholder of the
+//     store's own file among them (R38, item 2).
 //   - TRANSIENT: a failure of this store's carrying a sharing or lock violation
 //     ([transientErrnos], R26's list, unchanged).
 //   - UNPROVEN: everything else -- an absence (ErrStateNotFound, ENOENT; Windows 2, 3, 53), a

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // A RECORD THAT CAN NEVER BE READ IS DAMAGE, AND ITS GROUP CAN BE LEFT (R26, the fix review's V2).
@@ -238,5 +239,98 @@ func TestAWrongTypeCodeIsProofOnlyBesideTheTypeItClaims(t *testing.T) {
 	}
 	if got := classifyRead(carried(outside, permanentErrnos[0])); got != readUnproven {
 		t.Errorf("a wrong-type code below a file outside the store's directory is classed %d, want unproven", got)
+	}
+}
+
+// irregularInfo is an Lstat answer of one type, for the store's injected Lstat.
+type irregularInfo struct {
+	name string
+	mode os.FileMode
+}
+
+func (self irregularInfo) Name() string       { return self.name }
+func (self irregularInfo) Size() int64        { return 0 }
+func (self irregularInfo) Mode() os.FileMode  { return self.mode }
+func (self irregularInfo) ModTime() time.Time { return time.Time{} }
+func (self irregularInfo) IsDir() bool        { return self.mode.IsDir() }
+func (self irregularInfo) Sys() any           { return nil }
+
+// A TYPE GO REPORTS AS IRREGULAR NEVER CONFIRMS A WRONG-TYPE CODE (R38, item 2, amending R36's item 4;
+// on every platform, through the store's injected Lstat, since nothing off Windows makes such a type).
+// A cloud placeholder is the store's own file, dehydrated, and Go reports it as irregular, as it does
+// a WOF-compressed file, a junction, a mount point and every reparse tag it does not name. For each of
+// the six wrong-type codes -- Windows 1, 267 and 1921, and EISDIR, ELOOP and ENOTDIR -- carried as the
+// store carries a read's failure, the classifier answers UNPROVEN beside an irregular type: at a name
+// the store writes a file at, at a name it keeps a directory at, and as the nearest name above one
+// that cannot be asked about; a directory reparse point (irregular and a directory) included.
+//
+// THE CONTROLS, so the injected Lstat is what decides: beside a PLAIN directory where the store
+// writes a file, a PLAIN regular file where it keeps a directory, or a symbolic link, each of this
+// platform's own wrong-type codes is proven permanent; and the six codes include every one of them.
+//
+// WHAT WOULD GO RED: an irregular type taken for a wrong type again -- an owner's group erased without
+// the owner's question over a placeholder whose filter answered ERROR_INVALID_FUNCTION.
+func TestAnIrregularTypeNeverConfirmsAWrongTypeCode(t *testing.T) {
+	store := openTestStore(t, t.TempDir())
+	groupId := bytes.Repeat([]byte{0x7F}, GroupIdBytes)
+	six := []syscall.Errno{syscall.Errno(1), syscall.Errno(267), syscall.Errno(1921), syscall.EISDIR, syscall.ELOOP, syscall.ENOTDIR}
+	for _, errno := range permanentErrnos {
+		found := false
+		for _, one := range six {
+			found = found || one == errno
+		}
+		if !found {
+			t.Fatalf("CONTROL FAILED: this platform's wrong-type errno %d (%v) is not among the six this case holds", uint(errno), errno)
+		}
+	}
+	file := store.groupRecordPath(groupId)
+	folder := store.sentDir(groupId)
+	below := filepath.Join(store.epochDir(groupId), stateEpochName(1))
+	classed := func(path string, wantDir bool, errno syscall.Errno, answers map[string]os.FileMode) readClass {
+		store.lstat = func(name string) (os.FileInfo, error) {
+			if mode, stands := answers[name]; stands {
+				return irregularInfo{name: filepath.Base(name), mode: mode}, nil
+			}
+			return nil, &os.PathError{Op: "lstat", Path: name, Err: os.ErrNotExist}
+		}
+		defer func() { store.lstat = nil }()
+		cause := store.confirmWrongType(path, wantDir, &os.PathError{Op: "read", Path: path, Err: errno})
+		return classifyRead(fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, path, cause))
+	}
+	for _, one := range []struct {
+		name    string
+		path    string
+		wantDir bool
+		answers map[string]os.FileMode
+	}{
+		{"an irregular file at a name the store writes a file at", file, false, map[string]os.FileMode{file: os.ModeIrregular}},
+		{"a directory reparse point at a name the store writes a file at", file, false, map[string]os.FileMode{file: os.ModeIrregular | os.ModeDir}},
+		{"an irregular file at a name the store keeps a directory at", folder, true, map[string]os.FileMode{folder: os.ModeIrregular}},
+		{"a directory reparse point at a name the store keeps a directory at", folder, true, map[string]os.FileMode{folder: os.ModeIrregular | os.ModeDir}},
+		{"an irregular file as the nearest name above one that cannot be asked about", below, false, map[string]os.FileMode{filepath.Dir(below): os.ModeIrregular}},
+	} {
+		for _, errno := range six {
+			if got := classed(one.path, one.wantDir, errno, one.answers); got != readUnproven {
+				t.Errorf("%s, errno %d (%v): classed %d, want unproven", one.name, uint(errno), errno, got)
+			}
+		}
+	}
+	// THE CONTROLS
+	for _, one := range []struct {
+		name    string
+		path    string
+		wantDir bool
+		answers map[string]os.FileMode
+	}{
+		{"a plain directory at a name the store writes a file at", file, false, map[string]os.FileMode{file: os.ModeDir}},
+		{"a plain regular file at a name the store keeps a directory at", folder, true, map[string]os.FileMode{folder: 0}},
+		{"a symbolic link at a name the store writes a file at", file, false, map[string]os.FileMode{file: os.ModeSymlink}},
+		{"a plain regular file as the nearest name above", below, false, map[string]os.FileMode{filepath.Dir(below): 0}},
+	} {
+		for _, errno := range permanentErrnos {
+			if got := classed(one.path, one.wantDir, errno, one.answers); got != readPermanent {
+				t.Errorf("CONTROL FAILED: %s, errno %d (%v): classed %d, want proven permanent", one.name, uint(errno), errno, got)
+			}
+		}
 	}
 }
