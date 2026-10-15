@@ -1995,6 +1995,11 @@ func (self *Group) Open(ctx context.Context) error {
 	// finding out at its first send. The error says what actually happened: the group IS open
 	// on the server, and it is the RECORD that did not land.
 	if err := self.device.persistGroup(self.groupRecordLocked(true)); err != nil {
+		// THE RECORD IS ON THE DISK AND ITS CREATION COULD NOT BE RECORDED AS FINISHED (R34, item 3):
+		// said as what it is, and not as a record that did not land
+		if errors.Is(err, errCreationUnretracted) {
+			return fmt.Errorf("urmessage: this group is open on the server and its record is on this device's disk, but this store could not record that the group's creation finished: %w", err)
+		}
 		return fmt.Errorf("urmessage: this group is open on the server and its record could not be persisted, so a restart would refuse to send in it: %w", err)
 	}
 	return nil

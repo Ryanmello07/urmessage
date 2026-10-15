@@ -1243,6 +1243,16 @@ into again (its seal persists an epoch state, which creates the directory, and s
 process stops before the group's record is written again, the next Restore sweeps what the seal
 wrote, as it did before R33.
 
+**R34 (item 3) closes the same window when no crash is involved, and leaves one double failure.**
+A mark whose removal FAILS -- a scanner holding it with no delete sharing at the moment the record
+lands -- is retracted by a file the store writes beside it, `recorded`, and a folder holding that
+retraction is not in the creating state, so the sweep never takes a group on it. If the retraction
+cannot be written either, the record is still on the disk and the store says so: `Group.Open`
+answers that the record is on this device's disk and that the store could not record that the
+group's creation finished. That founding's mark then stands beside its record with nothing
+retracting it, and if the record goes missing before a later write of it or a Restore that reads it,
+the sweep erases the group's epoch states as an unfinished creation.
+
 ### What a fix would be
 
 An explicit export, "erase this copy anyway", that a person chooses knowing what it costs, with the

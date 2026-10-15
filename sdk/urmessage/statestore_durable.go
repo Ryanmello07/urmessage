@@ -851,6 +851,7 @@ const (
 	stateKindPeerHeads      byte = 7
 	stateKindForgetting     byte = 8
 	stateKindPending        byte = 9
+	stateKindRecorded       byte = 10
 )
 
 // encodeStateRecord frames one record: magic, version, kind, the parts each length-prefixed, and
@@ -1177,6 +1178,17 @@ func (self *DurableStateStore) forgettingPath(groupId []byte) string {
 // on "no record" would have the next Restore sweep that group.
 func (self *DurableStateStore) pendingPath(groupId []byte) string {
 	return filepath.Join(self.groupDir(groupId), "pending")
+}
+
+// recordedPath is the RETRACTION of the creation mark (R34, item 3): the fact, written by
+// [DurableStateStore.PutGroupRecord], that the group's record IS written although the `pending` mark
+// beside it could not be removed. A mark whose removal failed -- a scanner held it with no delete
+// sharing at the moment the record landed -- is a fact this store wrote that a later event made
+// false, and the sweep would otherwise erase the group on it if the record then went missing. A
+// handle on `pending` does not block creating this file. A Restore that reads the record takes both
+// away, `pending` first.
+func (self *DurableStateStore) recordedPath(groupId []byte) string {
+	return filepath.Join(self.groupDir(groupId), "recorded")
 }
 
 // sentDir is where one group's [SentRecord] copies live, each named by its stream index as sixteen
@@ -1538,8 +1550,13 @@ func (self *DurableStateStore) deleteGroupStateAt(groupId []byte, epoch uint64) 
 // record came back it named epochs that were gone. The mark is what this store wrote when it
 // CREATED the directory for a group whose record it had not written yet
 // ([DurableStateStore.pendingPath]), and with no mark nothing is erased here, whatever is absent.
-// A mark found beside a record that reads is stale -- the crash came between the record and the
-// mark's removal -- and is taken away, so that the record's fate is the record's.
+//
+// AND ONLY WHILE THAT PROOF IS STILL TRUE (R34, items 4 to 6): a folder is erased only in THE
+// CREATING STATE ([DurableStateStore.creatingStateInLocked]) -- the mark stands, and neither the
+// record nor the mark's retraction (`recorded`) does. A mark whose removal failed when the record
+// landed is retracted by that file, so a record that later goes missing is not taken for a creation
+// that never finished. A folder whose record reads has its marks taken away: a stale `pending`
+// first, then `recorded`, so that the mark never stands alone beside a record that is written.
 //
 // WHAT SUCH A DIRECTORY IS. A join that died between its commit and its record, a join whose
 // record could not be written, or a founder that died before [Group.Open] wrote its first record.
@@ -1556,7 +1573,8 @@ func (self *DurableStateStore) deleteGroupStateAt(groupId []byte, epoch uint64) 
 //     read just now: that is a group, and its fate is the record's;
 //   - a directory whose record or mark cannot even be asked about;
 //   - a directory with no epoch state: nothing secret is in it;
-//   - a directory with no `pending` mark, or one whose mark does not read or names another group.
+//   - a directory that is not in the creating state: no `pending` mark, a mark that does not read
+//     or names another group, or a mark retracted by `recorded`.
 func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -1587,29 +1605,28 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 			continue
 		}
 		dir := filepath.Join(root, name)
-		// NO MARK, NO ERASE (R33)
-		if absent(filepath.Join(dir, "pending")) || !absent(filepath.Join(dir, "forgetting")) {
+		if !absent(filepath.Join(dir, "forgetting")) {
 			continue
 		}
 		if !absent(filepath.Join(dir, "meta")) {
-			// A STALE MARK BESIDE A RECORD THAT READS goes; beside one that does not read, it stays
-			// with the record, which decides the directory either way
-			if record, err := self.groupRecordInLocked(name); err == nil {
-				_ = self.clearPendingLocked(record.GroupId)
+			// A RECORD THAT READS RETRACTS THE CREATION MARKS (R34, item 5): a stale `pending` goes,
+			// and then `recorded`, in that order; beside a record that does not read, both stay with
+			// the record, which decides the directory either way
+			if !absent(filepath.Join(dir, "pending")) || !absent(filepath.Join(dir, "recorded")) {
+				if record, err := self.groupRecordInLocked(name); err == nil {
+					if self.clearPendingLocked(record.GroupId) == nil {
+						_ = self.removeLocked(self.recordedPath(record.GroupId))
+					}
+				}
 			}
 			continue
 		}
-		// THE MARK MUST READ AND NAME THE DIRECTORY IT SITS IN, as a leave mark must
-		// ([DurableStateStore.GroupsBeingForgotten]): one copied in from another group's directory
-		// would otherwise send the erase to a group nobody made here
-		mark, err := self.readRecord(filepath.Join(dir, "pending"), stateKindPending)
-		if err == nil && (len(mark) != 1 || stateNameOf(mark[0]) != name) {
-			err = fmt.Errorf("%w: it does not name its own group", ErrStateStoreFormat)
+		// THE CREATING STATE, AND NOTHING ELSE, IS ERASED (R33; R34, items 4 and 6)
+		groupId, creating, err := self.creatingStateInLocked(dir, name)
+		if err != nil && first == nil {
+			first = err
 		}
-		if err != nil {
-			if first == nil {
-				first = fmt.Errorf("urmessage: the creation mark in %s is not this store's mark for it, so nothing in it was erased: %w", name, err)
-			}
+		if !creating {
 			continue
 		}
 		epochDir := filepath.Join(dir, "epoch")
@@ -1633,7 +1650,7 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 		if failed {
 			continue
 		}
-		if err := self.clearPendingLocked(mark[0]); err != nil && first == nil {
+		if err := self.clearPendingLocked(groupId); err != nil && first == nil {
 			first = err
 		}
 		os.Remove(epochDir)
@@ -1645,6 +1662,32 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 		return erased, fmt.Errorf("urmessage: a group directory holding epoch state and no record could not be erased; the next Restore tries again: %w", first)
 	}
 	return erased, nil
+}
+
+// creatingStateInLocked answers whether one group's folder is in THE CREATING STATE (R34, item 6):
+// `pending` stands and reads as this store's mark for the folder's own group, and neither `recorded`
+// nor `meta` stands. It is the one rule a missing record is decided on: the sweep erases only a
+// folder in this state, and the join gate and [Device.ForgetGroup] read it as a group nobody holds
+// yet. Anything that cannot be asked about is not the creating state, and a mark that stands and
+// does not read as this store's -- one copied in from another group's folder would otherwise send an
+// erase to a group nobody made here -- is answered as the error beside "not creating".
+func (self *DurableStateStore) creatingStateInLocked(dir string, name string) ([]byte, bool, error) {
+	for _, standing := range []string{"meta", "recorded"} {
+		if _, err := os.Lstat(filepath.Join(dir, standing)); !errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+	}
+	mark, err := self.readRecord(filepath.Join(dir, "pending"), stateKindPending)
+	if errors.Is(err, ErrStateNotFound) {
+		return nil, false, nil
+	}
+	if err == nil && (len(mark) != 1 || stateNameOf(mark[0]) != name) {
+		err = fmt.Errorf("%w: it does not name its own group", ErrStateStoreFormat)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("urmessage: the creation mark in %s does not read as this store's mark for it, so nothing is decided on it: %w", name, err)
+	}
+	return mark[0], true, nil
 }
 
 // ErasedWithNoRecord is every group directory holding this store's `pending` mark, epoch state and
@@ -1947,13 +1990,31 @@ func (self *DurableStateStore) PutGroupRecord(record *GroupRecord) error {
 		witness, ledger, removal); err != nil {
 		return err
 	}
-	// THE CREATION MARK GOES ONCE THE RECORD IS SYNCED (R33): the directory holds a group now, and
-	// its fate is the record's. Best effort, because the record is written and this call must say
-	// so: a mark left beside a record is stale, the sweep never erases a directory with a record in
-	// it, and the next Restore takes the mark away. MG-15 names the one window this leaves.
-	_ = self.clearPendingLocked(record.GroupId)
+	// THE CREATION MARK GOES ONCE THE RECORD IS SYNCED (R33), AND WHEN IT CANNOT GO, ITS RETRACTION IS
+	// WRITTEN BESIDE IT (R34, item 3). A mark that stands beside a record that is written is a fact
+	// this store wrote that is no longer true -- a scanner holding the mark with no delete sharing at
+	// this moment was enough -- and the sweep would erase the group on it if the record then went
+	// missing, with no crash at all. So the fact that the record IS written goes down as a file of
+	// its own, `recorded` ([DurableStateStore.recordedPath]), which a handle on `pending` does not
+	// stop. If that fails too, the record is written and this store could not record that it was:
+	// the caller is told so, and treats the record as not written (MG-15 names what that leaves).
+	if err := self.clearPendingLocked(record.GroupId); err != nil {
+		if recordedErr := self.writeRecord(self.recordedPath(record.GroupId), stateKindRecorded, record.GroupId); recordedErr != nil {
+			return fmt.Errorf("%w: group %x: %w: the creation mark could not be removed: %w; and its retraction could not be written: %w",
+				ErrStateStoreState, record.GroupId, errCreationUnretracted, err, recordedErr)
+		}
+		return nil
+	}
+	// the mark is gone, so a retraction an earlier call wrote retracts nothing now: best effort
+	_ = self.removeLocked(self.recordedPath(record.GroupId))
 	return nil
 }
+
+// errCreationUnretracted is [DurableStateStore.PutGroupRecord]'s double failure (R34, item 3): the
+// record is written, and neither the creation mark's removal nor its retraction could be. The
+// callers treat the record as not written: a join erases what it wrote, and [Group.Open] says what
+// happened.
+var errCreationUnretracted = errors.New("its record is on the disk and this store could not record that its creation finished")
 
 // encodeWrapDark is [GroupRecord.WrapDarkKind] and [GroupRecord.WrapDarkEpoch] as the one octet
 // string part seven carries: empty for a group that is not dark, or u8(kind) ‖ u64(epoch).
@@ -2355,8 +2416,12 @@ func (self *DurableStateStore) DeleteGroupRecord(groupId []byte) error {
 	if err := self.removeLocked(self.groupRecordPath(groupId)); err != nil {
 		return err
 	}
-	// the creation mark, which a crash between a record and the mark's removal leaves beside it
+	// the creation mark, which a crash between a record and the mark's removal leaves beside it, and
+	// then its retraction (R34, item 5), both before the leave mark
 	if err := self.clearPendingLocked(groupId); err != nil {
+		return err
+	}
+	if err := self.removeLocked(self.recordedPath(groupId)); err != nil {
 		return err
 	}
 	// THE MARK A LEAVE WROTE GOES LAST, so an erase interrupted anywhere above leaves it standing,

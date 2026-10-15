@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -167,6 +168,65 @@ func TestTheSweepErasesOnItsOwnMarkAndAStaleMarkGoes(t *testing.T) {
 	}
 	if _, err := os.Stat(store.pendingPath(recorded)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("Restore left the stale mark beside a record that reads: %v", err)
+	}
+}
+
+// A CREATION MARK RETRACTED BY `recorded` IS NOT A CREATION, AND A RECORD THAT READS TAKES BOTH MARKS
+// AWAY (R34, items 4 to 6). The shape a mark whose removal failed leaves, built by the store's own
+// writes: the mark, its retraction and an epoch state, with the record moved out of the folder. The
+// Restore erases nothing: the folder is not in the creating state. With the record put back, the
+// next Restore reads it and takes `pending` away, and then `recorded`.
+//
+// WHAT WOULD GO RED: a sweep that asks for the mark and not for its retraction -- the owner's group
+// whose record a quarantine holds, erased on a mark that stopped being true when the record landed.
+func TestARetractedCreationMarkIsNotSweptAndARecordThatReadsTakesBothMarksAway(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, t.TempDir())
+	groupId := bytes.Repeat([]byte{0x73}, GroupIdBytes)
+	state := bytes.Repeat([]byte{0x7E}, 64)
+	if err := store.PutGroupState(groupId, 1, state); err != nil {
+		t.Fatalf("PutGroupState: %v", err)
+	}
+	mark, err := os.ReadFile(store.pendingPath(groupId))
+	if err != nil {
+		t.Fatalf("CONTROL FAILED: the store did not mark the directory its first state created: %v", err)
+	}
+	if err := store.PutGroupRecord(&GroupRecord{
+		GroupId: groupId, PqSecret: bytes.Repeat([]byte{0x2A}, 32), GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32), Epoch: 1, Opened: true,
+	}); err != nil {
+		t.Fatalf("PutGroupRecord: %v", err)
+	}
+	// THE SHAPE A FAILED REMOVAL LEAVES: the mark, and the retraction PutGroupRecord writes then
+	if err := os.WriteFile(store.pendingPath(groupId), mark, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeRecord(store.recordedPath(groupId), stateKindRecorded, groupId); err != nil {
+		t.Fatal(err)
+	}
+	aside := filepath.Join(t.TempDir(), "meta")
+	if err := os.Rename(store.groupRecordPath(groupId), aside); err != nil {
+		t.Fatal(err)
+	}
+
+	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	_, err = device.Restore(ctx)
+	t.Logf("Restore with the record away: %v", err)
+	if erased := store.ErasedWithNoRecord(); len(erased) != 0 {
+		t.Errorf("the sweep erased %v, a folder whose mark its record had retracted", erased)
+	}
+	if _, err := store.GetGroupState(groupId, 1); err != nil {
+		t.Errorf("the epoch state does not read after the Restore: %v", err)
+	}
+
+	if err := os.Rename(aside, store.groupRecordPath(groupId)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = device.Restore(ctx)
+	t.Logf("Restore with the record back: %v", err)
+	for _, path := range []string{store.pendingPath(groupId), store.recordedPath(groupId)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s stands beside a record that read: %v", filepath.Base(path), err)
+		}
 	}
 }
 
