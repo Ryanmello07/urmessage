@@ -1143,7 +1143,8 @@ func (self *DurableStateStore) identityPath() string {
 // them, and TestEveryGroupPathIsOneOfTheStoresOwnNames holds the two together both ways and holds
 // that no other spelling of them stands in this file. A folder holding NONE of them -- only a file a
 // desktop shell or a sync tool left, or an unfinished `.writing-*`, which is no value -- holds
-// nothing of a group ([DurableStateStore.groupFolder]).
+// nothing of a group ([DurableStateStore.groupFolder]), and neither does one whose `epoch` and `sent`
+// folders, its only names, hold no entry named the way the store names its entries (R36, item 3).
 const (
 	stateGroupRecordName     = "meta"
 	stateGroupEpochsName     = "epoch"
@@ -1387,7 +1388,8 @@ func (self *DurableStateStore) PutGroupState(groupId []byte, epoch uint64, state
 // markPendingIfCreatingLocked writes the `pending` mark when, and only when, this call creates the
 // group's folder: the folder does not stand yet, or it stands and holds NONE of this store's own
 // names (R34, item 7) -- a folder an earlier erase could not remove because a file the store did not
-// write kept it, which holds nothing of a group. A folder where any of the store's names stands gets
+// write kept it, or because another program held an emptied `epoch` or `sent` folder open (R36, item
+// 3), which holds nothing of a group. A folder where any of the store's names stands gets
 // no mark, whatever is or is not in it: a live group whose record an antivirus quarantine moved away
 // still has its states there. A folder that cannot be asked about is a refusal, because whether
 // this call creates it is the whole question; one that stands and cannot be listed gets no mark, as
@@ -1412,6 +1414,13 @@ func (self *DurableStateStore) markPendingIfCreatingLocked(groupId []byte) error
 // the filesystem would read it as one, and wherever else it is the safer answer. A folder that does
 // not stand holds none. A folder that cannot be listed, or a non-directory standing at its path, is
 // the error.
+//
+// THE TWO FOLDERS OF A GROUP'S FOLDER COUNT ONLY WHEN THEY HOLD SOMETHING OF A GROUP (R36, item 3):
+// `epoch` and `sent` count as the store's own only when they hold an entry named the way the store
+// names its entries ([stateSubfolderHoldsEntries]). An EMPTY one is what a leave leaves when another
+// program holds the folder open with no delete sharing as the leave removes it -- a terminal whose
+// working directory is inside does -- and it used to count: the next leave answered "could not be
+// read" and every re-join was refused as unproven, for good, with nothing to retry the removal.
 func stateFolderHoldsOwnNames(dir string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -1422,12 +1431,45 @@ func stateFolderHoldsOwnNames(dir string) (bool, error) {
 	}
 	for _, entry := range entries {
 		for _, own := range stateGroupNames {
-			if strings.EqualFold(entry.Name(), own) {
-				return true, nil
+			if !strings.EqualFold(entry.Name(), own) {
+				continue
 			}
+			if own == stateGroupEpochsName || own == stateGroupSentName {
+				if !stateSubfolderHoldsEntries(filepath.Join(dir, entry.Name())) {
+					continue
+				}
+			}
+			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// stateSubfolderHoldsEntries answers whether one of a group's two folders, `epoch` or `sent`, holds
+// anything of a group (R36, item 3): an entry named the way the store names its entries, sixteen hex
+// digits. Neither an unfinished write (`.writing-*`), which is no value, nor a stray under any other
+// name counts, so an empty folder, or one holding only those, holds nothing. A folder that cannot be
+// listed, and a path of another type standing at its name, are answered as holding something: what
+// cannot be asked about is never "nothing is here", and a path of the wrong type at one of the store's
+// own names is present, not absent (R35).
+func stateSubfolderHoldsEntries(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	if !info.IsDir() {
+		return true
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return true
+	}
+	for _, entry := range entries {
+		if _, named := stateEpochOfName(entry.Name()); named {
+			return true
+		}
+	}
+	return false
 }
 
 // clearPendingLocked takes one group's `pending` mark away, and answers whether that failed. A mark
@@ -2953,7 +2995,8 @@ type groupFolderState int
 
 const (
 	// groupFolderNothing: no folder, or one holding none of this store's own names
-	// ([stateGroupNames]). Nothing of a group is there.
+	// ([stateGroupNames]) -- an `epoch` or `sent` folder that holds no entry of the store's does not
+	// count as one (R36, item 3). Nothing of a group is there.
 	groupFolderNothing groupFolderState = iota
 	// groupFolderCreating: the creating state. A creation that never finished, which the sweep
 	// owns; nobody holds that group yet.

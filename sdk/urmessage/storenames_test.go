@@ -2,6 +2,7 @@ package urmessage
 
 import (
 	"bytes"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -101,5 +102,80 @@ func TestEveryGroupPathIsOneOfTheStoresOwnNames(t *testing.T) {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// AN EMPTY STORE FOLDER HOLDS NOTHING OF A GROUP (R36, item 3: the round-5 review's Z3, the store half,
+// on every platform). A group's `epoch` and `sent` folders count as the store's own only when they hold
+// an entry named the way the store names its entries: an empty one, or one holding only an unfinished
+// write and a stray, holds nothing. So a group folder left holding only such a folder is "nothing is
+// here": the gate's and ForgetGroup's reading is groupFolderNothing, ForgetGroup answers that this
+// device holds no such group, and a state written into it is marked as a creation.
+//
+// THE CONTROLS: the same folders holding one entry named as the store names its entries count, and a
+// path of another type standing at either name counts too -- present, not absent.
+//
+// WHAT WOULD GO RED: an empty `epoch` counted as one of the store's names, which refused every re-join
+// of a group whose leave another program's open handle stopped from removing that folder.
+func TestAnEmptyStoreFolderHoldsNothingOfAGroup(t *testing.T) {
+	store := openTestStore(t, t.TempDir())
+	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	groupId := bytes.Repeat([]byte{0x78}, GroupIdBytes)
+	dir := store.groupDir(groupId)
+	for _, name := range []string{stateGroupEpochsName, stateGroupSentName} {
+		folder := filepath.Join(dir, name)
+		if err := os.MkdirAll(folder, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		// empty, and then holding only an unfinished write and a stray
+		for _, round := range []string{"empty", "an unfinished write and a stray"} {
+			if round != "empty" {
+				for _, stray := range []string{stateTempPrefix + "12345", "desktop.ini"} {
+					if err := os.WriteFile(filepath.Join(folder, stray), []byte("not a value"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if holds, err := stateFolderHoldsOwnNames(dir); err != nil || holds {
+				t.Errorf("a group folder whose %s folder is %s answered %v, %v, want nothing of a group", name, round, holds, err)
+			}
+			if got := store.groupFolder(groupId); got != groupFolderNothing {
+				t.Errorf("a group folder whose %s folder is %s reads as %d, want groupFolderNothing", name, round, got)
+			}
+			if err := device.ForgetGroup(groupId); !errors.Is(err, ErrGroupNotHeld) || errors.Is(err, ErrGroupReadUnproven) {
+				t.Errorf("the leave over a group folder whose %s folder is %s answered %v, want ErrGroupNotHeld", name, round, err)
+			}
+		}
+		// THE CONTROL: one entry named as the store names its entries counts
+		entry := filepath.Join(folder, stateEpochName(3))
+		if err := os.WriteFile(entry, []byte("an entry"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if holds, err := stateFolderHoldsOwnNames(dir); err != nil || !holds {
+			t.Errorf("CONTROL FAILED: a %s folder holding %s answered %v, %v, want one of the store's names", name, stateEpochName(3), holds, err)
+		}
+		if err := os.RemoveAll(folder); err != nil {
+			t.Fatal(err)
+		}
+		// AND A PATH OF ANOTHER TYPE AT ITS NAME counts: it is present, not absent
+		if err := os.WriteFile(folder, []byte("a file where a folder goes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if holds, err := stateFolderHoldsOwnNames(dir); err != nil || !holds {
+			t.Errorf("CONTROL FAILED: a file standing where the %s folder goes answered %v, %v, want one of the store's names", name, holds, err)
+		}
+		if err := os.Remove(folder); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a state written into a group folder holding only an empty `epoch` folder is marked as a creation
+	if err := os.MkdirAll(store.epochDir(groupId), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutGroupState(groupId, 3, testState); err != nil {
+		t.Fatalf("PutGroupState: %v", err)
+	}
+	if _, err := os.Stat(store.pendingPath(groupId)); err != nil {
+		t.Errorf("a state written into a folder holding only an empty epoch folder is not marked as a creation: %v", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/urnetwork/message/sdk/urmessage"
@@ -169,5 +170,90 @@ func TestT1V5ALeaveMarkPutBackAfterARejoin(t *testing.T) {
 		if _, kept := after[name]; !kept && name != "forgetting" {
 			t.Errorf("%s of bob's live group went", name)
 		}
+	}
+}
+
+// AN EMPTY FOLDER A LEAVE LEFT BEHIND HOLDS NOTHING OF A GROUP, AND THE GROUP CAN BE JOINED AGAIN (R36,
+// item 3: the round-5 review's Z3, made a real test). Bob's `epoch` folder is held open with read and
+// write sharing and no delete sharing, as a terminal whose working directory is inside holds it, while
+// he leaves: the leave answers nil, and an EMPTY `epoch` folder stays. Asked again, his leave answers
+// that this device holds no such group. Alice removes him and adds him again, and he joins: the gate
+// reads the folder as nothing of a group, and his group comes back at his next start.
+//
+// WHAT WOULD GO RED, measured at 93cc0af: the empty folder counted as one of the store's names, so the
+// second leave answered "could not be read ... cannot tell whether that will pass" and the re-join was
+// refused as unproven, for good: nothing retries the removal.
+func TestT1V5AnEmptyEpochFolderLeftByALeave(t *testing.T) {
+	ctx := t.Context()
+	world := newWorld(t)
+	alice := world.newPersona(t, "alice")
+	bob := world.newPersona(t, "bob")
+	for _, who := range []*persona{alice, bob} {
+		if err := who.device.Connect(ctx); err != nil {
+			t.Fatalf("%s's Connect: %v", who.name, err)
+		}
+	}
+	groupId := newGroupId(t)
+	aliceGroup, _ := openPair(t, ctx, alice, bob, groupId)
+	dir := erasescopeFolder(bob.stateDir, groupId)
+	epochDir := filepath.Join(dir, "epoch")
+	name, err := syscall.UTF16PtrFromString(epochDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const backupSemantics = 0x02000000 // FILE_FLAG_BACKUP_SEMANTICS, which opens a directory
+	handle, err := syscall.CreateFile(name, syscall.GENERIC_READ, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil,
+		syscall.OPEN_EXISTING, backupSemantics, 0)
+	if err != nil {
+		t.Fatalf("holding the epoch folder: %v", err)
+	}
+	err = bob.device.ForgetGroup(groupId)
+	syscall.CloseHandle(handle)
+	t.Logf("bob's leave while his epoch folder is held with no delete sharing: %v; the folder: %v", err, putBackListing(dir))
+	if err != nil {
+		t.Fatalf("CONTROL FAILED: bob's leave answered %v", err)
+	}
+	if listing := putBackListing(dir); len(listing) != 1 || listing[0] != "epoch/" {
+		t.Fatalf("CONTROL FAILED: after the leave bob's folder holds %v, want the empty epoch folder alone", listing)
+	}
+	err = bob.device.ForgetGroup(groupId)
+	t.Logf("bob's leave asked again: %v", err)
+	if !errors.Is(err, urmessage.ErrGroupNotHeld) || errors.Is(err, urmessage.ErrGroupReadUnproven) {
+		t.Errorf("the leave of a group already left, over the empty folder its leave left, answered %v, want ErrGroupNotHeld", err)
+	}
+	members, err := aliceGroup.Members()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bobIdentity []byte
+	for _, member := range members {
+		if !member.Mine {
+			bobIdentity = member.IdentityPub
+		}
+	}
+	if err := aliceGroup.RemoveMember(ctx, bobIdentity); err != nil {
+		t.Fatalf("alice's RemoveMember of bob: %v", err)
+	}
+	keyPackage, err := bob.device.KeyPackage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := aliceGroup.AddMemberAndPublish(ctx, keyPackage)
+	if err != nil {
+		t.Fatalf("alice's re-add of bob: %v", err)
+	}
+	_, err = bob.device.Join(ctx, gcReencodeInvite(t, invite))
+	t.Logf("bob's re-join into the same group: %v; his folder: %v", err, putBackListing(dir))
+	if err != nil {
+		t.Fatalf("the re-join over the empty folder a leave left answered %v, want it joined", err)
+	}
+	bob = world.restart(t, bob)
+	if err := bob.device.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := bob.device.Restore(ctx)
+	t.Logf("bob's next start: Restore %d group(s), %v; his folder: %v", len(restored), err, putBackListing(dir))
+	if err != nil || len(restored) != 1 {
+		t.Errorf("bob's re-joined group answered %d group(s), %v, want it restored", len(restored), err)
 	}
 }
