@@ -3,12 +3,22 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/urnetwork/connect"
+	connectprotocol "github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/sdk/urmessage"
 )
 
 // THIS PACKAGE HAS TESTS SO THAT ITS TEST BINARY EXISTS AND STARTS. A main package with no test is
@@ -17,7 +27,38 @@ import (
 // build and to vet. `go test` runs this package's init before its first case, so every run of these
 // cases is also that check; the module census requires every main package to have one. What
 // the cases themselves hold is the file handshake the peers rest on: the invite is written so a
-// poller never reads half of it, and the waits see it arrive and see it go.
+// poller never reads half of it, and the waits see it arrive and see it go. And the JOIN ROAD's
+// rules: which flags a run may take together, a code read as the app writes and pastes one, and the
+// one line each refusal of a join adds to the library's own sentence.
+
+// runMainEnv makes this test binary run livepeer's own main instead of its cases, so that the flag
+// rules are held the way a person meets them: a command line in, a refusal and an exit status out.
+const runMainEnv = "LIVEPEER_TEST_RUN_MAIN"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(runMainEnv) == "1" {
+		main()
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// runLivepeer runs main in a child process with these arguments, and answers its exit status and
+// everything it wrote.
+func runLivepeer(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+	command := exec.Command(os.Args[0], args...)
+	command.Env = append(os.Environ(), runMainEnv+"=1")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return 0, string(output)
+	}
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) {
+		t.Fatalf("livepeer %v did not run: %v", args, err)
+	}
+	return exited.ExitCode(), string(output)
+}
 
 func TestAnInviteIsWrittenWholeAndPrivate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "invite")
@@ -83,4 +124,411 @@ func TestTheReportShortensIdentitiesAndClipsText(t *testing.T) {
 	if got := clip("short"); got != "short" {
 		t.Errorf("clip changed a short text: %q", got)
 	}
+}
+
+// ── the join road ────────────────────────────────────────────────────────────────────────────
+
+// THE TWO REFUSALS THE BRIEF NAMES, THROUGH main ITSELF. A joining peer makes its own join code,
+// so a run that also hands it somebody else's -- the founder road's input -- is a run that cannot
+// say which road it is on. It is refused before the credential is read and before -dir is made:
+// the credential path below does not exist and the refusal must not be about it.
+func TestAJoinThatCarriesAFoundersInputIsRefusedBeforeAnythingIsRead(t *testing.T) {
+	for _, one := range []struct {
+		name string
+		args []string
+	}{
+		{"-join with -joincode", []string{"-join", "-joincode", "AAEC", "-invitecode", "@invite.code"}},
+		{"-join with -keypackage", []string{"-join", "-keypackage", "app.keypackage", "-invitecode", "@invite.code"}},
+	} {
+		t.Run(one.name, func(t *testing.T) {
+			dir := t.TempDir()
+			state := filepath.Join(dir, "peer")
+			args := append([]string{"-jwt", filepath.Join(dir, "no-such-credential"), "-dir", state}, one.args...)
+			status, output := runLivepeer(t, args...)
+			if status != 1 || !strings.Contains(output, "-join takes no -keypackage or -joincode") {
+				t.Fatalf("%s exited %d and said:\n%s\nwant exit status 1 and the join road's refusal of a founder's input", one.name, status, output)
+			}
+			if strings.Contains(output, "read jwt") {
+				t.Errorf("the refusal came after the credential was read:\n%s", output)
+			}
+			if _, err := os.Stat(state); !os.IsNotExist(err) {
+				t.Errorf("the refused run made its -dir %s: %v", state, err)
+			}
+		})
+	}
+}
+
+// EVERY RUN TAKES ONE ROAD IN AND ONE ROAD OUT, and the join road takes none of the founder's.
+func TestEveryRunTakesOneRoadInAndOneRoadOut(t *testing.T) {
+	for _, one := range []struct {
+		name  string
+		roads roads
+		// "" for a run the rules let through; otherwise a fragment of the refusal
+		want string
+	}{
+		{"the founder road by files", roads{keyPackage: "app.keypackage", invite: "app.invite"}, ""},
+		{"the founder road by codes", roads{joinCode: "@join.code", printInvite: true}, ""},
+		{"the founder road, its invite code to a file", roads{joinCode: "@join.code", inviteCodeOut: "invite.code"}, ""},
+		{"the join road", roads{join: true, inviteCode: "@invite.code"}, ""},
+		{"the join road, its join code to a file", roads{join: true, inviteCode: "@invite.code", joinCodeOut: "join.code"}, ""},
+		{"-join with -joincode", roads{join: true, joinCode: "@join.code", inviteCode: "@invite.code"}, "-join takes no -keypackage or -joincode"},
+		{"-join with -keypackage", roads{join: true, keyPackage: "app.keypackage", inviteCode: "@invite.code"}, "-join takes no -keypackage or -joincode"},
+		{"-join with -invite", roads{join: true, invite: "app.invite", inviteCode: "@invite.code"}, "-join makes no invitation"},
+		{"-join with -printinvite", roads{join: true, printInvite: true, inviteCode: "@invite.code"}, "-join makes no invitation"},
+		{"-join with -invitecodeout", roads{join: true, inviteCodeOut: "invite.code", inviteCode: "@other.code"}, "-join makes no invitation"},
+		{"-join with no -invitecode", roads{join: true, joinCodeOut: "join.code"}, "-join needs -invitecode"},
+		{"-invitecode without -join", roads{joinCode: "@join.code", printInvite: true, inviteCode: "@invite.code"}, "add -join"},
+		{"-joincodeout without -join", roads{joinCode: "@join.code", printInvite: true, joinCodeOut: "join.code"}, "add -join"},
+		{"a founder with nothing in", roads{printInvite: true}, "one of -keypackage or -joincode"},
+		{"a founder with nothing out", roads{joinCode: "@join.code"}, "one of -invite or -printinvite"},
+	} {
+		err := one.roads.check()
+		switch {
+		case one.want == "" && err != nil:
+			t.Errorf("%s was refused: %v", one.name, err)
+		case one.want != "" && err == nil:
+			t.Errorf("%s was let through; want a refusal saying %q", one.name, one.want)
+		case one.want != "" && !strings.Contains(err.Error(), one.want):
+			t.Errorf("%s was refused with %q; want it to say %q", one.name, err, one.want)
+		}
+	}
+}
+
+// A CODE IS READ AS THE APP WRITES IT AND AS A PERSON PASTES IT: the app's own encoder's text, and
+// that text after a mail client or a chat window has been at it.
+func TestACodeIsReadAsTheAppWritesItAndAPersonPastesIt(t *testing.T) {
+	octets := make([]byte, 1000) // 1000 is 1 past a multiple of 3, so the code ends in "=="
+	for at := range octets {
+		octets[at] = byte(at*7 + 3)
+	}
+	code := appEncodeBase64(octets)
+	wrapped := wrapEvery(code, 76, "\r\n")
+	for _, one := range []struct{ name, text string }{
+		{"as the app writes it", code},
+		{"wrapped by a mail client, CRLF every 76 characters", wrapped},
+		{"pasted with spaces, tabs and blank lines around it", " \t" + wrapped + " \n\n"},
+		{"with its padding lost on the way", strings.TrimRight(code, "=")},
+	} {
+		got, err := decodeCode(one.text)
+		if err != nil || !bytes.Equal(got, octets) {
+			t.Errorf("%s: decoded %d octets, %v; want the %d the app encoded", one.name, len(got), err, len(octets))
+		}
+	}
+	for _, one := range []struct{ name, text string }{
+		{"text that is not base64", "this is not a code!"},
+		{"nothing", ""},
+		{"only whitespace", " \r\n\t "},
+	} {
+		if got, err := decodeCode(one.text); err == nil {
+			t.Errorf("%s decoded to %d octets with no error; want a refusal", one.name, len(got))
+		}
+	}
+}
+
+// AN INVITE CODE FILE IS WAITED FOR, READ, AND DELETED: the invite is secret, and a file that is
+// left behind is an invitation anybody who reads the disk later holds.
+func TestAnInviteCodeFileIsWaitedForReadAndDeleted(t *testing.T) {
+	ctx := context.Background()
+	octets := []byte("an invitation, as octets, longer than one line once it is wrapped")
+	path := filepath.Join(t.TempDir(), "invite.code")
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		os.WriteFile(path, []byte(wrapEvery(appEncodeBase64(octets), 8, "\n")+"\n"), 0o600)
+	}()
+	got, err := readInviteCode(ctx, "@"+path, 5*time.Second, 10*time.Millisecond)
+	if err != nil || !bytes.Equal(got, octets) {
+		t.Fatalf("read %q, %v from the file; want %q", got, err, octets)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the invite code file is still there after it was read: %v", err)
+	}
+
+	// A CODE ON THE COMMAND LINE IS THE CODE, and no file is looked for.
+	got, err = readInviteCode(ctx, appEncodeBase64(octets), time.Millisecond, time.Millisecond)
+	if err != nil || !bytes.Equal(got, octets) {
+		t.Errorf("read %q, %v from the command line; want %q", got, err, octets)
+	}
+
+	// A FILE THAT NEVER COMES is a refusal once the wait is over, and not a hang.
+	never := filepath.Join(t.TempDir(), "never.code")
+	if got, err := readInviteCode(ctx, "@"+never, 50*time.Millisecond, 10*time.Millisecond); err == nil {
+		t.Errorf("a file that never appeared answered %d octets and no error", len(got))
+	}
+}
+
+// THE JOIN CODE IS THE TEXT THE APP'S ADD DIALOG TAKES. The key package is a real one, from a real
+// Device over a transport that never reaches a server (KeyPackage is local). Its join code must be
+// byte for byte the text the app's own encoder makes of the same octets, must decode under the
+// app's own reader, and must be written to -joincodeout exactly, with nothing around it.
+func TestTheJoinCodeIsTheTextTheAppsAddDialogTakes(t *testing.T) {
+	keyPackage, err := offlineDevice(t).KeyPackage()
+	if err != nil {
+		t.Fatalf("KeyPackage: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "codes", "join.code")
+	code, err := handOverJoinCode(keyPackage, path)
+	if err != nil {
+		t.Fatalf("handOverJoinCode: %v", err)
+	}
+	if code != appEncodeBase64(keyPackage) {
+		t.Errorf("the join code (%d characters) is not the text the app's encoder makes of the same %d octets", len(code), len(keyPackage))
+	}
+	if back, ok := appDecodeBase64(code); !ok || !bytes.Equal(back, keyPackage) {
+		t.Errorf("the app's add dialog reads %d octets, %v back from the join code; want the %d of the key package", len(back), ok, len(keyPackage))
+	}
+	written, err := os.ReadFile(path)
+	if err != nil || string(written) != code {
+		t.Errorf("-joincodeout holds %d octets, %v; want exactly the %d characters of the code", len(written), err, len(code))
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("-joincodeout is %v, %v; want mode 600", info, err)
+		}
+	}
+	// WITH NO FILE, the code is answered for main to print, and nothing is written.
+	if printed, err := handOverJoinCode(keyPackage, ""); err != nil || printed != code {
+		t.Errorf("with no -joincodeout the code was %d characters, %v; want the same %d", len(printed), err, len(code))
+	}
+	// AND THE ENCODING AGREES WITH THE APP'S AT EVERY LENGTH, so every padding case is held. Neither
+	// text is printed on a failure: a code is said by its length, here as everywhere else.
+	for length := 0; length <= 48; length += 1 {
+		got, err := handOverJoinCode(keyPackage[:length], "")
+		if want := appEncodeBase64(keyPackage[:length]); err != nil || got != want {
+			t.Errorf("at %d octets the join code is %d characters, %v, and not the %d the app writes", length, len(got), err, len(want))
+		}
+	}
+}
+
+// EACH REFUSAL OF THE JOIN ROAD SAYS WHAT TO DO, by the library's own class, and each line is a
+// different instruction. The invitation addressed to another key package is Device.Join's
+// refusal, wrapped here the way group.go's Join wraps the engine's (a Join needs a connection
+// before it reaches its window, so the live run is what drives the real one); the rest are
+// ParseInvite's own refusals of real octets.
+func TestEachRefusalOfTheJoinRoadSaysWhatToDo(t *testing.T) {
+	ownJoinCode, err := offlineDevice(t).KeyPackage()
+	if err != nil {
+		t.Fatalf("KeyPackage: %v", err)
+	}
+	versionTwo := inviteAtVersionTwo()
+	damaged := []byte{0x00, 0x03, 0x01, 0x02, 0x03}
+	// version 3 under a checksum that covers it, and no field after the version: refused by a
+	// sentence that carries no sentinel ("an invite with no group_id")
+	noFields := withChecksum([]byte{0x00, 0x03})
+
+	_, older := urmessage.ParseInvite(versionTwo)
+	_, ownCode := urmessage.ParseInvite(ownJoinCode)
+	_, notWhole := urmessage.ParseInvite(damaged)
+	_, empty := urmessage.ParseInvite(noFields)
+	anotherKeyPackage := fmt.Errorf("%w: %w", urmessage.ErrNoJoinCodeForInvite,
+		errors.New("messagegroup: no key package in this store is the one this welcome is addressed to"))
+	refusedInsideTheWindow := fmt.Errorf("%w: %w", urmessage.ErrJoinRefused, urmessage.ErrJoinSealUnauthenticated)
+
+	if !errors.Is(older, urmessage.ErrInviteVersion) {
+		t.Fatalf("an invitation at version 2 answered %v, want ErrInviteVersion", older)
+	}
+	// A JOIN CODE PASTED WHERE THE INVITATION GOES IS REFUSED BY VERSION TOO: a key package begins
+	// with MLS's own version, 0x0001. Which is why that case is told apart by its octets, below.
+	if !errors.Is(ownCode, urmessage.ErrInviteVersion) {
+		t.Fatalf("this peer's own join code, parsed as an invitation, answered %v, want ErrInviteVersion", ownCode)
+	}
+	if !errors.Is(notWhole, urmessage.ErrInviteDamaged) {
+		t.Fatalf("five octets at version 3 answered %v, want ErrInviteDamaged", notWhole)
+	}
+	if empty == nil || errors.Is(empty, urmessage.ErrInviteDamaged) || errors.Is(empty, urmessage.ErrInviteVersion) {
+		t.Fatalf("a version and a checksum and nothing else answered %v, want a refusal with no sentinel", empty)
+	}
+
+	rows := []struct {
+		name   string
+		advice string
+		want   string
+	}{
+		{"an invitation made from another join code", joinAdvice(anotherKeyPackage), "another join code"},
+		{"an invitation made by an older build", parseAdvice(older, versionTwo, ownJoinCode), "older URmessage"},
+		{"this peer's own join code pasted as the invitation", parseAdvice(ownCode, ownJoinCode, ownJoinCode), "OWN join code"},
+		{"a code that is not an invitation", parseAdvice(notWhole, damaged, ownJoinCode), "not an invitation"},
+		{"a join refused for another reason", joinAdvice(refusedInsideTheWindow), "the library's own reason"},
+	}
+	if got := parseAdvice(empty, noFields, ownJoinCode); got != parseAdvice(notWhole, damaged, ownJoinCode) {
+		t.Errorf("a parse refused with no sentinel is told %q; want what a damaged one is told", got)
+	}
+	seen := map[string]string{}
+	for _, row := range rows {
+		if !strings.Contains(row.advice, row.want) {
+			t.Errorf("%s: the advice is %q; want it to say %q", row.name, row.advice, row.want)
+		}
+		if earlier, twice := seen[row.advice]; twice {
+			t.Errorf("%s and %s are told the same thing: %q", earlier, row.name, row.advice)
+		}
+		seen[row.advice] = row.name
+	}
+}
+
+// ── fixtures ─────────────────────────────────────────────────────────────────────────────────
+
+// THE APP'S OWN CODEC, PORTED LINE FOR LINE, so that "the form the app takes" is a test and not a
+// reading of somebody else's source: urnetwork/message-windows 39df6d92,
+// app/src/App/Live/LiveMesh.cpp, EncodeBase64 (lines 640-660) and DecodeBase64 (666-694). Out:
+// RFC 4648 base64 with padding and no line breaks. In: whitespace skipped, padding optional, any
+// other character, and data after padding, refused.
+func appEncodeBase64(data []byte) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	out := []byte{}
+	at := 0
+	for ; at+2 < len(data); at += 3 {
+		v := uint32(data[at])<<16 | uint32(data[at+1])<<8 | uint32(data[at+2])
+		out = append(out, alphabet[(v>>18)&63], alphabet[(v>>12)&63], alphabet[(v>>6)&63], alphabet[v&63])
+	}
+	if at < len(data) {
+		two := at+1 < len(data)
+		v := uint32(data[at]) << 16
+		if two {
+			v |= uint32(data[at+1]) << 8
+		}
+		out = append(out, alphabet[(v>>18)&63], alphabet[(v>>12)&63])
+		if two {
+			out = append(out, alphabet[(v>>6)&63])
+		} else {
+			out = append(out, '=')
+		}
+		out = append(out, '=')
+	}
+	return string(out)
+}
+
+func appDecodeBase64(text string) ([]byte, bool) {
+	value := func(c byte) int {
+		switch {
+		case 'A' <= c && c <= 'Z':
+			return int(c - 'A')
+		case 'a' <= c && c <= 'z':
+			return int(c-'a') + 26
+		case '0' <= c && c <= '9':
+			return int(c-'0') + 52
+		case c == '+':
+			return 62
+		case c == '/':
+			return 63
+		}
+		return -1
+	}
+	out := []byte{}
+	var acc uint32
+	bits, pad := 0, 0
+	for at := 0; at < len(text); at += 1 {
+		c := text[at]
+		if c == ' ' || c == '\r' || c == '\n' || c == '\t' {
+			continue
+		}
+		if c == '=' {
+			pad += 1
+			continue
+		}
+		if pad != 0 {
+			return nil, false
+		}
+		v := value(c)
+		if v < 0 {
+			return nil, false
+		}
+		acc = acc<<6 | uint32(v)
+		bits += 6
+		if 8 <= bits {
+			bits -= 8
+			out = append(out, byte(acc>>bits))
+		}
+	}
+	if 2 < pad {
+		return nil, false
+	}
+	return out, len(out) != 0
+}
+
+// wrapEvery breaks text into lines of width characters, the way a mail client wraps a long line.
+func wrapEvery(text string, width int, newline string) string {
+	lines := []string{}
+	for width < len(text) {
+		lines = append(lines, text[:width])
+		text = text[width:]
+	}
+	return strings.Join(append(lines, text), newline)
+}
+
+// inviteAtVersionTwo is an invitation in version two's shape, which an older build wrote: the
+// version, five fields each under this corpus's one length prefix (a big-endian uint32, as
+// syntax.Writer.WriteOpaqueLP writes it) -- group_id, welcome, ratchet_tree, and the two join
+// secrets in the clear that version three seals -- and the SHA-256 of all of it, so that what is
+// refused is the version and not a damaged paste.
+func inviteAtVersionTwo() []byte {
+	encoded := binary.BigEndian.AppendUint16(nil, 0x0002)
+	for _, field := range [][]byte{
+		bytes.Repeat([]byte{0x11}, 32),
+		[]byte("a welcome"),
+		[]byte("a ratchet tree"),
+		bytes.Repeat([]byte{0x22}, 32),
+		bytes.Repeat([]byte{0x33}, 32),
+	} {
+		encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(field)))
+		encoded = append(encoded, field...)
+	}
+	return withChecksum(encoded)
+}
+
+// withChecksum is the octets followed by the SHA-256 of them, as an invitation ends.
+func withChecksum(octets []byte) []byte {
+	sum := sha256.Sum256(octets)
+	return append(append([]byte(nil), octets...), sum[:]...)
+}
+
+// silentClient is a connect client that sends nothing and hears nothing.
+type silentClient struct{}
+
+func (silentClient) SendWithTimeout(*connectprotocol.Frame, connect.Id, connect.AckFunction, time.Duration, ...any) bool {
+	return false
+}
+
+func (silentClient) AddReceiveCallback(connect.ReceiveFunction) func() {
+	return func() {}
+}
+
+// offlineDevice is a real urmessage.Device over durable stores in a temp directory and a transport
+// whose client never reaches a server: enough for KeyPackage, which is local, and for nothing that
+// needs a Hello.
+func offlineDevice(t *testing.T) *urmessage.Device {
+	t.Helper()
+	root := t.TempDir()
+	transport, err := sdk.NewMessageTransport(&sdk.MessageTransportConfig{
+		Client: silentClient{}, Server: connect.NewId(), ProtocolVersion: 1, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+	for _, sub := range []string{"stream", "state"} {
+		if err := os.MkdirAll(filepath.Join(root, sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	streamStore, err := sdk.OpenStreamStore(filepath.Join(root, "stream"))
+	if err != nil {
+		t.Fatalf("OpenStreamStore: %v", err)
+	}
+	stateStore, err := urmessage.OpenDurableStateStore(filepath.Join(root, "state"))
+	if err != nil {
+		t.Fatalf("OpenDurableStateStore: %v", err)
+	}
+	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
+		Transport:  transport,
+		Reserver:   sdk.NewStreamIndexReserver(streamStore),
+		StateStore: stateStore,
+	})
+	if err != nil {
+		t.Fatalf("NewDevice: %v", err)
+	}
+	t.Cleanup(func() {
+		device.Close()
+		stateStore.Close()
+		streamStore.Close()
+		transport.Close()
+	})
+	return device
 }
