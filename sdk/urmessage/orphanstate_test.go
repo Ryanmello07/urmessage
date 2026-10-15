@@ -230,6 +230,53 @@ func TestARetractedCreationMarkIsNotSweptAndARecordThatReadsTakesBothMarksAway(t
 	}
 }
 
+// THE SWEEP TAKES ONLY THE STORE'S OWN ENTRIES OF A CREATION THAT NEVER FINISHED (R34, item 10, the
+// table's cell (c)4: a stray file left in the folder). A creation's folder holds the store's mark, an
+// epoch state, and a file the store did not write in the epoch directory, as a sync tool's conflicted
+// copy is. The Restore erases the epoch state and leaves the stray file, and the mark beside it: the
+// mark's reason is true of what the store wrote and of nothing else. A second Restore takes nothing
+// more and names nothing more.
+//
+// WHAT WOULD GO RED: the sweep removing every entry of the epoch directory, the stray file with it,
+// on a mark whose reason says nothing of a file the store did not write.
+func TestTheSweepTakesOnlyTheStoresOwnEntriesOfACreation(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, t.TempDir())
+	groupId := bytes.Repeat([]byte{0x76}, GroupIdBytes)
+	if err := store.PutGroupState(groupId, 1, bytes.Repeat([]byte{0x7E}, 64)); err != nil {
+		t.Fatalf("PutGroupState: %v", err)
+	}
+	stray := filepath.Join(store.epochDir(groupId), "0000000000000001 (conflicted copy).bin")
+	if err := os.WriteFile(stray, []byte("not the store's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	if _, err := device.Restore(ctx); err != nil {
+		t.Logf("Restore: %v", err)
+	}
+	if _, err := store.GetGroupState(groupId, 1); !errors.Is(err, ErrStateNotFound) {
+		t.Errorf("the creation's epoch state is still on the disk after the sweep: %v", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("the sweep took a file the store did not write: %v", err)
+	}
+	if _, err := os.Stat(store.pendingPath(groupId)); err != nil {
+		t.Errorf("the mark beside the file the sweep left went: %v", err)
+	}
+	if erased := store.ErasedWithNoRecord(); len(erased) != 1 || erased[0] != stateNameOf(groupId) {
+		t.Errorf("the store says it erased %v, want the creation's folder once", erased)
+	}
+	if _, err := device.Restore(ctx); err != nil {
+		t.Logf("the second Restore: %v", err)
+	}
+	if erased := store.ErasedWithNoRecord(); len(erased) != 1 {
+		t.Errorf("the second Restore erased more: %v", erased)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("the second Restore took the stray file: %v", err)
+	}
+}
+
 // landedRecordSink is a durable store whose group-record write, once armed, LANDS and then
 // reports a failure, as a rename that succeeded before its directory sync failed does.
 type landedRecordSink struct {

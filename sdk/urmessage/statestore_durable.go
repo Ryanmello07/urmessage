@@ -1598,9 +1598,10 @@ func (self *DurableStateStore) eraseJoinedRecord(groupId []byte) error {
 	if (err != nil && !errors.Is(err, os.ErrNotExist)) || len(epochs) != 0 {
 		return nil
 	}
-	if err := self.clearPendingLocked(groupId); err != nil {
-		return err
-	}
+	// best effort, and never answered as the record's erase failing (the table's cell (d)3): a mark
+	// a scanner holds stands beside no state, which the sweep passes over, and a later creation in
+	// this folder finds it standing
+	_ = self.clearPendingLocked(groupId)
 	// the now-empty epoch and group directories, best effort, as DeleteGroupRecord removes them
 	os.Remove(self.epochDir(groupId))
 	os.Remove(self.groupDir(groupId))
@@ -1723,8 +1724,17 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 			}
 			continue
 		}
-		failed := false
+		// ONLY THE STORE'S OWN ENTRIES ARE TAKEN (R34, item 10, the table's cell (c)4): the mark's
+		// reason -- this store made the folder for a group whose record it never wrote -- is true of
+		// the epoch states and the unfinished writes it put there, and of nothing else. A file it did
+		// not write (a sync tool's copy, a desktop.ini) is left where it is, and so is the mark beside
+		// it: the folder is still a creation that never finished, and the sweep's own.
+		failed, removed, foreign := false, 0, false
 		for _, epoch := range epochs {
+			if _, named := stateEpochOfName(epoch.Name()); !named && !strings.HasPrefix(epoch.Name(), stateTempPrefix) {
+				foreign = true
+				continue
+			}
 			if err := self.removeLocked(filepath.Join(epochDir, epoch.Name())); err != nil {
 				failed = true
 				if first == nil {
@@ -1732,15 +1742,18 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 				}
 				break
 			}
+			removed += 1
 		}
-		if failed {
+		if failed || removed == 0 {
 			continue
 		}
-		if err := self.clearPendingLocked(groupId); err != nil && first == nil {
-			first = err
+		if !foreign {
+			if err := self.clearPendingLocked(groupId); err != nil && first == nil {
+				first = err
+			}
+			os.Remove(epochDir)
+			os.Remove(dir)
 		}
-		os.Remove(epochDir)
-		os.Remove(dir)
 		erased = append(erased, name)
 	}
 	self.erasedWithNoRecord = append(self.erasedWithNoRecord, erased...)

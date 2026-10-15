@@ -1261,6 +1261,17 @@ another program puts a whole group folder back WHILE the join is in flight -- a 
 sync tool's copy -- and the join then fails, a record the folder brought back stands where the
 join's would, and the failed join takes it as its own.
 
+**And two cells of R34's authority-by-adversary table are accepted rather than closed.**
+- A stray at one of the store's OWN names, of the wrong type -- a file where the store keeps `sent`,
+  a directory where it keeps `meta`, `heads` or an epoch state -- is a path of the wrong type, which
+  R29 and R33 rule proof that the group can never be read: a leave then takes the group without the
+  owner's question, although taking the stray away would have made it readable again. A stray under
+  any other name proves nothing and is never taken.
+- A folder REPLACED by another program between a decision and the erase it decides -- a leave's
+  fresh verdict and its erase, or the sweep's reading of the creating state and its removals -- is
+  erased on the decision made about the folder that was there before. Both run inside one call
+  under the store's lock, so the window is that call's.
+
 ### What a fix would be
 
 An explicit export, "erase this copy anyway", that a person chooses knowing what it costs, with the

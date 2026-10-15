@@ -95,6 +95,41 @@ func TestAFailedJoinOverAnUnfinishedCreationErasesOnlyWhatItWrote(t *testing.T) 
 	}
 }
 
+// A FAILED JOIN OVER A FOLDER KEPT BY A STRAY FILE TAKES ONLY WHAT IT WROTE (R34, item 10, the table's
+// cell (d)4). A group's folder outlived its erase, kept by a file the store did not write; the gate
+// reads it as holding nothing of a group, the join's first state marks it as a creation, and the
+// join's record write is refused after its commit. The failed join takes its state, its mark and
+// its folder's store names, and the stray file stays: the folder then holds nothing of a group again.
+//
+// WHAT WOULD GO RED: a failed join's erase that walked the folder instead of naming what it wrote.
+func TestAFailedJoinOverAFolderKeptByAStrayFileTakesOnlyWhatItWrote(t *testing.T) {
+	ctx := context.Background()
+	durable := openTestStore(t, t.TempDir())
+	store := &recordSink{DurableStateStore: durable}
+	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	honest, groupId := windowInvite(t, joiner)
+	if err := os.MkdirAll(durable.groupDir(groupId), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(durable.groupDir(groupId), "desktop.ini")
+	if err := os.WriteFile(stray, []byte("[.ShellClassInfo]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store.armed = true
+	if _, err := joiner.Join(ctx, honest); !errors.Is(err, ErrJoinCodeSpent) {
+		t.Fatalf("CONTROL FAILED: the join answered %v, want its record write refused after its commit", err)
+	}
+	if store.statesPut == 0 {
+		t.Fatalf("CONTROL FAILED: the join wrote no state, so it did not fail past its commit")
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("the failed join took a file the store did not write: %v", err)
+	}
+	if holds, err := stateFolderHoldsOwnNames(durable.groupDir(groupId)); err != nil || holds {
+		t.Errorf("after the failed join the folder holds the store's names (%v, %v): what it wrote is not all gone", holds, err)
+	}
+}
+
 // plainStateStore is an mls.StateStore and nothing else: a store with no single-epoch erase.
 type plainStateStore struct {
 	mls.StateStore
