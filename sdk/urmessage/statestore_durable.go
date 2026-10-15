@@ -129,11 +129,13 @@ type DurableStateStore struct {
 	// outside this package.
 	skipRemove bool
 
-	// lstat is the injected Lstat of [DurableStateStore.confirmWrongType], set by tests in this
-	// package and by nothing else, for skipRemove's reason: the type it stands in for -- a reparse
-	// point Go reports as irregular, a cloud placeholder or a junction -- is not one any filesystem
-	// this suite runs on off Windows can make, and a rule that must answer it (R38, item 2) is a rule
-	// nobody could tell is still answered right everywhere else. nil is os.Lstat.
+	// lstat is the injected Lstat of [DurableStateStore.confirmWrongType] and of
+	// [DurableStateStore.groupFolderNameOf], set by tests in this package and by nothing else, for
+	// skipRemove's reason: what it stands in for -- a reparse point Go reports as irregular, a cloud
+	// placeholder or a junction (R38, item 2), and a folder under another case that is NOT the folder
+	// the store's own name reaches, as on a case-sensitive filesystem (R42, item 1) -- is not one
+	// every filesystem this suite runs on can make, and a rule that must answer it is a rule nobody
+	// could tell is still answered right everywhere else. nil is os.Lstat.
 	lstat func(name string) (os.FileInfo, error)
 }
 
@@ -1135,21 +1137,47 @@ func stateNameOf(key []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// stateNamedAsAKey answers whether name is one this store gives a key: [stateNameOf]'s shape,
-// sixty-four lowercase hex digits. A listing of the groups' root that decides anything reads only
-// folders named this way (R38, item 1): a folder another program left there -- a copy of a group's
-// folder renamed by a sync tool or the shell, "New folder" -- is no group's, and nothing read in
-// it is a verdict about one.
-func stateNamedAsAKey(name string) bool {
-	if len(name) != 2*sha256.Size {
-		return false
+// groupFolderNameOf answers whether one entry of the groups' root, root, is a group's folder, and
+// the name it is read under when it is: [stateNameOf]'s shape, sixty-four LOWERCASE hex digits. It
+// is the one rule of the three listings of the root that decide anything -- GroupRecords,
+// GroupsBeingForgotten and the sweep (R38, item 1; R42, item 1). A folder another program left in
+// the root -- a copy of a group's folder renamed by a sync tool or the shell, "New folder" -- is no
+// group's, and nothing read in it is a verdict about one.
+//
+// A NAME OF SIXTY-FOUR HEX DIGITS IN ANOTHER CASE IS THE GROUP'S FOLDER ONLY WHEN IT IS THE SAME FILE
+// AS THE LOWERCASE-NAMED PATH, by os.SameFile of the two Lstats, and it is then read under the
+// lowercase name, so the record's own-name check holds. A case-only rename of a group's folder is
+// what a sync tool from a case-sensitive source or the shell can do, and on a case-folding
+// filesystem (NTFS, APFS) every other road of this store already reaches that folder by the
+// lowercase name: read as no group's here, the group stayed on the disk, out of Restore, while the
+// join gate's refusal sent the person to a leave that could never happen (the round-6 add-on's Y1).
+// IT IS SAMEFILE AND NOT EQUALFOLD because the question is which FOLDER the store's own name reaches,
+// and on a case-sensitive filesystem a name equal in another case is a DIFFERENT folder: an
+// upper-case copy beside the real one is a stray there, and two folders must never be read as one
+// group. One whose lowercase twin cannot be asked about is a stray too.
+func (self *DurableStateStore) groupFolderNameOf(root string, entry os.DirEntry) (string, bool) {
+	name := entry.Name()
+	if !entry.IsDir() || len(name) != 2*sha256.Size {
+		return "", false
 	}
 	for _, digit := range name {
-		if !('0' <= digit && digit <= '9' || 'a' <= digit && digit <= 'f') {
-			return false
+		if !('0' <= digit && digit <= '9' || 'a' <= digit && digit <= 'f' || 'A' <= digit && digit <= 'F') {
+			return "", false
 		}
 	}
-	return true
+	canonical := strings.ToLower(name)
+	if canonical == name {
+		return name, true
+	}
+	listed, err := self.lstatOf(filepath.Join(root, name))
+	if err != nil {
+		return "", false
+	}
+	twin, err := self.lstatOf(filepath.Join(root, canonical))
+	if err != nil || !os.SameFile(listed, twin) {
+		return "", false
+	}
+	return canonical, true
 }
 
 func (self *DurableStateStore) privatePath(pub []byte) string {
@@ -1763,10 +1791,10 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 	erased := []string{}
 	var first error
 	for _, entry := range entries {
-		name := entry.Name()
-		// a folder not named as this store names a group's is none of its own, and nothing in it is a
-		// reason (R38, item 1)
-		if !entry.IsDir() || !stateNamedAsAKey(name) || keep[name] {
+		// a folder that is not a group's by the store's own name is none of its own, and nothing in it
+		// is a reason; one that is, in another case, is read under that name (R38, item 1; R42, item 1)
+		name, named := self.groupFolderNameOf(root, entry)
+		if !named || keep[name] {
 			continue
 		}
 		dir := filepath.Join(root, name)
@@ -2329,12 +2357,13 @@ func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 		}
 		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, root, err)
 	}
-	// ONLY A FOLDER NAMED AS THIS STORE NAMES A GROUP'S IS ASKED (R38, item 1): a copy of a group's
-	// folder another program renamed is no group's, and a record found in it is no verdict about one
+	// ONLY A GROUP'S FOLDER, BY THE STORE'S OWN NAME, IS ASKED (R38, item 1), and it is asked under that
+	// name (R42, item 1): a copy of a group's folder another program renamed is no group's, and a
+	// record found in it is no verdict about one
 	names := []string{}
 	for _, entry := range entries {
-		if entry.IsDir() && stateNamedAsAKey(entry.Name()) {
-			names = append(names, entry.Name())
+		if name, named := self.groupFolderNameOf(root, entry); named {
+			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
@@ -2843,16 +2872,17 @@ func (self *DurableStateStore) GroupsBeingForgotten() ([][]byte, error) {
 	// A MARK THAT CANNOT BE READ, that names another directory, that names no epoch, or that cannot
 	// be held against what stands beside it now, is REPORTED and skipped: one bad mark does not stop
 	// every other leave from being finished. Its group is not restored either (GroupRecords skips any
-	// directory with a mark), so it waits for a later read, or for somebody to look. A folder not
-	// named as this store names a group's is no group's, and a mark found in it is not asked (R38,
-	// item 1).
+	// directory with a mark), so it waits for a later read, or for somebody to look. A folder that is
+	// not a group's by the store's own name is no group's, and a mark found in it is not asked (R38,
+	// item 1); one that is, in another case, is asked under that name (R42, item 1).
 	ids := [][]byte{}
 	var bad error
 	for _, entry := range entries {
-		if !entry.IsDir() || !stateNamedAsAKey(entry.Name()) {
+		name, named := self.groupFolderNameOf(root, entry)
+		if !named {
 			continue
 		}
-		groupId, verdict, err := self.leaveMarkLocked(entry.Name())
+		groupId, verdict, err := self.leaveMarkLocked(name)
 		if err != nil {
 			if bad == nil {
 				bad = err
