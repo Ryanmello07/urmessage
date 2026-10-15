@@ -2,6 +2,7 @@ package urmessage
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -139,5 +140,33 @@ func TestAStrayFolderInTheGroupsRootIsNothingTheSweepDecidesOn(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(stray, name)); err != nil {
 			t.Errorf("%s of the stray folder went: %v", name, err)
 		}
+	}
+}
+
+// A STRAY COPY FOLDER IN THE GROUPS' ROOT IS NOT REPORTED BY RESTORE (R39, item 3: the round-6
+// review's baseline for R38's listing map, through the device). A joined group's record is copied into
+// a renamed copy of its folder, "<name> - Copy", as the shell makes one. Restore brings the group back
+// and reports nothing: the copy's name is not one the store gives a group, so it is skipped. It used
+// to be reported as a DAMAGED group -- no erase followed, because a folder's name is not an id, but
+// the report was a verdict about a group from a folder no group owns.
+//
+// WHAT WOULD GO RED: the root's listing reading every folder again, and Restore reporting
+// ErrGroupRecordDamaged for the copy.
+func TestAStrayCopyFolderInTheGroupsRootIsNotReportedByRestore(t *testing.T) {
+	dir, groupId := failClosedScene(t)
+	store := openTestStore(t, dir)
+	record, err := os.ReadFile(store.groupRecordPath(groupId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	strayCopyOf(t, store, groupId, stateGroupRecordName, record)
+	device := newAnsweringDeviceOver(t, store, []byte("the restarted device's nonce"))
+	restored, err := device.Restore(context.Background())
+	t.Logf("Restore beside a stray copy folder: %d group(s), %v", len(restored), err)
+	if errors.Is(err, ErrGroupRecordDamaged) {
+		t.Errorf("Restore reported a stray copy folder as a damaged group: %v", err)
+	}
+	if err != nil || len(restored) != 1 || !bytes.Equal(restored[0].Id(), groupId) {
+		t.Errorf("Restore beside a stray copy folder answered %d group(s), %v, want the group back and nothing reported", len(restored), err)
 	}
 }
