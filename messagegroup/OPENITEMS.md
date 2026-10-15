@@ -1307,16 +1307,18 @@ What stays:
   or `recorded` (or a copy of a sent line) -- is quarantined while the group is live; the person
   leaves, the leave finishes, and the folder is removed; then the file is restored. The finished
   leave removed its own mark last, so no fact is left to name the restored file as the left group's.
-  The cost: the group reads as unproven at every Restore (a put-back `meta` reads as a live record
-  whose states are gone; a put-back epoch state or `recorded` is one of the store's own names with no
-  record beside it), its leave and a re-join are both refused, and the restored file's secrets stay
-  on the disk -- the pq_secret table and handle key, or a leaf's private keys -- on a store that is
-  not encrypted at rest (S2-24). Nothing is erased: the library refuses to erase a file it has no
-  true reason to erase, which is the property working, so what W1 costs is liveness and hygiene, and
-  findings of that class wait for the two fixes below -- the store track, and "erase anyway", the
-  person's explicit command, which is the store track's first item. A tombstone mark kept by every
-  finished leave was weighed and is not built in T1 (R39): it adds a kept fact per left group, a
-  finished-or-under-way distinction on every road, and put-back cells of its own.
+  The cost, form by form: a restored `meta` reads as a live record whose states are gone, so Restore
+  reports the group unproven at every start, and its leave and a re-join are refused; a restored
+  epoch state or `recorded` (or sent copy) is one of the store's own names with no record beside it,
+  so Restore lists nothing and says nothing, and it is the leave and a re-join that answer unproven.
+  Either way the restored file's secrets stay on the disk -- the pq_secret table and handle key, or
+  a leaf's private keys -- on a store that is not encrypted at rest (S2-24). Nothing is erased: the
+  library refuses to erase a file it has no true reason to erase, which is the property working, so
+  what W1 costs is liveness and hygiene, and findings of that class wait for the two fixes below --
+  the store track, and "erase anyway", the person's explicit command, which is the store track's
+  first item. A tombstone mark kept by every finished leave was weighed and is not built in T1
+  (R39): it adds a kept fact per left group, a finished-or-under-way distinction on every road, and
+  put-back cells of its own.
 - **A single `meta` put back during a join** (R36's L3), into a folder the join gate read as holding
   nothing of a group or a creation that never finished: if the join then fails after its commit,
   `eraseJoinedRecord` takes that file unread as the join's own record; if the join succeeds, the
@@ -1332,11 +1334,15 @@ What stays:
   - an old leave mark put back into the folder of a SECOND founder's group under the same id (MG-12's
     attacker server), whose epochs are at or below the mark's E: the finish takes that group --
     MG-12 and a put-back;
-  - a join over a creation that never finished, whose record lands and whose persist then fails (a
-    directory sync failing after the rename, Linux only): the record's write removed the earlier
-    creation's mark, and the failed join then leaves that creation's epoch states unmarked, never
-    swept, in a folder that stands with no record. Two events -- the crash that left the creation,
-    and the sync failure -- and it LEAKS that creation's leaf keys while erasing nothing.
+  - a symbolic link at one of the store's names, over an intact target on a mount that answers
+    ERROR_INVALID_FUNCTION (code 1) for it: the link confirms a wrong type (R38), so the code is
+    proof -- two conditions, a link somebody made at a store name AND such a mount, and not what
+    ordinary software does.
+  (The two-event leak T1 FIX 6b filed here -- a join over an unfinished creation whose persist fails
+  after the record lands -- is DROPPED as unreachable: PutGroupRecord returns the directory sync's
+  error before it writes `recorded` or clears `pending`, so the mark stays, and the only failure after
+  a successful PutGroupRecord in a join is holdReplacing's refusal, which cannot happen under the
+  admission mutex.)
 
 ### What a fix would be
 
