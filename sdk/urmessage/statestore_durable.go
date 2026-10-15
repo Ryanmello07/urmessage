@@ -1138,16 +1138,38 @@ func (self *DurableStateStore) identityPath() string {
 	return filepath.Join(self.dataDir, "device")
 }
 
+// THE STORE'S OWN NAMES IN A GROUP'S FOLDER (R34, item 9): every name this store writes into one
+// group's folder, defined here and nowhere else. Every path helper below builds its path from one of
+// them, and TestEveryGroupPathIsOneOfTheStoresOwnNames holds the two together both ways and holds
+// that no other spelling of them stands in this file. A folder holding NONE of them -- only a file a
+// desktop shell or a sync tool left, or an unfinished `.writing-*`, which is no value -- holds
+// nothing of a group ([DurableStateStore.groupFolder]).
+const (
+	stateGroupRecordName     = "meta"
+	stateGroupEpochsName     = "epoch"
+	stateGroupSentName       = "sent"
+	stateGroupHeadsName      = "heads"
+	stateGroupForgettingName = "forgetting"
+	stateGroupPendingName    = "pending"
+	stateGroupRecordedName   = "recorded"
+)
+
+// stateGroupNames is the set above, as one list.
+var stateGroupNames = []string{
+	stateGroupRecordName, stateGroupEpochsName, stateGroupSentName, stateGroupHeadsName,
+	stateGroupForgettingName, stateGroupPendingName, stateGroupRecordedName,
+}
+
 func (self *DurableStateStore) groupDir(groupId []byte) string {
 	return filepath.Join(self.dataDir, "group", stateNameOf(groupId))
 }
 
 func (self *DurableStateStore) groupRecordPath(groupId []byte) string {
-	return filepath.Join(self.groupDir(groupId), "meta")
+	return filepath.Join(self.groupDir(groupId), stateGroupRecordName)
 }
 
 func (self *DurableStateStore) epochDir(groupId []byte) string {
-	return filepath.Join(self.groupDir(groupId), "epoch")
+	return filepath.Join(self.groupDir(groupId), stateGroupEpochsName)
 }
 
 // peerHeadsPath is where one group's [PeerHead] table lives: ONE file beside meta, replaced whole
@@ -1157,14 +1179,14 @@ func (self *DurableStateStore) epochDir(groupId []byte) string {
 // but five, so a part added there would make every group of this build unreadable to the build
 // before it, and a version bump would do the same to every record in the directory at once.
 func (self *DurableStateStore) peerHeadsPath(groupId []byte) string {
-	return filepath.Join(self.groupDir(groupId), "heads")
+	return filepath.Join(self.groupDir(groupId), stateGroupHeadsName)
 }
 
 // forgettingPath is the mark a leave writes BEFORE it closes one group and that the erase removes
 // LAST ([DurableStateStore.MarkGroupForgetting]). While it stands the group is being left: it is
 // no group to restore, and [Device.Restore] or [Device.ForgetGroup] finishes the erase.
 func (self *DurableStateStore) forgettingPath(groupId []byte) string {
-	return filepath.Join(self.groupDir(groupId), "forgetting")
+	return filepath.Join(self.groupDir(groupId), stateGroupForgettingName)
 }
 
 // pendingPath is the mark [DurableStateStore.PutGroupState] writes when THAT CALL CREATES a group's
@@ -1177,7 +1199,7 @@ func (self *DurableStateStore) forgettingPath(groupId []byte) string {
 // group whose record an antivirus quarantine moved away still has its directory, and a mark written
 // on "no record" would have the next Restore sweep that group.
 func (self *DurableStateStore) pendingPath(groupId []byte) string {
-	return filepath.Join(self.groupDir(groupId), "pending")
+	return filepath.Join(self.groupDir(groupId), stateGroupPendingName)
 }
 
 // recordedPath is the RETRACTION of the creation mark (R34, item 3): the fact, written by
@@ -1188,14 +1210,14 @@ func (self *DurableStateStore) pendingPath(groupId []byte) string {
 // handle on `pending` does not block creating this file. A Restore that reads the record takes both
 // away, `pending` first.
 func (self *DurableStateStore) recordedPath(groupId []byte) string {
-	return filepath.Join(self.groupDir(groupId), "recorded")
+	return filepath.Join(self.groupDir(groupId), stateGroupRecordedName)
 }
 
 // sentDir is where one group's [SentRecord] copies live, each named by its stream index as sixteen
 // hex digits -- stateEpochName's shape, and for its reason: the listing's lexical order is the
 // numeric order.
 func (self *DurableStateStore) sentDir(groupId []byte) string {
-	return filepath.Join(self.groupDir(groupId), "sent")
+	return filepath.Join(self.groupDir(groupId), stateGroupSentName)
 }
 
 // stateEpochName is one epoch's file name: the epoch as sixteen zero-padded hex digits, so that
@@ -1357,20 +1379,50 @@ func (self *DurableStateStore) PutGroupState(groupId []byte, epoch uint64, state
 		stateKindGroupState, groupId, epochOctets[:], state)
 }
 
-// markPendingIfCreatingLocked writes the `pending` mark when, and only when, the group's directory
-// does not stand yet, so that this call is the one that creates it. A directory that stands gets no
-// mark, whatever is or is not in it. A directory that cannot be asked about is a refusal, because
-// whether this call creates it is the whole question.
+// markPendingIfCreatingLocked writes the `pending` mark when, and only when, this call creates the
+// group's folder: the folder does not stand yet, or it stands and holds NONE of this store's own
+// names (R34, item 7) -- a folder an earlier erase could not remove because a file the store did not
+// write kept it, which holds nothing of a group. A folder where any of the store's names stands gets
+// no mark, whatever is or is not in it: a live group whose record an antivirus quarantine moved away
+// still has its states there. A folder that cannot be asked about is a refusal, because whether
+// this call creates it is the whole question; one that stands and cannot be listed gets no mark, as
+// any folder that stood got none before R34.
 func (self *DurableStateStore) markPendingIfCreatingLocked(groupId []byte) error {
 	dir := self.groupDir(groupId)
 	_, err := os.Lstat(dir)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return fmt.Errorf("%w: whether %s stands could not be read: %w", ErrStateStoreState, dir, err)
+	default:
+		if holds, err := stateFolderHoldsOwnNames(dir); err != nil || holds {
+			return nil
+		}
 	}
 	return self.writeRecord(self.pendingPath(groupId), stateKindPending, groupId)
+}
+
+// stateFolderHoldsOwnNames answers whether a group's folder holds any of this store's own names
+// ([stateGroupNames]), compared as the platform compares names, so that a `META` is a `meta` where
+// the filesystem would read it as one, and wherever else it is the safer answer. A folder that does
+// not stand holds none. A folder that cannot be listed, or a non-directory standing at its path, is
+// the error.
+func stateFolderHoldsOwnNames(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) && !stateIsNotADirectory(dir) {
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: %s could not be listed: %w", ErrStateStoreState, dir, err)
+	}
+	for _, entry := range entries {
+		for _, own := range stateGroupNames {
+			if strings.EqualFold(entry.Name(), own) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // clearPendingLocked takes one group's `pending` mark away, and answers whether that failed. A mark
@@ -1605,14 +1657,14 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 			continue
 		}
 		dir := filepath.Join(root, name)
-		if !absent(filepath.Join(dir, "forgetting")) {
+		if !absent(filepath.Join(dir, stateGroupForgettingName)) {
 			continue
 		}
-		if !absent(filepath.Join(dir, "meta")) {
+		if !absent(filepath.Join(dir, stateGroupRecordName)) {
 			// A RECORD THAT READS RETRACTS THE CREATION MARKS (R34, item 5): a stale `pending` goes,
 			// and then `recorded`, in that order; beside a record that does not read, both stay with
 			// the record, which decides the directory either way
-			if !absent(filepath.Join(dir, "pending")) || !absent(filepath.Join(dir, "recorded")) {
+			if !absent(filepath.Join(dir, stateGroupPendingName)) || !absent(filepath.Join(dir, stateGroupRecordedName)) {
 				if record, err := self.groupRecordInLocked(name); err == nil {
 					if self.clearPendingLocked(record.GroupId) == nil {
 						_ = self.removeLocked(self.recordedPath(record.GroupId))
@@ -1629,7 +1681,7 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 		if !creating {
 			continue
 		}
-		epochDir := filepath.Join(dir, "epoch")
+		epochDir := filepath.Join(dir, stateGroupEpochsName)
 		epochs, err := os.ReadDir(epochDir)
 		if err != nil || len(epochs) == 0 {
 			if err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
@@ -1672,12 +1724,12 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 // does not read as this store's -- one copied in from another group's folder would otherwise send an
 // erase to a group nobody made here -- is answered as the error beside "not creating".
 func (self *DurableStateStore) creatingStateInLocked(dir string, name string) ([]byte, bool, error) {
-	for _, standing := range []string{"meta", "recorded"} {
+	for _, standing := range []string{stateGroupRecordName, stateGroupRecordedName} {
 		if _, err := os.Lstat(filepath.Join(dir, standing)); !errors.Is(err, os.ErrNotExist) {
 			return nil, false, nil
 		}
 	}
-	mark, err := self.readRecord(filepath.Join(dir, "pending"), stateKindPending)
+	mark, err := self.readRecord(filepath.Join(dir, stateGroupPendingName), stateKindPending)
 	if errors.Is(err, ErrStateNotFound) {
 		return nil, false, nil
 	}
@@ -2257,10 +2309,10 @@ func (self *DurableStateStore) groupRecordInLocked(name string) (*GroupRecord, e
 	dir := filepath.Join(self.dataDir, "group", name)
 	// A GROUP BEING LEFT IS NOT A GROUP TO RESTORE: its epoch states may already be gone, and a
 	// restore of it would fail at every launch. [Device.Restore] finishes its erase instead.
-	if _, err := os.Stat(filepath.Join(dir, "forgetting")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, stateGroupForgettingName)); err == nil {
 		return nil, fmt.Errorf("%w: the group in %s is being left", ErrStateNotFound, name)
 	}
-	parts, err := self.readRecord(filepath.Join(dir, "meta"), stateKindGroupRecord)
+	parts, err := self.readRecord(filepath.Join(dir, stateGroupRecordName), stateKindGroupRecord)
 	if err != nil {
 		if errors.Is(err, ErrStateNotFound) || classifyRead(err) != readPermanent {
 			return nil, err
@@ -2499,7 +2551,7 @@ func (self *DurableStateStore) GroupsBeingForgotten() ([][]byte, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		parts, err := self.readRecord(filepath.Join(root, entry.Name(), "forgetting"), stateKindForgetting)
+		parts, err := self.readRecord(filepath.Join(root, entry.Name(), stateGroupForgettingName), stateKindForgetting)
 		if err != nil {
 			if !errors.Is(err, ErrStateNotFound) && bad == nil {
 				bad = err
@@ -2674,15 +2726,40 @@ func (self *DurableStateStore) deleteSentLocked(groupId []byte) error {
 	return nil
 }
 
-// groupDirectoryStands answers whether one group's directory stands on the disk, whatever is or is
-// not in it. [Device.ForgetGroup] asks it of a group whose record is absent: a record absent from a
-// directory that stands is a file gone missing, which proves nothing (R33), and is not "nothing is
-// here".
-func (self *DurableStateStore) groupDirectoryStands(groupId []byte) bool {
+// groupFolderState is what one group's folder holds, as the readers that decide on a missing record
+// read it: [Device.ForgetGroup] (R34, item 8) and the join gate (item 1). The sweep decides on the
+// same creating state ([DurableStateStore.creatingStateInLocked]).
+type groupFolderState int
+
+const (
+	// groupFolderNothing: no folder, or one holding none of this store's own names
+	// ([stateGroupNames]). Nothing of a group is there.
+	groupFolderNothing groupFolderState = iota
+	// groupFolderCreating: the creating state. A creation that never finished, which the sweep
+	// owns; nobody holds that group yet.
+	groupFolderCreating
+	// groupFolderStands: the store's own names stand and the folder is not in the creating state, or
+	// the folder could not be read. A record missing from it is a file gone missing, which proves
+	// nothing (R33).
+	groupFolderStands
+)
+
+// groupFolder answers what one group's folder holds: see [groupFolderState].
+func (self *DurableStateStore) groupFolder(groupId []byte) groupFolderState {
 	self.lock.Lock()
 	defer self.lock.Unlock()
-	_, err := os.Lstat(self.groupDir(groupId))
-	return !errors.Is(err, os.ErrNotExist)
+	dir := self.groupDir(groupId)
+	holds, err := stateFolderHoldsOwnNames(dir)
+	switch {
+	case err != nil:
+		return groupFolderStands
+	case !holds:
+		return groupFolderNothing
+	}
+	if _, creating, _ := self.creatingStateInLocked(dir, stateNameOf(groupId)); creating {
+		return groupFolderCreating
+	}
+	return groupFolderStands
 }
 
 // stateIsNotADirectory answers whether something other than a directory stands at path. Anything

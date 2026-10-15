@@ -130,10 +130,13 @@ func (self *Device) ForgetGroup(groupId []byte) error {
 		}
 		switch {
 		case !onDisk:
-			// A RECORD AND A DIRECTORY BOTH ABSENT ARE "NOTHING IS HERE", and erase nothing. A
-			// record absent from a directory that STANDS is a file gone missing, which proves
-			// nothing (R33): refused, as unproven, and nothing is written.
-			if dir, asks := store.(interface{ groupDirectoryStands([]byte) bool }); asks && dir.groupDirectoryStands(groupId) {
+			// A RECORD MISSING FROM A FOLDER THAT HOLDS NOTHING OF A GROUP IS "NOTHING IS HERE" (R33;
+			// R34, item 8), and erases nothing: no folder; a folder holding none of the store's own
+			// names, whose files are not the store's (a desktop.ini, a sync tool's copy); or a folder
+			// in the creating state, which the sweep owns. A record missing from a folder where the
+			// store's own files STAND is a file gone missing, which proves nothing (R33): refused, as
+			// unproven, and nothing is written.
+			if folder, asks := store.(interface{ groupFolder([]byte) groupFolderState }); asks && folder.groupFolder(groupId) == groupFolderStands {
 				return fmt.Errorf("urmessage: whether this device holds group %x on its disk could not be read, so nothing was left: %w: its directory stands and its record is not in it",
 					groupId, ErrGroupReadUnproven)
 			}
