@@ -1202,13 +1202,18 @@ func (self *DurableStateStore) pendingPath(groupId []byte) string {
 	return filepath.Join(self.groupDir(groupId), stateGroupPendingName)
 }
 
-// recordedPath is the RETRACTION of the creation mark (R34, item 3): the fact, written by
-// [DurableStateStore.PutGroupRecord], that the group's record IS written although the `pending` mark
-// beside it could not be removed. A mark whose removal failed -- a scanner held it with no delete
-// sharing at the moment the record landed -- is a fact this store wrote that a later event made
-// false, and the sweep would otherwise erase the group on it if the record then went missing. A
-// handle on `pending` does not block creating this file. A Restore that reads the record takes both
-// away, `pending` first.
+// recordedPath is the RETRACTION of the creation mark (R34, item 3), KEPT FOR THE GROUP'S LIFE (R36,
+// item 1): the fact, written by [DurableStateStore.PutGroupRecord] once the group's record is synced,
+// that the group's record IS written. A folder holding it is never in the creating state, whatever
+// else stands or is missing beside it, so the sweep never takes the group on a creation mark that
+// another program put back. It used to be written only when the mark's removal failed, and taken
+// away again whenever the mark was gone; a mark that was merely ELSEWHERE then -- moved away by a
+// quarantine as the record landed, or while a Restore read the record -- read as removed, nothing
+// retracted it when it came back, and the sweep erased a live group on it. So nothing takes it away
+// but the two erases whose reason makes it false: a leave ((a), [DurableStateStore.DeleteGroupRecord])
+// and a failed join erasing the record it wrote ((d), [DurableStateStore.eraseJoinedRecord]). A
+// Restore that reads the record writes it where it is missing. A handle on `pending` does not block
+// creating this file.
 func (self *DurableStateStore) recordedPath(groupId []byte) string {
 	return filepath.Join(self.groupDir(groupId), stateGroupRecordedName)
 }
@@ -1640,10 +1645,12 @@ func (self *DurableStateStore) deleteGroupStateAt(groupId []byte, epoch uint64) 
 //
 // AND ONLY WHILE THAT PROOF IS STILL TRUE (R34, items 4 to 6): a folder is erased only in THE
 // CREATING STATE ([DurableStateStore.creatingStateInLocked]) -- the mark stands, and neither the
-// record nor the mark's retraction (`recorded`) does. A mark whose removal failed when the record
-// landed is retracted by that file, so a record that later goes missing is not taken for a creation
-// that never finished. A folder whose record reads has its marks taken away: a stale `pending`
-// first, then `recorded`, so that the mark never stands alone beside a record that is written.
+// record nor the mark's retraction (`recorded`) does. The retraction is written when the record
+// lands and kept for the group's life (R36, item 1), so a record that later goes missing is not
+// taken for a creation that never finished, whether the mark beside it failed to go or was put back
+// by another program. A folder whose record reads KEEPS its retraction, which this sweep writes
+// where it is missing, and has a stale `pending` taken away: the mark never stands beside a record
+// that is written without the fact that retracts it.
 //
 // WHAT SUCH A DIRECTORY IS. A join that died between its commit and its record, a join whose
 // record could not be written, or a founder that died before [Group.Open] wrote its first record.
@@ -1696,14 +1703,16 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 			continue
 		}
 		if !absent(filepath.Join(dir, stateGroupRecordName)) {
-			// A RECORD THAT READS RETRACTS THE CREATION MARKS (R34, item 5): a stale `pending` goes,
-			// and then `recorded`, in that order; beside a record that does not read, both stay with
-			// the record, which decides the directory either way
-			if !absent(filepath.Join(dir, stateGroupPendingName)) || !absent(filepath.Join(dir, stateGroupRecordedName)) {
+			// A RECORD THAT READS KEEPS ITS RETRACTION AND TAKES A STALE MARK AWAY (R34, item 5; R36,
+			// item 1): `recorded` is written where it is missing, and then `pending` goes, both best
+			// effort; beside a record that does not read, both stay as they are, with the record
+			// deciding the directory either way
+			if absent(filepath.Join(dir, stateGroupRecordedName)) || !absent(filepath.Join(dir, stateGroupPendingName)) {
 				if record, err := self.groupRecordInLocked(name); err == nil {
-					if self.clearPendingLocked(record.GroupId) == nil {
-						_ = self.removeLocked(self.recordedPath(record.GroupId))
+					if absent(self.recordedPath(record.GroupId)) {
+						_ = self.writeRecord(self.recordedPath(record.GroupId), stateKindRecorded, record.GroupId)
 					}
+					_ = self.clearPendingLocked(record.GroupId)
 				}
 			}
 			continue
@@ -2089,30 +2098,32 @@ func (self *DurableStateStore) PutGroupRecord(record *GroupRecord) error {
 		witness, ledger, removal); err != nil {
 		return err
 	}
-	// THE CREATION MARK GOES ONCE THE RECORD IS SYNCED (R33), AND WHEN IT CANNOT GO, ITS RETRACTION IS
-	// WRITTEN BESIDE IT (R34, item 3). A mark that stands beside a record that is written is a fact
-	// this store wrote that is no longer true -- a scanner holding the mark with no delete sharing at
-	// this moment was enough -- and the sweep would erase the group on it if the record then went
-	// missing, with no crash at all. So the fact that the record IS written goes down as a file of
-	// its own, `recorded` ([DurableStateStore.recordedPath]), which a handle on `pending` does not
-	// stop. If that fails too, the record is written and this store could not record that it was:
-	// the caller is told so, and treats the record as not written (MG-15 names what that leaves).
-	if err := self.clearPendingLocked(record.GroupId); err != nil {
-		if recordedErr := self.writeRecord(self.recordedPath(record.GroupId), stateKindRecorded, record.GroupId); recordedErr != nil {
-			return fmt.Errorf("%w: group %x: %w: the creation mark could not be removed: %w; and its retraction could not be written: %w",
-				ErrStateStoreState, record.GroupId, errCreationUnretracted, err, recordedErr)
-		}
-		return nil
+	// THE CREATION IS RETRACTED ONCE THE RECORD IS SYNCED, BY A FACT KEPT FOR THE GROUP'S LIFE (R33;
+	// R34, item 3; R36, item 1). `recorded` ([DurableStateStore.recordedPath]) is written where it is
+	// not already standing, and then the creation mark goes, best effort. The retraction is what
+	// decides: a folder holding it is never in the creating state, so a mark that stands beside a
+	// record that is written -- one a scanner held with no delete sharing at this moment, or one a
+	// quarantine had moved away and later puts back -- is never a reason for the sweep. It is written
+	// whether or not the mark can be found, because a mark that is not there may only be elsewhere.
+	// A `recorded` that stands as anything but a file is no retraction, and is written over. Only when
+	// the retraction cannot be written AND the mark cannot be removed is the record written with
+	// nothing true about the creation beside it: the caller is told so, and treats the record as not
+	// written (MG-15 names what that leaves).
+	var recordedErr error
+	if info, err := os.Lstat(self.recordedPath(record.GroupId)); err != nil || !info.Mode().IsRegular() {
+		recordedErr = self.writeRecord(self.recordedPath(record.GroupId), stateKindRecorded, record.GroupId)
 	}
-	// the mark is gone, so a retraction an earlier call wrote retracts nothing now: best effort
-	_ = self.removeLocked(self.recordedPath(record.GroupId))
+	if err := self.clearPendingLocked(record.GroupId); err != nil && recordedErr != nil {
+		return fmt.Errorf("%w: group %x: %w: the creation mark could not be removed: %w; and its retraction could not be written: %w",
+			ErrStateStoreState, record.GroupId, errCreationUnretracted, err, recordedErr)
+	}
 	return nil
 }
 
-// errCreationUnretracted is [DurableStateStore.PutGroupRecord]'s double failure (R34, item 3): the
-// record is written, and neither the creation mark's removal nor its retraction could be. The
-// callers treat the record as not written: a join erases what it wrote, and [Group.Open] says what
-// happened.
+// errCreationUnretracted is [DurableStateStore.PutGroupRecord]'s double failure (R34, item 3; R36,
+// item 1): the record is written, the creation's retraction could not be written, and the creation
+// mark could not be removed. The callers treat the record as not written: a join erases what it
+// wrote, and [Group.Open] says what happened.
 var errCreationUnretracted = errors.New("its record is on the disk and this store could not record that its creation finished")
 
 // encodeWrapDark is [GroupRecord.WrapDarkKind] and [GroupRecord.WrapDarkEpoch] as the one octet
@@ -2516,7 +2527,8 @@ func (self *DurableStateStore) DeleteGroupRecord(groupId []byte) error {
 		return err
 	}
 	// the creation mark, which a crash between a record and the mark's removal leaves beside it, and
-	// then its retraction (R34, item 5), both before the leave mark
+	// then its retraction, which a leave is one of the two erases to take (R34, item 5; R36, item 1),
+	// both before the leave mark
 	if err := self.clearPendingLocked(groupId); err != nil {
 		return err
 	}
