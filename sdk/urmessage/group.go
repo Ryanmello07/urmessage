@@ -1302,7 +1302,7 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 	// ONE ADMISSION AT A TIME, from the question below to the hold: see [Device.admitMutex].
 	self.admitMutex.Lock()
 	defer self.admitMutex.Unlock()
-	if err := self.finishLeaveBefore(groupId); err != nil {
+	if err := self.finishLeaveBefore(groupId, "no group is founded under it"); err != nil {
 		return nil, err
 	}
 	// NOTHING IS FOUNDED UNDER AN ID THIS DEVICE HOLDS: see [Device.foundOverHeldGroup]. It is asked
@@ -1406,7 +1406,7 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 	// the map entry is one critical section.
 	self.admitMutex.Lock()
 	defer self.admitMutex.Unlock()
-	if err := self.finishLeaveBefore(invite.GroupId); err != nil {
+	if err := self.finishLeaveBefore(invite.GroupId, "the invite into it is refused"); err != nil {
 		return nil, err
 	}
 	nonce, nonceEpoch, err := self.nonce()

@@ -67,8 +67,9 @@ func (self *Device) joinOverHeldGroup(groupId []byte) (replaces *Group, readd bo
 		// A RECORD MISSING FROM A FOLDER WHERE THE STORE'S OWN FILES STAND IS NOT "NOT HELD" (R34, item
 		// 1): a file gone missing proves nothing (R33), and a join that then failed after its commit
 		// took its scope from this answer. Refused as unproven, in the form a record that could not
-		// be read is refused in. No folder, a folder holding none of the store's own names, and a
-		// folder in the creating state are not held, as before.
+		// be read is refused in. No folder, a folder holding none of the store's own names (an emptied
+		// `epoch` or `sent` folder is none, R36, item 3), and a folder in the creating state are not
+		// held, as before.
 		if folder, asks := store.(interface{ groupFolder([]byte) groupFolderState }); asks && folder.groupFolder(groupId) == groupFolderStands {
 			return nil, false, 0, fmt.Errorf("urmessage: whether this device already holds group %x could not be read, so the invite into it is refused: %w: its directory stands and its record is not in it",
 				groupId, ErrGroupReadUnproven)

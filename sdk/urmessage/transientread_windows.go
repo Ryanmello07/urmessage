@@ -12,9 +12,17 @@ var transientErrnos = []syscall.Errno{
 }
 
 // permanentErrnos is [classifyRead]'s allow-list of errnos that PROVE a read will never succeed on
-// Windows, and each is a fact about the DATA (R29, amended by R30 and R33): a path of the wrong type,
-// unambiguously. The numbered ones are what the OS answers; the named ones are the values package
-// syscall defines on Windows, which package os itself returns, each meaning what its name says.
+// Windows, and each is a fact about the DATA (R29, amended by R30 and R33): a path of the wrong type.
+// The numbered ones are what the OS answers; the named ones are the values package syscall defines on
+// Windows, which package os itself returns, each meaning what its name says.
+//
+// AND EACH IS PROOF ONLY BESIDE THE TYPE IT CLAIMS (R36, item 4). ERROR_INVALID_FUNCTION (1) is what
+// ReadFile answers on a directory, and also what a WinFsp or Dokan mount (rclone, Cryptomator,
+// SSHFS-Win) or a minifilter answers for an intact file whose request it does not implement. So
+// [classifyRead] takes any of these as proof only inside a [stateWrongType]: the store's own Lstat of
+// the name, at the verdict, showed a type the store never writes there -- and never a reparse point
+// Go reports as irregular, a cloud placeholder of the store's own file or a junction among them
+// (R38, item 2).
 //
 // NOT HERE, AND WHY. A permission refused (5) and the medium (23, 27, 30) are facts about the
 // environment, which can change while the data is intact (R30). And AN ABSENCE IS NEVER PROOF (R33):

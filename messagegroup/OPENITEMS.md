@@ -1264,19 +1264,96 @@ join's would, and the failed join takes it as its own.
 **And two cells of R34's authority-by-adversary table are accepted rather than closed.**
 - A stray at one of the store's OWN names, of the wrong type -- a file where the store keeps `sent`,
   a directory where it keeps `meta`, `heads` or an epoch state -- is a path of the wrong type, which
-  R29 and R33 rule proof that the group can never be read: a leave then takes the group without the
-  owner's question, although taking the stray away would have made it readable again. A stray under
-  any other name proves nothing and is never taken.
+  R29 and R33 rule proof that the group can never be read, when the store's own Lstat of the name,
+  at the verdict, finds that type (R36): a PLAIN directory where the store writes a file, a PLAIN
+  regular file where it keeps a directory, or a symbolic link at either -- and never anything Go
+  reports as irregular, a cloud placeholder of the store's own file, a WOF-compressed file, a
+  junction or a mount point among them (R38). A leave then takes the group without the owner's
+  question, although taking the stray away would have made it readable again. A stray under any
+  other name is never taken, and since R38 it never enters a verdict in ANY listing: a file not named
+  the way the store names its entries is skipped wherever a listing decides anything, as an
+  unfinished write is -- inside `sent/` too, where a restore used to refuse one as a copy the store
+  did not write, a format verdict on which the person's leave took the group without the owner's
+  question (found and reproduced at T1 FIX 6) -- and a folder in the groups' root not named as the
+  store names a group's is not read at all. The leave's own erase still stops at a stray, which is
+  the cost R38 accepts.
 - A folder REPLACED by another program between a decision and the erase it decides -- a leave's
   fresh verdict and its erase, or the sweep's reading of the creating state and its removals -- is
   erased on the decision made about the folder that was there before. Both run inside one call
   under the store's lock, so the window is that call's.
+
+**R36 closes the table's column 7, ONE STORE FILE PUT BACK, and names what stays.** R33's adversary
+also puts back single files -- a quarantine restored, a sync tool's re-download -- and every
+authority but the fresh verdict and the epoch window is a fact read from one small file. Each such
+fact is now one that a single file put back cannot bring back false:
+- the creating mark's: `recorded`, the creation's retraction, is kept for the group's life, and only
+  a leave or a failed join takes it, so a creation mark put back beside it is never a creation;
+- the leave mark's: the mark names E, the highest epoch the device held of the group at the
+  decision, and a leave is finished only while nothing of a later join stands above E, so a mark
+  put back after the group was joined again is removed and erases nothing;
+- an empty `epoch` or `sent` folder holds nothing of a group, so one a leave could not remove -- an
+  open handle with no delete sharing on it -- no longer refuses every re-join of the group;
+- and a wrong-type code is proof only beside the type the store's own Lstat finds at the name -- a
+  plain directory, a plain regular file or a symbolic link, and never anything irregular (R38).
+
+What stays:
+- **A quarantined leave mark undoes a leave.** A leave that stopped part way -- a file held while
+  its erase ran -- and whose mark another program then moves away is a group on the disk that is not
+  being left: its leave answers that the group has not been restored, and Restore brings it back.
+  Nothing is erased that the person did not ask for, and the group can be left again, but the
+  person's leave did not hold.
+- **W1: a file of a FINISHED leave, put back, strands the group id on this device** (round 6;
+  ACCEPTED in T1 by R39). The sequence: ONE of the group's files -- its record `meta`, an epoch state,
+  or `recorded` (or a copy of a sent line) -- is quarantined while the group is live; the person
+  leaves, the leave finishes, and the folder is removed; then the file is restored. The finished
+  leave removed its own mark last, so no fact is left to name the restored file as the left group's.
+  The cost: the group reads as unproven at every Restore (a put-back `meta` reads as a live record
+  whose states are gone; a put-back epoch state or `recorded` is one of the store's own names with no
+  record beside it), its leave and a re-join are both refused, and the restored file's secrets stay
+  on the disk -- the pq_secret table and handle key, or a leaf's private keys -- on a store that is
+  not encrypted at rest (S2-24). Nothing is erased: the library refuses to erase a file it has no
+  true reason to erase, which is the property working, so what W1 costs is liveness and hygiene, and
+  findings of that class wait for the two fixes below -- the store track, and "erase anyway", the
+  person's explicit command, which is the store track's first item. A tombstone mark kept by every
+  finished leave was weighed and is not built in T1 (R39): it adds a kept fact per left group, a
+  finished-or-under-way distinction on every road, and put-back cells of its own.
+- **A single `meta` put back during a join** (R36's L3), into a folder the join gate read as holding
+  nothing of a group or a creation that never finished: if the join then fails after its commit,
+  `eraseJoinedRecord` takes that file unread as the join's own record; if the join succeeds, the
+  join's own record write replaces it. Neither half can be produced without interleaving inside
+  `Device.Join`.
+- **Anything that needs two or more of the store's files moved or put back in a sequence, or two or
+  more events.** Each is filed here with its sequence, for the store track below; by R36's budget
+  none is fixed inside T1:
+  - the creation mark put back while the record AND its retraction are both away, which is the
+    creating state again, so the sweep takes the group's epoch states; or the double failure above;
+  - `recorded` failing to write as a record lands (a full disk after `meta`), then the creation mark
+    put back, then `meta` moved away: the creating state again, three events;
+  - an old leave mark put back into the folder of a SECOND founder's group under the same id (MG-12's
+    attacker server), whose epochs are at or below the mark's E: the finish takes that group --
+    MG-12 and a put-back;
+  - a join over a creation that never finished, whose record lands and whose persist then fails (a
+    directory sync failing after the rename, Linux only): the record's write removed the earlier
+    creation's mark, and the failed join then leaves that creation's epoch states unmarked, never
+    swept, in a folder that stands with no record. Two events -- the crash that left the creation,
+    and the sync failure -- and it LEAKS that creation's leaf keys while erasing nothing.
 
 ### What a fix would be
 
 An explicit export, "erase this copy anyway", that a person chooses knowing what it costs, with the
 owner's question asked where the roster can still be read. Until then, the way out is deleting
 URmessage's folder, which this file says so that nobody has to find it out.
+
+And for the whole class above -- an authority kept as a fact in one small file, which another program
+that moves or puts back the store's files can make false -- the fix is a different store: THE STORE
+TRACK. A store in which a group's files change in one transaction needs no mark at all, and so has
+none to bring back; Spec A §8.1 describes such a store, on SQLite. It is filed after T1 as its own
+plan (R36's budget), and until then this item holds the class.
+
+THE STORE TRACK'S FIRST ITEM IS "ERASE ANYWAY" (R39): the person's explicit command to remove what is
+left of a group on this device, which is a true reason. With it, W1 and every other case above where
+the library correctly refuses to erase -- a group that stays unproven, a group id this device cannot
+re-join -- has one way out, and deleting URmessage's folder stops being it.
 
 ### What is owed elsewhere
 

@@ -13,6 +13,10 @@ var transientErrnos = []syscall.Errno{syscall.EAGAIN, syscall.EINTR, syscall.EBU
 // A permission refused (EACCES, EPERM) and the medium (EIO) are NOT here: they are facts about the
 // environment, which can change while the data is intact (R30). And ENOENT is not here either: AN
 // ABSENCE IS NEVER PROOF (R33), because software on the machine can move a file away and back.
+//
+// AND EACH IS PROOF ONLY BESIDE THE TYPE IT CLAIMS (R36, item 4): a FUSE filesystem may answer any of
+// them for an intact file, so [classifyRead] takes them as proof only inside a [stateWrongType], the
+// store's own Lstat of the name, at the verdict, having shown a type the store never writes there.
 var permanentErrnos = []syscall.Errno{
 	syscall.EISDIR, syscall.ENOTDIR, syscall.ELOOP,
 }

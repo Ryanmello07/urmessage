@@ -216,12 +216,24 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	// on the disk. A group being left is never restored ([DurableStateStore.GroupRecords] skips
 	// it), and an erase that fails again is reported and tried again at the next Restore.
 	// one mark it cannot read is reported, and does not stop the others being finished
+	//
+	// AND ONLY A MARK THAT STILL NAMES THE JOIN OF ITS GROUP THAT STANDS IS FINISHED (R36, item 2).
+	// A mark naming an earlier join -- a quarantined mark put back after this device was removed and
+	// joined the group again -- is removed by the store and finishes nothing, so the group it stood
+	// beside is restored below; the store holds the mark against what stands again at the erase
+	// itself. A mark that cannot be held against what stands now (its record could not be read just
+	// now) is reported with its class, stays, and is decided by a later Restore.
 	leaving, unfinished := store.GroupsBeingForgotten()
 	for _, groupId := range leaving {
 		if self.holdsGroup(groupId) {
 			continue
 		}
-		if err := store.DeleteGroupRecord(groupId); err != nil && unfinished == nil {
+		err := store.DeleteGroupRecord(groupId)
+		switch {
+		case err == nil, errors.Is(err, errLeaveMarkStale), unfinished != nil:
+		case errors.Is(err, ErrGroupReadUnproven), errors.Is(err, ErrGroupRecordNotReadNow):
+			unfinished = err
+		default:
 			unfinished = fmt.Errorf("%w: group %x: %w", ErrForgetUnfinished, groupId, err)
 		}
 	}

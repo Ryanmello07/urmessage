@@ -83,8 +83,8 @@ func erasescopeLost(before map[string][]byte, after map[string][]byte) []string 
 // and a lock, so the mark's removal fails and the record is written. Bob joins. At the next start
 // alice's record is moved out of its folder: the Restore erases nothing, because the folder holds the
 // mark's retraction, `recorded`, and so is not in the creating state. With the record put back the
-// group comes back, the Restore that read the record took both marks away, and alice's leave is the
-// owner's question.
+// group comes back, the Restore that read the record took the stale mark away and KEPT the
+// retraction, for the group's life (R36, item 1), and alice's leave is the owner's question.
 //
 // WHAT WOULD GO RED: the mark cleared best effort and nothing written when that failed -- measured
 // at fdc1b0a: the Restore with the record away erased the owner's live group, files 4 to 0, and the
@@ -160,11 +160,13 @@ func TestT1V4AMarkWhoseRemovalFailed(t *testing.T) {
 	if err != nil || len(restored) != 1 {
 		t.Fatalf("Restore with the record back answered %d group(s), %v, want the owner's live group", len(restored), err)
 	}
-	// THE RESTORE THAT READ THE RECORD TOOK BOTH MARKS AWAY (R34, item 5)
-	for _, mark := range []string{"pending", "recorded"} {
-		if _, err := os.Stat(filepath.Join(dir, mark)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("%s stands beside a record that read: %v", mark, err)
-		}
+	// THE RESTORE THAT READ THE RECORD TOOK THE STALE MARK AWAY AND KEPT ITS RETRACTION (R34, item 5;
+	// R36, item 1)
+	if _, err := os.Stat(filepath.Join(dir, "pending")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the creation mark stands beside a record that read: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "recorded")); err != nil {
+		t.Errorf("the Restore that read the record took the retraction away: %v", err)
 	}
 	if err := alice.device.ForgetGroup(groupId); !errors.Is(err, urmessage.ErrOwnerMustTransfer) {
 		t.Errorf("the owner's leave answered %v, want the owner's question", err)

@@ -212,6 +212,10 @@ func TestATruthfulClampIsCaughtAndALyingOneIsNot(t *testing.T) {
 // THIS CASE WAS CHANGED BY R33, TRUTHFULLY: the first state of a group is TWO values now, because
 // the call that creates the group's directory names its `pending` mark first. A state written into
 // the directory that stands is one, and so is every other write.
+//
+// AND BY R36, TRUTHFULLY: the first record of a group is two values as well, because the record's
+// write names the creation's retraction, `recorded`, beside it, which is kept for the group's life.
+// A record written while that retraction stands is one.
 func TestEveryValueTheDurableStoreNamesWasFlushedFirst(t *testing.T) {
 	store := openTestStore(t, t.TempDir())
 	if store.flushCount() != 0 {
@@ -228,9 +232,14 @@ func TestEveryValueTheDurableStoreNamesWasFlushedFirst(t *testing.T) {
 		{"PutPrivateKey", 1, func() error { return store.PutPrivateKey(testPub, testPriv) }},
 		{"PutKeyPackage", 1, func() error { return store.PutKeyPackage(testRef, testKp, testInit, testEnc) }},
 		{"PutDeviceIdentity", 1, func() error { return store.PutDeviceIdentity(testPub, testPriv, testKp, testWrapSeed) }},
-		{"PutGroupRecord", 1, func() error {
+		{"PutGroupRecord, the group's first record", 2, func() error {
 			return store.PutGroupRecord(&GroupRecord{
 				GroupId: testGroupId, PqSecret: testPriv, GroupHandleKey: testPub, Epoch: 0,
+			})
+		}},
+		{"PutGroupRecord beside the retraction that stands", 1, func() error {
+			return store.PutGroupRecord(&GroupRecord{
+				GroupId: testGroupId, PqSecret: testPriv, GroupHandleKey: testPub, Epoch: 0, Opened: true,
 			})
 		}},
 	} {

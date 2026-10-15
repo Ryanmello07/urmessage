@@ -92,10 +92,29 @@ func failClosedFiles(t *testing.T, store *DurableStateStore, groupId []byte) map
 	return files
 }
 
-// asStoreRead is an OS error as the durable store wraps one: its own sentinel, and the error.
+// asStoreRead is an OS error as the durable store wraps one: its own sentinel, and the error. A
+// wrong-type errno carried this way is one no Lstat of the store's confirmed (R36, item 4).
 func asStoreRead(errno syscall.Errno) error {
 	return fmt.Errorf("%w: epoch/0000000000000001 could not be read: %w", ErrStateStoreState,
 		&os.PathError{Op: "open", Path: "epoch/0000000000000001", Err: errno})
+}
+
+// asConfirmedStoreRead is a wrong-type errno as the durable store carries one its own Lstat CONFIRMED
+// (R36, item 4): a directory stands at an epoch state's name in a real store, and the store's own
+// confirmation over that name wraps the error before the store's sentinel does, as its read does.
+func asConfirmedStoreRead(t *testing.T, errno syscall.Errno) error {
+	t.Helper()
+	store := openTestStore(t, t.TempDir())
+	path := filepath.Join(store.epochDir(testGroupId), stateEpochName(1))
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cause := store.confirmWrongType(path, false, &os.PathError{Op: "read", Path: path, Err: errno})
+	var confirmed *stateWrongType
+	if !errors.As(cause, &confirmed) {
+		t.Fatalf("CONTROL FAILED: a directory at an epoch state's name did not confirm errno %d", uint(errno))
+	}
+	return fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, path, cause)
 }
 
 // tooManyOpenFiles is this platform's errno for a process out of file handles.
@@ -115,14 +134,17 @@ func tooManyOpenFiles() syscall.Errno {
 // many open files, out of memory, no system resources), a permanent-looking errno the store did not
 // carry, a cancelled context, an engine refusal, nil.
 //
-// THIS CASE WAS CHANGED TWICE, TRUTHFULLY. R30 moved EACCES, EPERM, EIO and Windows 5, 23, 27 and 30
-// from proven permanent to unproven. R33 moved an absence there too: ErrStateNotFound, ENOENT,
-// Windows 2, 3 (which is also package syscall's ENOTDIR on Windows) and 53.
+// THIS CASE WAS CHANGED THREE TIMES, TRUTHFULLY. R30 moved EACCES, EPERM, EIO and Windows 5, 23, 27
+// and 30 from proven permanent to unproven. R33 moved an absence there too: ErrStateNotFound, ENOENT,
+// Windows 2, 3 (which is also package syscall's ENOTDIR on Windows) and 53. R36 made each wrong-type
+// errno proof only when the store's own Lstat confirmed the type: carried with no confirmation, it is
+// unproven.
 //
 // WHAT WOULD GO RED: a classifier that answers "permanent" by default, which is the fail-open rule
 // that leaked three times; one that drops a class R30 proves permanent, and that group can no longer
-// be left; or one that calls a refused permission damage, and intact data is erased because of the
-// environment.
+// be left; one that calls a refused permission damage, and intact data is erased because of the
+// environment; or one that takes a wrong-type code alone for proof, and intact data is erased because
+// of a mount type.
 func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
 	permanentByErrno := []syscall.Errno{syscall.EISDIR, syscall.ELOOP}
 	unprovenByErrno := []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOMEM,
@@ -136,8 +158,11 @@ func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
 		permanentByErrno = append(permanentByErrno, syscall.ENOTDIR)
 	}
 	for _, errno := range permanentByErrno {
-		if got := classifyRead(asStoreRead(errno)); got != readPermanent {
-			t.Errorf("errno %d (%v), carried by the store, is classed %d, want proven permanent", uint(errno), errno, got)
+		if got := classifyRead(asConfirmedStoreRead(t, errno)); got != readPermanent {
+			t.Errorf("errno %d (%v), carried by the store and confirmed by its own Lstat, is classed %d, want proven permanent", uint(errno), errno, got)
+		}
+		if got := classifyRead(asStoreRead(errno)); got != readUnproven {
+			t.Errorf("errno %d (%v), carried by the store with no Lstat of its confirming the type, is classed %d, want unproven (R36, item 4)", uint(errno), errno, got)
 		}
 		if got := classifyRead(&os.PathError{Op: "open", Path: "x", Err: errno}); got != readUnproven {
 			t.Errorf("errno %d NOT carried by the store is classed %d, want unproven: an errno anybody else carried proves nothing about this disk", uint(errno), got)
@@ -182,7 +207,9 @@ func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
 // too-many-open-files errno, (c) a failure that is not the store's at all, (e) a permission refused
 // and (f) the medium, the two R30 took off the proven list because they are facts about the
 // environment, and (g) the store's "holds no such value" and (h) the platform's not-found errno, the
-// absences R33 took off it because a file moved away can come back. For each, the failure lasting
+// absences R33 took off it because a file moved away can come back, and (i) each of this platform's
+// wrong-type errnos with no Lstat of the store's confirming the type, which R36 took off it because
+// a mount type or a filter driver answers them for an intact file. For each, the failure lasting
 // through the leave's own fresh attempt: Restore reports the group under
 // [ErrGroupReadUnproven] and not as damage, notes it nowhere as a group that will not come back,
 // and the leave of it is refused with that same sentence and "so nothing was left", with every
@@ -192,7 +219,7 @@ func TestOnlyAnAllowListedFailureIsProvenPermanent(t *testing.T) {
 // erased without the owner's question, which is the erase the three leaks made.
 func TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused(t *testing.T) {
 	ctx := context.Background()
-	for _, one := range []struct {
+	cases := []struct {
 		name     string
 		failWith error
 	}{
@@ -203,7 +230,14 @@ func TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused(t 
 		{"(f) the medium", asStoreRead(syscall.EIO)},
 		{"(g) the store holds no such value", fmt.Errorf("%w: 0000000000000001", ErrStateNotFound)},
 		{"(h) the platform's not-found errno", asStoreRead(syscall.ENOENT)},
-	} {
+	}
+	for _, errno := range permanentErrnos {
+		cases = append(cases, struct {
+			name     string
+			failWith error
+		}{fmt.Sprintf("(i) wrong-type errno %d (%v) with no Lstat confirming it", uint(errno), errno), asStoreRead(errno)})
+	}
+	for _, one := range cases {
 		dir, groupId := failClosedScene(t)
 		store, device := failClosedRestart(t, dir, groupId, one.failWith)
 		before := failClosedFiles(t, store.DurableStateStore, groupId)
@@ -246,7 +280,9 @@ func TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused(t 
 // leave of it goes through without the owner's question and takes the group's directory.
 //
 // THIS CASE WAS CHANGED BY R33, TRUTHFULLY: it held "a required file absent" as proven, and an
-// absence is no longer proof of anything. That row is (g) of the unproven case above now.
+// absence is no longer proof of anything. That row is (g) of the unproven case above now. AND BY
+// R36: each errno is carried as the store carries one its own Lstat confirmed, a directory standing
+// at the name read; the same errno with no confirmation is (i) of the unproven case.
 //
 // WHAT WOULD GO RED: a classifier that drops a proven class, and that group can never be left,
 // restored or joined again.
@@ -264,7 +300,7 @@ func TestEveryProvenPermanentRestoreFailureIsStillLeft(t *testing.T) {
 		cases = append(cases, struct {
 			name     string
 			failWith error
-		}{fmt.Sprintf("errno %d (%v)", uint(errno), errno), asStoreRead(errno)})
+		}{fmt.Sprintf("errno %d (%v), confirmed", uint(errno), errno), asConfirmedStoreRead(t, errno)})
 	}
 	for _, one := range cases {
 		dir, groupId := failClosedScene(t)

@@ -171,15 +171,21 @@ func TestTheSweepErasesOnItsOwnMarkAndAStaleMarkGoes(t *testing.T) {
 	}
 }
 
-// A CREATION MARK RETRACTED BY `recorded` IS NOT A CREATION, AND A RECORD THAT READS TAKES BOTH MARKS
-// AWAY (R34, items 4 to 6). The shape a mark whose removal failed leaves, built by the store's own
-// writes: the mark, its retraction and an epoch state, with the record moved out of the folder. The
-// Restore erases nothing: the folder is not in the creating state. With the record put back, the
-// next Restore reads it and takes `pending` away, and then `recorded`.
+// A CREATION MARK RETRACTED BY `recorded` IS NOT A CREATION, AND A RECORD THAT READS TAKES THE MARK
+// AWAY AND KEEPS ITS RETRACTION (R34, items 4 to 6; R36, item 1). The shape a mark whose removal
+// failed leaves, built by the store's own writes: the mark, its retraction and an epoch state, with
+// the record moved out of the folder. The Restore erases nothing: the folder is not in the creating
+// state. With the record put back, the next Restore reads it and takes `pending` away, and `recorded`
+// stays, for the group's life.
+//
+// THIS CASE WAS CHANGED BY R36, TRUTHFULLY: it held that the Restore took `recorded` away too, and a
+// retraction taken away whenever the mark is not in its place is undone by a mark that was only
+// elsewhere (the round-5 review's Z1).
 //
 // WHAT WOULD GO RED: a sweep that asks for the mark and not for its retraction -- the owner's group
-// whose record a quarantine holds, erased on a mark that stopped being true when the record landed.
-func TestARetractedCreationMarkIsNotSweptAndARecordThatReadsTakesBothMarksAway(t *testing.T) {
+// whose record a quarantine holds, erased on a mark that stopped being true when the record landed --
+// and a sweep that takes the retraction away again.
+func TestARetractedCreationMarkIsNotSweptAndARecordThatReadsKeepsItsRetraction(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, t.TempDir())
 	groupId := bytes.Repeat([]byte{0x73}, GroupIdBytes)
@@ -223,10 +229,104 @@ func TestARetractedCreationMarkIsNotSweptAndARecordThatReadsTakesBothMarksAway(t
 	}
 	_, err = device.Restore(ctx)
 	t.Logf("Restore with the record back: %v", err)
-	for _, path := range []string{store.pendingPath(groupId), store.recordedPath(groupId)} {
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("%s stands beside a record that read: %v", filepath.Base(path), err)
+	if _, err := os.Stat(store.pendingPath(groupId)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the creation mark stands beside a record that read: %v", err)
+	}
+	if _, err := os.Stat(store.recordedPath(groupId)); err != nil {
+		t.Errorf("the Restore that read the record took its retraction away: %v", err)
+	}
+}
+
+// THE CREATION'S RETRACTION IS KEPT FOR THE GROUP'S LIFE, AND ONLY A LEAVE TAKES IT (R36, item 1: the
+// round-5 review's Z1, on every platform, with the store's own writes and plain moves). The record
+// lands and `recorded` is written beside it, with the mark gone. Then, one move at a time:
+//   - a second record write keeps it;
+//   - the creation mark put back and the record moved out of the folder: the Restore erases nothing,
+//     because the folder still holds the retraction;
+//   - the record put back: the Restore takes the mark away again and keeps the retraction;
+//   - the retraction itself moved away: the Restore that reads the record writes it again;
+//   - the leave: DeleteGroupRecord takes it, with the group.
+//
+// WHAT WOULD GO RED: `recorded` taken away whenever the mark's removal answered -- a mark that was
+// only elsewhere answers too -- and the sweep then takes a live group on the mark put back; or a
+// Restore that takes the retraction away after the mark.
+func TestTheCreationsRetractionIsKeptForTheGroupsLife(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, t.TempDir())
+	groupId := bytes.Repeat([]byte{0x77}, GroupIdBytes)
+	if err := store.PutGroupState(groupId, 1, bytes.Repeat([]byte{0x7E}, 64)); err != nil {
+		t.Fatalf("PutGroupState: %v", err)
+	}
+	mark, err := os.ReadFile(store.pendingPath(groupId))
+	if err != nil {
+		t.Fatalf("CONTROL FAILED: the store did not mark the directory its first state created: %v", err)
+	}
+	record := &GroupRecord{
+		GroupId: groupId, PqSecret: bytes.Repeat([]byte{0x2A}, 32), GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32), Epoch: 1, Opened: true,
+	}
+	for round := 1; round <= 2; round++ {
+		if err := store.PutGroupRecord(record); err != nil {
+			t.Fatalf("PutGroupRecord, round %d: %v", round, err)
 		}
+		if _, err := os.Stat(store.recordedPath(groupId)); err != nil {
+			t.Fatalf("after record write %d no retraction stands beside the record: %v", round, err)
+		}
+		if _, err := os.Stat(store.pendingPath(groupId)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("after record write %d the creation mark stands: %v", round, err)
+		}
+	}
+	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+
+	// the mark put back, and the record moved away
+	if err := os.WriteFile(store.pendingPath(groupId), mark, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aside := filepath.Join(t.TempDir(), "meta")
+	if err := os.Rename(store.groupRecordPath(groupId), aside); err != nil {
+		t.Fatal(err)
+	}
+	_, err = device.Restore(ctx)
+	t.Logf("Restore with the mark put back and the record away: %v", err)
+	if erased := store.ErasedWithNoRecord(); len(erased) != 0 {
+		t.Fatalf("the sweep erased %v: a live group, on a creation mark put back beside its retraction", erased)
+	}
+	if _, err := store.GetGroupState(groupId, 1); err != nil {
+		t.Fatalf("the epoch state does not read after that Restore: %v", err)
+	}
+
+	// the record put back (the state is the case's own octets, so the group itself does not restore,
+	// and nothing holds it: every Restore below sweeps its folder)
+	if err := os.Rename(aside, store.groupRecordPath(groupId)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = device.Restore(ctx)
+	t.Logf("Restore with the record back: %v", err)
+	if erased := store.ErasedWithNoRecord(); len(erased) != 0 {
+		t.Fatalf("the sweep erased %v, a folder whose record reads", erased)
+	}
+	if _, err := os.Stat(store.pendingPath(groupId)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the creation mark stands beside a record that read: %v", err)
+	}
+	if _, err := os.Stat(store.recordedPath(groupId)); err != nil {
+		t.Errorf("the Restore that read the record took its retraction away: %v", err)
+	}
+
+	// the retraction moved away: a Restore that reads the record writes it again
+	if err := os.Rename(store.recordedPath(groupId), filepath.Join(t.TempDir(), "recorded")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = device.Restore(ctx)
+	t.Logf("the Restore with the retraction away: %v", err)
+	if _, err := os.Stat(store.recordedPath(groupId)); err != nil {
+		t.Errorf("the Restore that read the record did not write its missing retraction again: %v", err)
+	}
+
+	// the leave takes it, with the group
+	if err := store.DeleteGroupRecord(groupId); err != nil {
+		t.Fatalf("DeleteGroupRecord: %v", err)
+	}
+	if _, err := os.Stat(store.recordedPath(groupId)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the retraction outlived the leave: %v", err)
 	}
 }
 
