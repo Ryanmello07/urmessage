@@ -2474,6 +2474,21 @@ func (self *Group) CreateCommit(byReference [][]byte, byValue []Proposal, opts *
 		if err := ValSem205ConfirmationTag(commitInput); err != nil {
 			return nil, err
 		}
+		// RFC 9420 section 7.3's COMMIT DOOR, over this committer's own path, as every receiver
+		// runs it in stageInboundCommitLocked: in the same effective context, which carries the
+		// post-proposal extension set, and over the same leaf. ValidateCommit's list leaves this
+		// door to the inbound path, and until an OwnLeafPatch could change the path leaf that
+		// was safe, since the leaf was the committer's own validated leaf with a fresh key. A
+		// patch makes it reachable: a type the leaf does not list, a type no leaf may carry, or
+		// a body that does not parse, and this committer would stage and send a commit every
+		// receiver refuses, which halts the group for each of them. Here it is refused at home,
+		// before anything is staged.
+		if commit.Path != nil {
+			if err := ValidateUpdatePathLeafNode(self.crypto, commitInput.effectiveContext(),
+				self.ownLeaf, commit.Path); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// step 8: the new epoch's verified context, which is what the boundary owes the proposal

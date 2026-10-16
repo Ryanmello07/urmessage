@@ -116,11 +116,17 @@ func testFollow(t *testing.T, receiver *Group, committer *Group, message []byte)
 // one false thing: a key package's leaf is its caller's vector, in order; a path leaf with no patch
 // is the committer's own leaf with a fresh key; a founder's leaf is urmessage_leaf_keys followed by
 // GroupConfig.LeafExtensions.
+//
+// THE FIXTURE IS OUT OF TYPE ORDER, 0xF005 before 0xF002, because order is part of what a caller
+// set and an ordered fixture cannot see it go. A canonicalising sort of the kept extensions passed
+// this test while the fixture was [0xF002, 0xF005] (the review of Tasks 8 to 10, L2-11: its mutant
+// M4, beside the plan's MI2), and failed only a classification gate that a sort spelled through a
+// helper does not trip (its V4b). Out of order, both answer [0xF002, 0xF005] here and fail.
 func TestAnUpdateKeepsEveryExtensionOfTheLeafItReplaces(t *testing.T) {
 	crypto := testCrypto(t)
 	caps := testCapabilitiesListing(ExtensionTypeUrmessageIdentity)
 	withIdentity := func(m *testMember) []Extension {
-		return []Extension{testLeafKeys(t, m), {ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: testIdentityBody(m.Name)}}
+		return []Extension{{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: testIdentityBody(m.Name)}, testLeafKeys(t, m)}
 	}
 	group, joined, bob := testJoinedPair(t, crypto, "an-update-keeps-every-extension", caps, withIdentity)
 	replaced := joined.OwnLeafNodeCopy()
@@ -356,6 +362,14 @@ func TestAGroupRequiringTheIdentityExtensionAdmitsNoKeyPackageWithoutIt(t *testi
 //
 // A commit with no path makes no leaf of its own, so there is nothing for a patch to be applied to:
 // it is refused, with nothing staged, rather than dropped in silence.
+//
+// WHAT THIS DOES NOT HOLD, said where it would be looked for. CreateCommit's comment says the tree a
+// receiver judges against is cloned before the patch and keeps the leaf as it stood. Cloning it
+// after the patch is EQUIVALENT TODAY (the review of Tasks 8 to 10, L2-13, its mutant M5): the
+// commit's own validation reads that tree only for paths, signature keys, encryption keys and
+// capabilities, and a patch changes none of them. The day a commit rule reads a committer's
+// credential or a non-capability extension from it -- the move in place of Task 42 judges a leaf by
+// its credential -- this test gains the check that tells the two trees apart.
 func TestAnOwnLeafPatchIsSignedAndTreeHashedAndNeedsAPath(t *testing.T) {
 	crypto := testCrypto(t)
 	caps := testCapabilitiesListing(ExtensionTypeUrmessageIdentity)
@@ -487,5 +501,74 @@ func TestAnUpdateAfterAnOwnLeafPatchKeepsThePatchedCredential(t *testing.T) {
 	}
 	if bytes.Equal(newIdentity, bob.IdentityPub) {
 		t.Fatal("the patched identity is bob's original one, so this case cannot tell a kept credential from a restored one")
+	}
+}
+
+// A COMMITTER REFUSES AN OWN-LEAF PATCH THAT EVERY RECEIVER REFUSES, BEFORE IT STAGES ANYTHING (the
+// review of Tasks 8 to 10, L3-1).
+//
+// Every receiver runs RFC 9420 section 7.3's commit door, ValidateUpdatePathLeafNode, over a
+// received path's leaf. Until this was written the committer never ran it over its own: CreateCommit
+// staged the commit and answered it, the server took it, and every receiver refused it, which halts
+// the group for each of them. A patch is what makes the gap reachable, so the three classes of leaf
+// the door refuses are each built by a patch here:
+//
+//   - a type the leaf does not list in its capabilities (0xF005 under capabilities without it);
+//   - a type no leaf may carry (0xF006, a group context's extension, in a leaf that lists it);
+//   - a body that does not parse (0xF002 set to the single octet 0xFF).
+//
+// For each, the committer's refusal is the door's sentinel and nothing is staged; and the same
+// patch, sent by a committer whose validation is switched off, is refused by the receiver with the
+// same sentinel, which is what says the committer refused exactly what every receiver refuses.
+// THE CONTROLS: a listed 0xF005 body, and no patch at all, are staged, and the receiver takes them.
+func TestACommitterRefusesAnOwnLeafPatchThatEveryReceiverRefuses(t *testing.T) {
+	crypto := testCrypto(t)
+	plain := func(m *testMember) []Extension { return []Extension{testLeafKeys(t, m)} }
+	for _, one := range []struct {
+		name    string
+		caps    Capabilities
+		patch   *OwnLeafPatch
+		refused bool
+	}{
+		{"0xF005 under capabilities that do not list it", testCapabilities(),
+			&OwnLeafPatch{Extensions: []Extension{{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: testIdentityBody("bob")}}}, true},
+		{"0xF006 in a leaf that lists it", testCapabilitiesListing(ExtensionTypeUrmessageIdentity, ExtensionTypeUrmessageGroupPurpose),
+			&OwnLeafPatch{Extensions: []Extension{{ExtensionType: ExtensionTypeUrmessageGroupPurpose, ExtensionData: []byte{0x00, 0x01}}}}, true},
+		{"0xF002 whose body does not parse", testCapabilitiesListing(ExtensionTypeUrmessageIdentity),
+			&OwnLeafPatch{Extensions: []Extension{{ExtensionType: ExtensionTypeUrmessageLeafKeys, ExtensionData: []byte{0xFF}}}}, true},
+		{"CONTROL: 0xF005 under capabilities that list it", testCapabilitiesListing(ExtensionTypeUrmessageIdentity),
+			&OwnLeafPatch{Extensions: []Extension{{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: testIdentityBody("bob")}}}, false},
+		{"CONTROL: no patch", testCapabilities(), nil, false},
+	} {
+		t.Run(one.name, func(t *testing.T) {
+			owner, committer, _ := testJoinedPair(t, crypto, "a-committer-refuses-"+one.name, one.caps, plain)
+			result, err := committer.CreateCommit(nil, nil, &CommitOptions{Force: true, OwnLeafPatch: one.patch})
+			_, pendingErr := committer.PendingEpoch()
+			if !one.refused {
+				if err != nil || pendingErr != nil {
+					t.Fatalf("the committer answered %v and its pending epoch %v; want a staged commit", err, pendingErr)
+				}
+				if _, err := owner.ProcessMessage(result.Commit); err != nil {
+					t.Fatalf("the receiver refused the control's commit: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, errUpdatePathLeafNodeInvalid) {
+				t.Errorf("the committer answered %v; want the commit door's refusal, errUpdatePathLeafNodeInvalid", err)
+			}
+			if !errors.Is(pendingErr, ErrNoPendingCommit) {
+				t.Errorf("the refused patch left a commit staged: %v", pendingErr)
+			}
+			// the receiver's verdict over the same patch, from a twin committer whose validation is
+			// switched off, so that the commit exists to be judged
+			twinOwner, twin, _ := testJoinedPair(t, crypto, "a-committer-refuses-"+one.name, one.caps, plain)
+			sent, err := twin.CreateCommit(nil, nil, &CommitOptions{Force: true, OwnLeafPatch: one.patch, skipValidation: true})
+			if err != nil {
+				t.Fatalf("the twin committer, its validation off, answered %v", err)
+			}
+			if _, err := twinOwner.ProcessMessage(sent.Commit); !errors.Is(err, errUpdatePathLeafNodeInvalid) {
+				t.Errorf("the receiver answered %v over the patch the committer refused; want the same door's refusal", err)
+			}
+		})
 	}
 }

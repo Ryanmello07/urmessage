@@ -98,9 +98,10 @@ type CommitOptions struct {
 // refuses every repeat.
 //
 // Nothing here is checked that a path leaf is not checked for already: the leaf the patch makes is
-// judged by the commit's own validation as every path leaf is, so a type a leaf may not carry, or
-// one the leaf does not list, is a commit its committer refuses to send. A patch changes no
-// capability.
+// judged by RFC 9420 section 7.3's commit door, ValidateUpdatePathLeafNode, which CreateCommit runs
+// over its own path before it stages anything, in the effective context every receiver judges it
+// in. So a type a leaf may not carry, one the leaf does not list, or a body that does not parse is
+// a commit its committer refuses to send. A patch changes no capability.
 type OwnLeafPatch struct {
 	// Credential, when it is not nil, replaces the leaf's credential.
 	Credential *Credential
