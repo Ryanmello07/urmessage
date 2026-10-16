@@ -1311,6 +1311,12 @@ func callerOwnedGroupArguments(t *testing.T) (*GroupConfig, SignaturePrivateKey,
 			AlgId:          AlgIdXwing,
 			DeviceXwingPub: bytes.Repeat([]byte{0x62}, XwingPublicKeyLen),
 		},
+		// the founder's own leaf's further extensions, which the founder's leaf carries: the
+		// identity layer's, whose body is a run of octets this gate can follow
+		LeafExtensions: []Extension{{
+			ExtensionType: ExtensionTypeUrmessageIdentity,
+			ExtensionData: []byte("the founder's identity extension body this gate follows"),
+		}},
 	}
 	return cfg, SignaturePrivateKey(bytes.Repeat([]byte{0x54}, 32)),
 		Credential{CredentialType: CredentialTypeBasic, Identity: bytes.Clone(identity)}
@@ -1367,8 +1373,14 @@ func callerOwnedJoinArguments(t *testing.T) (*GroupConfig, []byte, []byte, *Join
 		SignPrivate:    SignaturePrivateKey(bytes.Clone(joiner.SigPriv)),
 	}
 	keys.KeyPackage.LeafNode.ParentHash = []byte("the parent hash a key_package leaf does not encode")
-	return testGroupConfig(t, crypto, joiner, "the group this gate joins"),
-		result.Welcome, result.RatchetTree, keys
+	// a founding's own field, which a join does not read and is handed anyway, so that a join that
+	// kept the array would be seen keeping it
+	cfg := testGroupConfig(t, crypto, joiner, "the group this gate joins")
+	cfg.LeafExtensions = []Extension{{
+		ExtensionType: ExtensionTypeUrmessageIdentity,
+		ExtensionData: []byte("the joiner's config's leaf extension body this gate follows"),
+	}}
+	return cfg, result.Welcome, result.RatchetTree, keys
 }
 
 // callerOwnedScheduleArguments builds the provider, the group context and the six secrets the key

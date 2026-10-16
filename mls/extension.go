@@ -92,6 +92,16 @@ const (
 	// group that requires it admits no device that cannot. It names exactly that one format: a
 	// change to the seal, its payload or its authenticator takes a new code point.
 	ExtensionTypeUrmessageJoinSeal ExtensionType = 0xF004
+	// urmessage_identity is a LEAF extension and never a group context one: the identity layer's
+	// binding of one leaf to one account, which messagegroup encodes and judges. This package
+	// carries the body opaque and checks none of its sizes. A leaf that carries it lists it, an
+	// Update keeps it, and a group that requires it admits no key package that does not list it.
+	ExtensionTypeUrmessageIdentity ExtensionType = 0xF005
+	// urmessage_group_purpose is a GROUP CONTEXT extension and never a leaf one: it marks a group
+	// that is not a conversation, such as the group of one account's own devices, and its body is
+	// messagegroup's too. A leaf that carried it would be one member speaking for the whole group,
+	// so (*LeafNode).Validate refuses a leaf that does.
+	ExtensionTypeUrmessageGroupPurpose ExtensionType = 0xF006
 )
 
 // Extension is one entry of an extensions vector: a registry code point and an

@@ -1180,6 +1180,10 @@ var typesTheEraseClassReachesThatOweNoErase = map[string]string{
 		"BodyBinding one row up read again: both halves travel in the clear beside the ciphertext they " +
 		"address, so an erase here would remove nothing an attacker lacks. The key material is in the " +
 		"ReceiverRatchet the key points at, and that type is a member of this class in its own right",
+	"CommitOptions": "an ARGUMENT and not storage: the committer's choices, which (*Group).CreateCommit reads " +
+		"and keeps nothing of. It holds no key material. Its by-value proposals go on the wire inside the " +
+		"commit, and its own-leaf patch is a credential and extension bodies that the patched path leaf " +
+		"publishes to every member, which is the whole of what the patch is for",
 	"CommitResult": "the ENCODINGS a committer hands its caller to send -- the commit message, the welcome and " +
 		"the ratchet tree. Every octet of all three is about to be on the wire, which is the whole purpose of " +
 		"the structure. The key material this commit holds is in the staged epoch beside it, and that is a " +

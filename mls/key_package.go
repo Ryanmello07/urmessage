@@ -290,7 +290,9 @@ func (self *KeyPackage) signedPreimage() ([]byte, error) {
 //
 // The extensions are the LEAF's, not the key package's. RFC 9420 has both, and this profile
 // puts urmessage_leaf_keys (0xF002) on the leaf because it is a property of the device rather
-// than of the advertisement: it has to survive into the ratchet tree, and only the leaf does.
+// than of the advertisement: it has to survive into the ratchet tree, and only the leaf does. The
+// identity layer's urmessage_identity (0xF005) goes on the leaf for the same reason, and the leaf
+// carries exactly the vector its caller passed, in that order, which an Update then keeps.
 func NewKeyPackage(crypto CryptoProvider, suite CipherSuite, cred Credential,
 	caps Capabilities, exts []Extension) (kp *KeyPackage, initPriv HpkePrivateKey,
 	encPriv HpkePrivateKey, err error) {
