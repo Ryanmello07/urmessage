@@ -348,12 +348,27 @@ func TestTheLadderLabelsAreSeparateConstantsAndNoneIsBuiltFromAnother(t *testing
 	// mis-spelling. The second half of this gate, which refuses an info BUILT by concatenating
 	// two constants, is untouched and is what would catch "rec/v1/head" + "-bind".
 	//
-	// AND THE EXEMPTION IS EXACTLY ONE PAIR. A second prefix relation fails here whatever it is,
-	// including one built out of this label -- so the carve-out is a fact about one normative
-	// string rather than a hole in the rule. WHAT WOULD REMOVE IT: a spec label that is not an
-	// extension of an existing one ("rec/v1/hbind" would do), which is msgrepo's to choose and is
-	// reported as such rather than taken here.
-	exempt := map[string]bool{"recordAeadHeadInfo|recordHeadBindInfo": true}
+	// AND THE EXEMPTION IS EXACTLY TWO PAIRS, each a normative string. A third prefix relation
+	// fails here whatever it is, including one built out of either label -- so each carve-out is a
+	// fact about a spec string rather than a hole in the rule. WHAT WOULD REMOVE THIS ONE: a spec
+	// label that is not an extension of an existing one ("rec/v1/hbind" would do), which is
+	// msgrepo's to choose and is reported as such rather than taken here.
+	//
+	// THE SECOND PAIR is two EXTRACTION SALTS, and it arrived with the recovery phrase. MASTER
+	// section 5.2 has always written master_key = HKDF-Extract(salt = "URmessage/v1", ...), and
+	// Revision 10 (ledger item 299) keeps that step over the phrase's stretch; section 7 writes the
+	// wrap KDF's salt as "URmessage/v1/wrap-salt". So the first is the whole of the second. WHY IT
+	// IS SAFE: an extraction's salt is HMAC's KEY, and the two keys are twelve and twenty two
+	// octets, each padded with zeros to SHA-256's sixty four octet block, so they differ at octet
+	// twelve, '/' against zero -- two keys, two functions, and no input to either that the other
+	// answers. HMAC's one key equivalence is a key and the same key with zeros appended, and
+	// "/wrap-salt" is not zeros. Reaching one salt from the other takes a deliberate slice, which
+	// the concatenation half below would see. The two extractions are checked below to answer
+	// different roots from one input.
+	exempt := map[string]bool{
+		"recordAeadHeadInfo|recordHeadBindInfo": true,
+		"phraseMasterKeySalt|wrapSaltLabel":     true,
+	}
 	exercised := map[string]bool{}
 	for i, left := range labels {
 		for _, right := range labels[i+1:] {
@@ -381,12 +396,17 @@ func TestTheLadderLabelsAreSeparateConstantsAndNoneIsBuiltFromAnother(t *testing
 			t.Errorf("the prefix exemption %q was never reached, so it is describing a pair this package no longer has; delete it", pair)
 		}
 	}
-	// and the two labels of the exempted pair expand ONE rung to different keys, which is the
-	// property the prefix rule was standing in for.
+	// and the two labels of each exempted pair derive different keys from ONE input -- an
+	// expansion of one rung, an extraction of one ikm -- which is the property the prefix rule
+	// was standing in for.
 	rung := bytes.Repeat([]byte{0x4b}, recordKeyBytes)
 	if bytes.Equal(keyScheduleExpand(rung, []byte(recordAeadHeadInfo), 32),
 		keyScheduleExpand(rung, []byte(recordHeadBindInfo), 32)) {
 		t.Error("rec/v1/head and rec/v1/head-bind expand one rung to the same 32 octets")
+	}
+	if bytes.Equal(keyScheduleExtract([]byte(phraseMasterKeySalt), rung),
+		keyScheduleExtract([]byte(wrapSaltLabel), rung)) {
+		t.Error("URmessage/v1 and URmessage/v1/wrap-salt extract one input to the same 32 octets")
 	}
 	// and no label is BUILT: every one of them is a plain literal in a const declaration,
 	// which keyScheduleStringConstantsOf is what says, and no expansion's info argument is a
@@ -953,6 +973,27 @@ var recordKeyOneWayProbes = map[string]func(secret []byte) [][]byte{
 			return nil
 		}
 		return [][]byte{envelope.Encode(), payload}
+	},
+	// The recovery phrase's keys, handed a rung as the phrase: its 32 octets are P34 below two zero
+	// octets, so its five high bits are zero. It stretches through the test seam and not the
+	// exported entry's frozen parameters, as every test of this package but the one known answer
+	// does (TestProductionStretchesWithTheFrozenParametersOnly), and withPhraseKeys is that
+	// entry's whole body. What it answers is everything a ceremony can take out: the identity key,
+	// the phrase key and isk_seed[g], at two key numbers.
+	"WithPhraseKeys": func(secret []byte) [][]byte {
+		phrase := &RecoveryPhrase{}
+		copy(phrase.p34[2:], secret)
+		produced := [][]byte{}
+		for _, keyNumber := range []uint32{1, 2} {
+			err := withPhraseKeys(phrase, keyNumber, phraseStretchForTests, func(keys *PhraseKeys) error {
+				produced = append(produced, keys.IdentityKey(), keys.PhraseKey(), keys.PhraseKeySeed())
+				return nil
+			})
+			if err != nil {
+				return nil
+			}
+		}
+		return produced
 	},
 }
 

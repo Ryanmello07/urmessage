@@ -241,9 +241,11 @@ func TestWrapTargetHandleDependsOnBothTheEpochAndTheLeaf(t *testing.T) {
 // visible consumer of that unruled reading.
 //
 // So the class is: every production declaration of this package that takes a uint32 AND reaches
-// the key schedule, transitively through this package's own calls. A leaf index is the only
-// uint32 any derivation here binds, the reachability is what says "this number goes into a key",
-// and neither half can be satisfied by choosing a name.
+// the key schedule, transitively through this package's own calls. Until identity phase 1 a leaf
+// index was the only uint32 any derivation here bound; the recovery phrase's KEY NUMBER g is the
+// second, and it is in this class by the same two halves and states its reading below like every
+// other member. The reachability is what says "this number goes into a key", and neither half can
+// be satisfied by choosing a name.
 //
 // The table is held in BOTH directions, and it is a table rather than an assertion because
 // MASTER writes the members differently: sender_handle length prefixes the index and
@@ -292,6 +294,17 @@ var handleLeafIndexReadings = map[string]string{
 		"RecordKeyZero and it shares the one helper through it, which is the point -- a wrap ladder " +
 		"that spelled LP(leaf_index) for itself would be a second reading of the same octets in the " +
 		"one place where the handle a peer computes has to agree with it",
+	// THE FIRST MEMBER THAT IS NOT A LEAF INDEX. MASTER section 5.2 at Revision 10 (ledger item
+	// 299) puts the phrase's key number into a derivation, and MASTER writes it as every u32 is
+	// written, four octets big endian with no length prefix. It is "raw" because it is: M1-8's
+	// question, how LP(leaf_index) is spelled, is not asked of it, and leafIndexLP is not its
+	// helper. The three callers bind g only through iskSeedOf, so their reading is that one.
+	"iskSeedOf": "raw -- isk_seed[g] = HKDF-Expand(isk_root, \"iskgen/v1\" | u32(g), 32), MASTER " +
+		"section 5.2 at Revision 10: the phrase's KEY NUMBER g, not a leaf index, written as four " +
+		"octets big endian after the label and never length prefixed",
+	"derivePhraseKeys": "raw -- it binds the key number only through iskSeedOf, so its reading is that one",
+	"withPhraseKeys":   "raw -- WithPhraseKeys's body, binding the key number only through derivePhraseKeys",
+	"WithPhraseKeys":   "raw -- the exported entry, binding the key number only through withPhraseKeys",
 }
 
 func TestEveryLeafIndexDerivationDeclaresItsReadingAndSharesOneHelper(t *testing.T) {

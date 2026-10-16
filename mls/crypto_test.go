@@ -8220,6 +8220,12 @@ var cryptoImportPaths = []string{
 	`"crypto/sha256"`,
 	`"crypto/sha3"`,
 	`"crypto/subtle"`,
+	// embed is ../messagegroup's go:embed of bip39_english.txt, the BIP-39 English list the
+	// recovery phrase is written in (MASTER section 5.1 at Revision 10), pinned there by its
+	// SHA-256 at initialisation. It reads the one file the build put into the binary and nothing
+	// at run time, so it consults no environment, which is the property this list exists to keep
+	// true. It arrived with identity phase 1's Task 10, on the same terms as fmt.
+	`"embed"`,
 	`"encoding/binary"`,
 	`"errors"`,
 	`"fmt"`,
@@ -8234,6 +8240,12 @@ var cryptoImportPaths = []string{
 	`"github.com/urnetwork/message/message"`,
 	`"github.com/urnetwork/message/mls"`,
 	`"github.com/urnetwork/message/syntax"`,
+	// argon2 is ../messagegroup's Argon2id, the recovery phrase's one slow stretch (MASTER section
+	// 5.2 at Revision 10). It is x/crypto, which go.mod already requires, pure go over blake2b
+	// with assembly for one round on amd64, and consults nothing: its parameters are the
+	// caller's, and messagegroup's TestProductionStretchesWithTheFrozenParametersOnly holds them
+	// to the frozen ones. It arrived with identity phase 1's Task 10.
+	`"golang.org/x/crypto/argon2"`,
 	`"golang.org/x/crypto/chacha20poly1305"`,
 	`"io"`,
 	`"math"`,

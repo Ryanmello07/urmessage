@@ -306,6 +306,11 @@ var primitiveResultsThatAreNotKeyMaterial = map[string]string{
 		"attacker reading the wire already has. It is a digest of ciphertext and binds the head to " +
 		"the body; erasing it would remove nothing anybody lacks",
 	"seal.go: sealHead.bound": "the same digest on the sealing side, and the same reason",
+	"phrase.go: phraseChecksumOf.digest": "the SHA-256 STATE the phrase's checksum is written " +
+		"into, and this row is a residue rather than a public value: the state holds P34 while it " +
+		"runs and it is not a byte slice, the residual xwingCombine.hash names one file over. What " +
+		"it answers is erased in the same body, and the one octet kept is CS8, which the phrase's " +
+		"last word writes in any case. No preimage holding P34 is assembled for it",
 	"xwing.go: XwingEncapsulate.ephemeral": "the EPHEMERAL X25519 KEY PAIR, and this row is a " +
 		"residue rather than a public value. The scalar inside crypto/ecdh's *PrivateKey is not a " +
 		"[]byte this package holds a header over -- PrivateKey.Bytes() answers a COPY, so erasing " +

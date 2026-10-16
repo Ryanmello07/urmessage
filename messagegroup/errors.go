@@ -683,3 +683,33 @@ var (
 	// other's body before it reaches either.
 	ErrWrapPayloadTypeCollision = errors.New("messagegroup: the two device wraps of one target take two payload types")
 )
+
+// ---------------------------------------------------------------------------
+// the recovery phrase and the keys it derives, MASTER section 5.1 and 5.2 at Revision 10
+// ---------------------------------------------------------------------------
+
+var (
+	// Fires, at initialisation and as a panic, when bip39_english.txt is not the list its
+	// SHA-256 pins. Words read off any other file are words no other device reads back to the
+	// same phrase.
+	ErrRecoveryPhraseList = errors.New("messagegroup: the vendored word list is not the BIP-39 English list its SHA-256 pins")
+	// Fires when typed words, each of them on the list, are not 25 of them. MASTER section 5.1's
+	// phrase is 25 words and no other count, so 24 or 26 words are not a phrase with a word
+	// missing or added: nothing is inserted or dropped to make one.
+	ErrRecoveryPhraseWordCount = errors.New("messagegroup: a recovery phrase has 25 words")
+	// Fires when typed words hold one or more that are not on the list. ParseRecoveryPhrase
+	// answers their positions beside it, from 1, and never the words: no part of a phrase reaches
+	// an error string or anything that logs one.
+	ErrRecoveryPhraseWord = errors.New("messagegroup: a word of the recovery phrase is not one of the 2048 words")
+	// Fires when 25 words of the list fail their checksum. It says that one or more words are
+	// wrong and never which, since an 8-bit checksum cannot say, and it names no candidate: no
+	// word is ever guessed (OD section 3).
+	ErrRecoveryPhraseChecksum = errors.New("messagegroup: one or more words of the recovery phrase are wrong")
+	// Fires when an ID is asked of a key that is not the thirty two octets of an Ed25519 public
+	// key: the root an account ID or a device ID is taken over, or the device key a device ID
+	// names. An ID over any other octets is well formed, and no other device computes it.
+	ErrIdentityPublicKeyLength = errors.New("messagegroup: an ID is taken over an Ed25519 public key of thirty two octets")
+	// Fires when the phrase's keys are asked for without a phrase, or without the ceremony that
+	// is to use them.
+	ErrPhraseKeysCeremony = errors.New("messagegroup: the phrase's keys are derived for a phrase and a ceremony, and one was not given")
+)

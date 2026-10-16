@@ -353,6 +353,12 @@ var keyScheduleExtractionCallers = map[string]string{
 		"extraction. It is not a second storage root: nothing descends from this prk but one wrap's " +
 		"own key and nonce, and wrap_test.go holds that wrap.go reaches neither StorageRoot nor " +
 		"DeriveClassKeys",
+	"derivePhraseKeys": "MASTER section 5.2 at Revision 10, ledger item 299: master_key = " +
+		"HKDF-Extract(salt = \"URmessage/v1\", ikm = S), where S is the recovery phrase's Argon2id " +
+		"stretch. It is the root of a recovery phrase's keys -- the identity key IRK, isk_root and " +
+		"each key number's isk_seed[g] -- and of no group's: nothing descends from it into a storage " +
+		"root, a class key or a wrap. It is erased in the body that extracted it, before the keys are " +
+		"handed to their ceremony, and phrasesecretgate_test.go's census holds every place it goes",
 }
 
 func TestTheKeySchedulesOnlyExtractionIsStorageRoots(t *testing.T) {
