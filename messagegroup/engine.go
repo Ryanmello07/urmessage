@@ -835,7 +835,9 @@ func (self *connectMlsEngine) LoadGroup(groupId []byte, epoch uint64) (GroupHand
 // the same id (open item MG-12), and a joiner whose adder sealed it a wrong secret meets a server
 // refusal and no sentence (open item MG-11). A Welcome naming several refs is answered by the LAST
 // refusal the store gave (open item MG-13), and a re-add that fails after its record write landed
-// leaves the removed group's record overwritten (open item MG-14).
+// leaves the removed group's record overwritten (open item MG-14). And a group that still holds a
+// leaf made from a key package past that package's lifetime refuses every joiner at this door,
+// because mls checks each leaf's lifetime against the joiner's clock (open item MG-17).
 //
 // THE REFUSAL CARRIES WHAT THE INTERFACE CANNOT SAY. TakeKeyPackage answers a bare error with no
 // declared not-found value, so a loop that treated every error as "not mine" reports a broken disk

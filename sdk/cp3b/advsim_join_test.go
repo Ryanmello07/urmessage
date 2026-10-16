@@ -614,7 +614,8 @@ func TestAdvSimAnInvitationRefusedAfterTheEngineJoinedDoesNotSpendTheJoinCode(t 
 
 // MG-1, pinned: a swapper substitutes its own join code for the victim's. The founder adds the
 // swapper believing it is the victim, nothing anywhere says so, and the swapper reads what the
-// founder sends. Sealing the join secret seals it TO THE SWAPPER. The identity layer closes this.
+// founder sends. Sealing the join secret seals it TO THE SWAPPER. R, the IDs-and-requests build,
+// closes this: it carries T2's labels, which identity phase 1's plan moved there.
 func TestAdvSimASubstitutedJoinCodeAdmitsTheSwapper(t *testing.T) {
 	world := newWorldWith(t, worldOptions{recordWire: true})
 	ctx := context.Background()
@@ -942,7 +943,8 @@ func TestAdvSimAnInvitationOverAGroupOnDiskAtAnEpochItHoldsNoStateForReplacesNot
 // against a server of its own, so that its group stands ABOVE the epoch of the removal; an
 // invitation is octets and crosses between the two.
 //
-// OPEN UNTIL THE IDENTITY LAYER. Being added back is a join over a held id and is the repair the
+// OPEN UNTIL R, the IDs-and-requests build, which carries T2's re-add proof since identity phase
+// 1's plan moved T2's work there. Being added back is a join over a held id and is the repair the
 // removal itself names, so it is honoured; and an invitation authenticates nobody, so nothing in
 // a join can tell the group that removed this device from another founder's.
 func TestAdvSimASecondFoundersInvitationOverAGroupTheDeviceWasRemovedFrom(t *testing.T) {

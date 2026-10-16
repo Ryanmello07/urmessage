@@ -490,6 +490,8 @@ type seamMember struct {
 	session     *messagegroup.GroupSession
 	groupId     []byte
 	pqSecret    []byte
+	// the group_handle_key its join seal carried, which a wrap's target handle is derived from
+	groupHandleKey []byte
 	// the private half of the X-Wing key this member's leaf publishes, which a join seal is made to
 	xwing *messagegroup.XwingPrivateKey
 }
@@ -607,6 +609,7 @@ func (self *seamMember) join(t *testing.T, invite *urmessage.Invite) {
 	self.handle, self.session = handle, session
 	self.groupId = append([]byte(nil), invite.GroupId...)
 	self.pqSecret = append([]byte(nil), pqSecret...)
+	self.groupHandleKey = append([]byte(nil), groupHandleKey...)
 }
 
 // commitAddAndSubmit builds an Add of one key package through the seam's by-value arm, merges it,
