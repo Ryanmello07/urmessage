@@ -18,7 +18,7 @@ party under a **second account**, and this is it.
   device_key_package() -> -keypackage     →    reads it, deletes it
                                                CreateGroup, AddMember(kp), Open
   reads it, deletes it                    ←    invite.Encode() -> -invite
-  device_join(invite)                          Send / SendReply / React, then fetch in a loop
+  device_join(invite)                          Send / SendReply / React / Delete, then fetch in a loop
 ```
 
 A key package is **single use** — the private halves are taken destructively at the join — so a
@@ -58,7 +58,7 @@ instead of printing it, so a run whose output is a log keeps no code in it.
   add dialog: AddMember(code), Open
   invite.Encode() -> INVITE CODE          →    -invitecode @FILE: waits for it, reads it, deletes it
                                                ParseInvite, device.Join(invite)
-  send / receive                               Send / SendReply / React, then fetch in a loop
+  send / receive                               Send / SendReply / React / Delete, then fetch in a loop
 ```
 
 ```
@@ -80,6 +80,15 @@ line saying what to do: an invitation made from another join code (`ErrNoJoinCod
 made by an older build (`ErrInviteVersion`), and a code that is not an invitation, or not all of
 one (`ErrInviteDamaged` and the parse's other refusals; this peer's own join code pasted back is
 told apart by its octets).
+
+## Talking, and deletes
+
+On either road, every line appended to the `-outbox` file is sent. A line that is exactly `/delete`
+sends nothing: it deletes the line this run last sent from the outbox, with a tombstone. A delete
+adds no line of its own: it flips `Deleted` on a line already shown. So each fetch also reads the
+log for flips, and prints `<- DELETED: message <id> from <sender>, record <n>, is now deleted=true`
+for each line deleted since the last fetch, whichever side deleted it. At the end the report lists
+the whole log, one row per line, with its kind, its sender and whether it is deleted.
 
 ## Rules that are not style
 

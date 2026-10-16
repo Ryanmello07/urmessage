@@ -364,6 +364,91 @@ func TestEachRefusalOfTheJoinRoadSaysWhatToDo(t *testing.T) {
 	}
 }
 
+// ── deletes ──────────────────────────────────────────────────────────────────────────────────
+
+// A DELETE IS SHOWN, ONCE, WHEN A LINE ALREADY SEEN FLIPS. The owner's session on build 03 (S1)
+// found that a delete printed nothing: converse printed each line once, when it arrived, and a
+// tombstone adds no line of its own -- it flips Deleted on a line already shown.
+func TestADeleteIsShownOnceWhenALineAlreadySeenFlips(t *testing.T) {
+	known := map[string]bool{}
+	// the log as a run starts: one line, and one deleted before the run; neither is a flip
+	if got := deletionFlips(known, []*urmessage.Message{logLine(1, 5, false), logLine(2, 6, true)}); len(got) != 0 {
+		t.Fatalf("the first reading of the log answered records %v; want none: nothing changed under this run", records(got))
+	}
+	// line 1 is deleted, and line 3 arrives deleted already: only line 1 flipped
+	flipped := deletionFlips(known, []*urmessage.Message{logLine(1, 5, true), logLine(2, 6, true), logLine(3, 9, true)})
+	if len(flipped) != 1 || flipped[0].RecordId != 5 {
+		t.Fatalf("after line 1's delete the flips are records %v; want exactly record 5", records(flipped))
+	}
+	// and it is said once: the same log read again answers nothing
+	if got := deletionFlips(known, []*urmessage.Message{logLine(1, 5, true), logLine(2, 6, true), logLine(3, 9, true)}); len(got) != 0 {
+		t.Errorf("the same log read again answered records %v; want none", records(got))
+	}
+	// the line it prints names the line's short id, its sender and its record
+	shown := deletionLine(flipped[0])
+	for _, want := range []string{"DELETED", short(flipped[0].MessageId), "from " + short(flipped[0].SenderHandle), "record 5", "deleted=true"} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("the delete is shown as %q, which does not say %q", shown, want)
+		}
+	}
+}
+
+// THE REPORT LISTS THE WHOLE LOG, A ROW A LINE, each with whether it is deleted, its kind and who
+// sent it, so a delete that arrived while nobody watched is still on the record at the end.
+func TestTheReportListsTheWholeLogWithEachLinesDeletedFlag(t *testing.T) {
+	kept := logLine(1, 5, false)
+	gone := logLine(2, 7, true)
+	gone.Kind = urmessage.KindReply
+	gone.Mine = true
+	rows := logRows([]*urmessage.Message{kept, gone})
+	if len(rows) != 2 {
+		t.Fatalf("the report has %d row(s) for a log of 2: %q", len(rows), rows)
+	}
+	for at, want := range [][]string{
+		{"record 5", short(kept.MessageId), "from " + short(kept.SenderHandle), "kind=" + kept.Kind.String(), "deleted=false", "mine=false"},
+		{"record 7", short(gone.MessageId), "from " + short(gone.SenderHandle), "kind=" + gone.Kind.String(), "deleted=true", "mine=true"},
+	} {
+		for _, fragment := range want {
+			if !strings.Contains(rows[at], fragment) {
+				t.Errorf("row %d is %q, which does not say %q", at, rows[at], fragment)
+			}
+		}
+	}
+}
+
+// AN OUTBOX LINE THAT IS EXACTLY /delete DELETES, whitespace aside; any other line is sent.
+func TestOnlyAnOutboxLineThatIsExactlyDeleteDeletes(t *testing.T) {
+	for _, line := range []string{"/delete", "  /delete\r", "\t/delete "} {
+		if !isDeleteDirective(line) {
+			t.Errorf("%q was not taken as /delete", line)
+		}
+	}
+	for _, line := range []string{"/delete that one", "please /delete", "/Delete", "/deleted", ""} {
+		if isDeleteDirective(line) {
+			t.Errorf("%q was taken as /delete; it is a line to send", line)
+		}
+	}
+}
+
+// logLine is one line of a log: a text from a member, at a record, deleted or not.
+func logLine(id byte, record uint64, deleted bool) *urmessage.Message {
+	return &urmessage.Message{
+		RecordId:     record,
+		MessageId:    bytes.Repeat([]byte{id}, 16),
+		SenderHandle: bytes.Repeat([]byte{0xa0 | id}, 16),
+		Kind:         urmessage.KindText,
+		Deleted:      deleted,
+	}
+}
+
+func records(messages []*urmessage.Message) []uint64 {
+	ids := []uint64{}
+	for _, one := range messages {
+		ids = append(ids, one.RecordId)
+	}
+	return ids
+}
+
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────────
 
 // THE APP'S OWN CODEC, PORTED LINE FOR LINE, so that "the form the app takes" is a test and not a

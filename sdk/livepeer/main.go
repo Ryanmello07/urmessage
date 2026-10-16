@@ -14,7 +14,7 @@
 //	device.KeyPackage() -> -keypackage   →    reads it, deletes it
 //	                                          CreateGroup, AddMember(kp), Open
 //	reads it, deletes it                 ←    invite.Encode() -> -invite
-//	device.Join(invite)                       Send / SendReply / React
+//	device.Join(invite)                       Send / SendReply / React / Delete
 //
 // ON THE JOIN ROAD (-join) the app founds the group and this helper joins it. The two halves are
 // the CODES the app's dialogs show and take, base64 text a person carries between two machines:
@@ -25,7 +25,7 @@
 //	add dialog: AddMember(code), Open
 //	invite.Encode() -> INVITE CODE       →    -invitecode @FILE: waits for it, reads it, deletes it
 //	                                          ParseInvite, device.Join(invite)
-//	Send / Receive                            Send / SendReply / React
+//	Send / Receive                            Send / SendReply / React / Delete
 //
 // ON THE FOUNDER ROAD EACH FILE IS CONSUMED BY ITS READER AND DELETED BY ITS READER, and that is
 // not tidiness. A key package is SINGLE USE — the private halves are taken destructively at the
@@ -113,7 +113,7 @@ func main() {
 	join := flag.Bool("join", false, "JOIN a group instead of founding one: make this peer's own JOIN CODE (printed, or written to -joincodeout), wait for the INVITE CODE the founder's app makes from it (-invitecode), join, and talk; a restart over the same -dir restores the group and talks. Takes none of -keypackage, -joincode, -invite, -printinvite, -invitecodeout")
 	joinCodeOut := flag.String("joincodeout", "", "with -join: write the JOIN CODE to this file, 0600, instead of printing it, so that no log holds it; the file holds exactly the text the app's join-code box takes")
 	inviteCode := flag.String("invitecode", "", "with -join: the INVITE CODE the founder's app made from this peer's join code, as base64, or @FILE to wait up to -wait for it to be pasted into FILE; whitespace and line breaks are dropped, and FILE is deleted once read")
-	outbox := flag.String("outbox", "", "a file this peer WATCHES: every line appended to it is sent into the group, so somebody on this side can hold a conversation without restarting and paying the reconnect window again")
+	outbox := flag.String("outbox", "", "a file this peer WATCHES: every line appended to it is sent into the group, so somebody on this side can hold a conversation without restarting and paying the reconnect window again; a line that is exactly /delete instead deletes the line this run last sent from it")
 	quiet := flag.Bool("quiet", false, "skip the three scripted lines, the reply and the two reactions; restore, serve, and send only what -outbox gets")
 	waitFor := flag.Duration("wait", 5*time.Minute, "how long to wait for the key package file, or with -join for the -invitecode file, to appear")
 	serve := flag.Duration("serve", 4*time.Minute, "how long to keep fetching after the sends, so the app's own lines are seen")
@@ -497,9 +497,17 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 	ingested := group.Stats().Ingested
 	deadline := time.Now().Add(serve)
 	seen := map[string]bool{}
+	// WHAT EACH LINE OF THE LOG LAST SAID ABOUT BEING DELETED, so that a delete is SHOWN. A
+	// tombstone adds no line of its own: it flips Deleted on a line already in the log, which its
+	// arrival print has already said once and never says again. Seeded from the log as it stands,
+	// so a line deleted before this run started is not reported as a delete made during it.
+	deletedState := map[string]bool{}
+	deletionFlips(deletedState, group.Messages())
 	// How far into the outbox file this run has already sent. Zero at start, so a file left over
 	// from an earlier run IS re-sent -- which is why the caller gives each run a fresh one.
 	var outboxAt int64
+	// The line this run last sent from the outbox: what an outbox line of exactly /delete takes back.
+	var lastSent *urmessage.Message
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -519,6 +527,27 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 					if strings.TrimSpace(line) == "" {
 						continue
 					}
+					// /delete TAKES BACK THE LAST LINE THIS RUN SENT, so that a run with no app in it
+					// can make the delete the far side must show. A tombstone, like a send, is a round
+					// trip, and a refused one is said and the conversation goes on.
+					if isDeleteDirective(line) {
+						if lastSent == nil {
+							fmt.Printf("  -> REFUSED: %s takes back the line this run last sent from the outbox, and there is none\n", deleteDirective)
+							continue
+						}
+						deleteStarted := time.Now()
+						tombstone, err := group.Delete(ctx, lastSent.MessageId)
+						deleteMs := time.Since(deleteStarted).Milliseconds()
+						if err != nil {
+							fmt.Printf("  -> REFUSED: %v\n", err)
+							continue
+						}
+						fmt.Printf("  [%s] -> deleted message %s (record %d) with tombstone record %d in %dms\n",
+							time.Now().Format("15:04:05.000"), short(lastSent.MessageId), lastSent.RecordId,
+							tombstone.RecordId, deleteMs)
+						lastSent = nil
+						continue
+					}
 					sendStarted := time.Now()
 					sent, err := group.Send(ctx, line)
 					submitMs := time.Since(sendStarted).Milliseconds()
@@ -533,6 +562,7 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 					// protocol with a coarse clock, not a slow network.
 					fmt.Printf("  [%s] -> sent record %d in %dms: %q\n",
 						time.Now().Format("15:04:05.000"), sent.RecordId, submitMs, line)
+					lastSent = sent
 				}
 			}
 		}
@@ -572,7 +602,46 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 			fmt.Printf("  <- REACTIONS now standing on %s: %s\n",
 				short(one.MessageId), strings.Join(emojis, " "))
 		}
+		// DELETES, read off the log for the reason reactions are: a tombstone changes a line that
+		// is already there, and Receive answers no line for it.
+		for _, one := range deletionFlips(deletedState, group.Messages()) {
+			fmt.Println(deletionLine(one))
+		}
 	}
+}
+
+// deleteDirective is the outbox line that deletes instead of sending.
+const deleteDirective = "/delete"
+
+// isDeleteDirective says whether an outbox line is exactly /delete, whitespace aside. Anything
+// else, "/delete" inside a sentence included, is a line to send.
+func isDeleteDirective(line string) bool {
+	return strings.TrimSpace(line) == deleteDirective
+}
+
+// deletionFlips answers the lines of the log whose Deleted differs from what known last recorded
+// for them, and records the new state. A line known has never recorded is recorded and not
+// answered: the print of its arrival already said whether it was deleted.
+func deletionFlips(known map[string]bool, messages []*urmessage.Message) []*urmessage.Message {
+	flipped := []*urmessage.Message{}
+	for _, one := range messages {
+		key := hex.EncodeToString(one.MessageId)
+		was, recorded := known[key]
+		known[key] = one.Deleted
+		if recorded && was != one.Deleted {
+			flipped = append(flipped, one)
+		}
+	}
+	return flipped
+}
+
+// deletionLine is one delete as this peer shows it: the line's short id, who sent it, and its
+// record. mine says whether the line was this peer's own, which is the only kind a tombstone may
+// take back (the library's same-sender rule), so on the far side it is false.
+func deletionLine(one *urmessage.Message) string {
+	return fmt.Sprintf("  [%s] <- DELETED: message %s from %s, record %d, is now deleted=%v (mine=%v)",
+		time.Now().Format("15:04:05.000"), short(one.MessageId), short(one.SenderHandle), one.RecordId,
+		one.Deleted, one.Mine)
 }
 
 // ── the join road ────────────────────────────────────────────────────────────────────────────
@@ -1037,7 +1106,25 @@ func report(group *urmessage.Group) {
 	fmt.Printf("  fetched=%d opened=%d ceremony=%d own=%d otherClasses=%d FAILED=%d submitted=%d rebound=%d pages=%d unattested=%d\n",
 		stats.Fetched, stats.Opened, stats.SkippedCeremony, stats.SkippedOwn,
 		stats.SkippedClass, stats.FailedOpen, stats.Submitted, stats.Rebound, stats.Pages, stats.Unattested)
-	fmt.Printf("  the group's whole log holds %d message(s)\n", len(group.Messages()))
+	// THE WHOLE LOG, A ROW A LINE, and every row says whether its line is deleted: a delete that
+	// came in while nobody was watching the serve loop is still on the record at the end.
+	messages := group.Messages()
+	fmt.Printf("  the group's whole log holds %d message(s):\n", len(messages))
+	for _, row := range logRows(messages) {
+		fmt.Printf("    %s\n", row)
+	}
+}
+
+// logRows is the whole log as report prints it, one row per line: its record, its short id, who
+// sent it, its kind, whether it is deleted, and whether it is this peer's own. Not its text: each
+// line's text was printed when it arrived.
+func logRows(messages []*urmessage.Message) []string {
+	rows := []string{}
+	for _, one := range messages {
+		rows = append(rows, fmt.Sprintf("record %d message %s from %s kind=%s deleted=%v mine=%v",
+			one.RecordId, short(one.MessageId), short(one.SenderHandle), one.Kind, one.Deleted, one.Mine))
+	}
+	return rows
 }
 
 func fail(format string, args ...any) {
