@@ -1,6 +1,8 @@
 package urmessage
 
 import (
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -180,27 +182,49 @@ var wrapSeedProducerSites = map[string]string{
 	"deviceIdentity|result signer":    "this device's signature PRIVATE key, minted in the same arm.",
 	"deviceIdentity|result signerPub": "its public half.",
 	"deviceIdentity|result wrapSeed":  "the seed itself, from both arms.",
+	// ── R68: SITES THE WALK REACHES INSIDE THIS PACKAGE'S OWN FUNCTIONS. The walk follows a value it holds into
+	// the function it is handed to, to a fixpoint (the review of identity phase 1's Tasks 8 to 10, L1-1), and a
+	// map's key is a carried value (L2-02); these rows are the sites that brought into view, each with its reason.
+	"PutDeviceIdentity|parameter leafKeys":    "Reached by the walk into this package's own functions (LRI R68): the device identity's write, handed its signer and leaf keys beside the seed by deviceIdentity: the walk follows that caller's values whole, and these are written as one record with the seed, which is the arrangement the store's rows describe.",
+	"PutDeviceIdentity|parameter signerPriv":  "Reached by the walk into this package's own functions (LRI R68): the device identity's write, handed its signer and leaf keys beside the seed by deviceIdentity: the walk follows that caller's values whole, and these are written as one record with the seed, which is the arrangement the store's rows describe.",
+	"PutDeviceIdentity|parameter signerPub":   "Reached by the walk into this package's own functions (LRI R68): the device identity's write, handed its signer and leaf keys beside the seed by deviceIdentity: the walk follows that caller's values whole, and these are written as one record with the seed, which is the arrangement the store's rows describe.",
+	"decodeLeafOccupancy|parameter encoded":   "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	"decodePqSecretTable|parameter encoded":   "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	"decodePqSecretWitness|parameter encoded": "Reached by the walk into this package's own functions (LRI R68): a group record's witness part decoded, reached because the walk follows a record's parts whole. No wrap seed is in it: each row is an epoch and a digest.",
+	"decodeRemoval|parameter part":            "Reached by the walk into this package's own functions (LRI R68): a group record's removal mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	"decodeWrapDark|parameter part":           "Reached by the walk into this package's own functions (LRI R68): a group record's wrap-dark mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	"zeroizeState|parameter octets":           "Reached by the walk into this package's own functions (LRI R68): THE ERASE: every octet of a value set to zero. at is the loop's index, tainted by ranging over the value; it is a position.",
 }
 
 // wrapSeedSink is one entry in the disposition below: WHICH VALUES a site may receive, and why. A
 // disposition keyed on the site alone excuses the site FOREVER, whatever turns up there later, so
 // each entry names the exact spellings it weighed and is held both ways on those too.
+//
+// wrapSeedSink holds, beside the carried names, each entry's OCCURRENCES: see [pqSecretSink].
 type wrapSeedSink struct {
 	carries []string
+	occurs  []string
 	why     string
 }
 
 // Every place the seed VALUE lands, as "<enclosing function>|<site>" -> what may land and why.
 //
-// NOT ONE `fmt.Errorf` OR LOG SITE IS IN THIS MAP, and that absence is the property. Every
-// formatting site in the four functions this census reaches formats a COUNT, which the narrowing
-// above declines to carry and [wrapSeedCountedNotCarriedSites] writes down by name. So a
-// formatting site appearing here at all is a new site with no entry, and it is refused -- which is
-// what the two reproduced mutants do.
+// NOT ONE `fmt.Errorf` OR LOG SITE WAS IN THIS MAP BEFORE LRI R68, and that absence was the
+// property. Every formatting site in the functions this census reached formatted a COUNT, which the
+// narrowing above declines to carry and [wrapSeedCountedNotCarriedSites] writes down by name, so a
+// formatting site appearing here at all was a new site with no entry, and refused -- which is what
+// the two reproduced mutants do. R68's walk follows a `parts` parameter into the functions it is
+// handed to, and four decoders of a GROUP record's parts are reached that way: decodeLeafOccupancy,
+// decodePqSecretTable, decodeRemoval and decodeWrapDark. Their refusals format a kind byte, flags, an
+// epoch, a width and an offset, never a seed, and a group record holds no seed. So the property is
+// now: no formatting site but those four, and each held by its OCCURRENCES as well as its carried
+// names -- `%x` of the part at the same call carries no new name, but it is a new occurrence and is
+// refused.
 var wrapSeedSinks = map[string]wrapSeedSink{
 	// ── THE MINT AND THE STORE ───────────────────────────────────────────────────────────────
 	"deviceIdentity|call store.PutDeviceIdentity": {
 		carries: []string{"leafKeys", "signer", "signerPub", "wrapSeed"},
+		occurs:  []string{"leafKeys.ExtensionData", "signer", "signerPub", "wrapSeed"},
 		why: "THE SEED GOING TO DISK, and the leaf keys body going with it in the SAME CALL. That " +
 			"is the point of the arrangement and not an accident of arity: the public half and the " +
 			"seed under it come from one XwingGenerateKey and are written as one record, so no crash " +
@@ -210,22 +234,26 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"deviceIdentity|call mls.SignaturePrivateKey": {
 		carries: []string{"priv"},
+		occurs:  []string{"priv"},
 		why: "the restore arm's cast of the stored signature private key to its named type. It is " +
 			"tainted because the multi-value binding that produced it also produced the seed; the " +
 			"walk does not separate the two and does not claim to.",
 	},
 	"deviceIdentity|call mls.SignaturePublicKey": {
 		carries: []string{"pub"},
+		occurs:  []string{"pub"},
 		why:     "the same cast for the public half.",
 	},
 	"deviceIdentity|return": {
 		carries: []string{"leafKeys", "priv", "pub", "signer", "signerPub", "wrapSeed"},
+		occurs:  []string{"leafKeys", "leafKeys.ExtensionData", "mls.SignaturePrivateKey(...)", "mls.SignaturePublicKey(...)", "signer", "signerPub", "wrapSeed", "wrapSeed"},
 		why: "THE ONE DOOR OUT OF THE MINT, and both arms use it. A seed handed to a caller leaves " +
 			"this function by an exit no other clause watches -- the caller binds it from a call " +
 			"nothing else taints -- and the caller is [NewDevice], whose own sites are below.",
 	},
 	"NewDevice|call zeroizeState": {
 		carries: []string{"wrapSeed"},
+		occurs:  []string{"wrapSeed"},
 		why: "THE ERASE ON THE WAY IN, inside the deferred closure that covers every exit of " +
 			"[NewDevice] below the binding but the one that hands the seed to the field. It is the " +
 			"same [zeroizeState] over the same array [Device.Close] clears at the other end of the " +
@@ -235,6 +263,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"deviceIdentity|call zeroizeState": {
 		carries: []string{"wrapSeed"},
+		occurs:  []string{"wrapSeed", "wrapSeed"},
 		why: "the same erase in both of `deviceIdentity`'s arms -- one deferred closure per live " +
 			"range, the restore arm's over the array the store answered and the mint arm's over " +
 			"`xwing.Seed()`'s own. Two defers, one site, because this census keys on the call as " +
@@ -242,6 +271,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"NewDevice|literal Device.wrapSeed": {
 		carries: []string{"wrapSeed"},
+		occurs:  []string{"wrapSeed"},
 		why: "THE FIELD. It is HELD rather than copied, which is the erase talking: both of " +
 			"deviceIdentity's arms hand back an array nothing else references, so holding it leaves " +
 			"ONE array for [Device.Close] to clear where copying would leave the original behind " +
@@ -249,22 +279,27 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"NewDevice|literal Device.leafKeys": {
 		carries: []string{"leafKeys"},
+		occurs:  []string{"leafKeys"},
 		why:     "the leaf keys body, the PUBLIC half's carrier, tainted by the binding beside the seed.",
 	},
 	"NewDevice|literal Device.identityPub": {
 		carries: []string{"signerPub"},
+		occurs:  []string{"append(...)"},
 		why:     "the credential identity, a copy of the signer's public half.",
 	},
 	"NewDevice|call append": {
 		carries: []string{"signerPub"},
+		occurs:  []string{"signerPub"},
 		why:     "that copy being taken.",
 	},
 	"NewDevice|call mls.BasicCredential": {
 		carries: []string{"signerPub"},
+		occurs:  []string{"signerPub"},
 		why:     "the public half becoming the credential the engine publishes.",
 	},
 	"NewDevice|call messagegroup.NewConnectMlsEngine": {
 		carries: []string{"leafKeys", "signer", "signerPub"},
+		occurs:  []string{"leafKeys", "mls.BasicCredential(...)", "signer"},
 		why: "the signature private key going into the engine, which is where this device's signer " +
 			"LIVES -- [Device] holds no field for it, and the seed is the only key material this " +
 			"type holds in a field of its own. The seed is NOT at this call and must never be: the " +
@@ -272,6 +307,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"NewDevice|literal Device.engine": {
 		carries: []string{"engine"},
+		occurs:  []string{"engine"},
 		why: "the engine FIELD, and it is here because the over-approximation is right about it: " +
 			"`engine` was bound from a call handed `signer`, and the engine does hold this device's " +
 			"signature private key for the rest of the process. It does not hold the seed, which is " +
@@ -281,69 +317,85 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 
 	// ── THE STORE'S TWO HALVES ───────────────────────────────────────────────────────────────
 	"PutDeviceIdentity|call self.writeRecord": {
-		carries: []string{"wrapSeed"},
+		carries: []string{"leafKeys", "signerPriv", "signerPub", "wrapSeed"},
+		occurs:  []string{"leafKeys", "signerPriv", "signerPub", "wrapSeed"},
 		why: "THE WRITE. One record, four parts, one fsync -- see " +
 			"TestEveryFsyncInThisPackageIsAtASiteThisSuiteNames for the durability half. IT IS NOT " +
 			"THE END OF THE ROAD and this entry used to read as though it were: the three sites " +
 			"below are what the seed does AFTER this call, and until they were censused a `%x` of " +
-			"it inside either callee was refused by nothing.",
+			"it inside either callee was refused by nothing." +
+			" (R68: the signer and leaf keys are carried too, handed by deviceIdentity with the seed; they are written as one record with it, which is the arrangement above.)",
 	},
 
 	// ── AND THE TWO FUNCTIONS UNDER THAT CALL ────────────────────────────────────────────────
 	"groupRecordOf|literal GroupRecord.GroupId": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[0]"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is part one, the group id.",
 	},
 	"groupRecordOf|literal GroupRecord.PqSecret": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[1]"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is part two, the persisted pq_secret.",
 	},
 	"groupRecordOf|literal GroupRecord.GroupHandleKey": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[2]"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is part three, the group_handle_key.",
 	},
 	"groupRecordOf|call decodeWrapDark": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[6]"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is part seven going to the wrap_dark decoder.",
 	},
 	"groupRecordOf|assign record.WrapDarkKind": {
 		carries: []string{"kind"},
+		occurs:  []string{"kind"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is that decoder's kind octet landing on the record.",
 	},
 	"groupRecordOf|assign record.WrapDarkEpoch": {
 		carries: []string{"epoch"},
+		occurs:  []string{"epoch"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is the epoch beside it.",
 	},
 	"groupRecordOf|literal GroupRecord.Epoch": {
 		carries: []string{"parts"},
+		occurs:  []string{"binary.BigEndian.Uint64(...)"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is part four, an epoch.",
 	},
 	"groupRecordOf|literal GroupRecord.Opened": {
 		carries: []string{"parts"},
+		occurs:  []string{"?"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is part five, a flag.",
 	},
 	"groupRecordOf|call binary.BigEndian.Uint64": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[3]"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is part four being read as a number.",
 	},
 	"groupRecordOf|call decodePqSecretTable": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[5]"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is part six going to the table decoder.",
 	},
 	"groupRecordOf|assign record.PqSecrets": {
 		carries: []string{"table"},
+		occurs:  []string{"table"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is that decoded table landing on the record.",
 	},
 	"groupRecordOf|call decodePqSecretWitness": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[7]"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the parts of a group record are read into a [GroupRecord] and nowhere else. Here it is part eight going to the pq_secret witness decoder, which reads digests and no key material of any kind.",
 	},
 	"groupRecordOf|assign record.PqSecretWitness": {
 		carries: []string{"witness"},
+		occurs:  []string{"witness"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the parts of a group record are read into a [GroupRecord] and nowhere else. Here it is that decoded witness landing on the record: 32 octets of SHA-256 per epoch, which are a digest of a pq_secret and are never a seed.",
 	},
 	"groupRecordOf|call decodeLeafOccupancy": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[8]"},
 		why: "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the " +
 			"net above seeds ANY parameter called `parts`. Here it is part NINE going to the leaf " +
 			"ledger decoder, which reads leaf indices, epochs and a flag octet, and no key material " +
@@ -351,10 +403,12 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"groupRecordOf|assign record.Leaves": {
 		carries: []string{"ledger"},
+		occurs:  []string{"ledger"},
 		why:     "that decoded leaf ledger landing on the record.",
 	},
 	"groupRecordOf|call decodeRemoval": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[9]"},
 		why: "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the " +
 			"net above seeds ANY parameter called `parts`. Here it is part TEN going to ruling 52's " +
 			"removal decoder, which reads one kind octet and one epoch and no key material of any " +
@@ -362,24 +416,29 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"groupRecordOf|assign record.RemovedKind": {
 		carries: []string{"kind"},
+		occurs:  []string{"kind"},
 		why:     "that decoder's kind octet landing on the record: removedNone or removedByCommit.",
 	},
 	"groupRecordOf|assign record.RemovedEpoch": {
 		carries: []string{"epoch"},
+		occurs:  []string{"epoch"},
 		why:     "the epoch beside it -- the last one this device was a member at.",
 	},
 	"groupRecordOf|return": {
 		carries: []string{"record"},
+		occurs:  []string{"record"},
 		why:     "THE GROUP RECORD'S DECODE, WHICH HOLDS NO SEED, and it is in this census because the net above seeds ANY parameter called `parts` -- the widening that reached the disk. This gate cannot tell one record kind from another and does not claim to: what it holds here is that the six parts of a group record are read into a [GroupRecord] and nowhere else. The value that IS this function's subject is censused by pqsecretgate_test.go, which is the gate for it. Here it is the whole record, or one of two arity refusals that format the record's directory name and two counts.",
 	},
 	"writeRecord|call encodeStateRecord": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts"},
 		why: "the four record parts -- signature public half, signature private half, leaf keys " +
 			"body, SEED -- being handed to the framing. `parts...` is a variadic forward and the " +
 			"walk reads it as the value it is: the same arrays the caller passed, not a copy.",
 	},
 	"writeRecord|call temp.Write": {
 		carries: []string{"record"},
+		occurs:  []string{"record"},
 		why: "THE SEED REACHING THE FILE, which is the sentence the entry above used to carry on " +
 			"its own. `record` is tainted by DERIVATION -- it was bound from a call handed `parts` " +
 			"-- and by derivation is the right answer rather than an over-approximation here: the " +
@@ -389,6 +448,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"writeRecord|call zeroizeState": {
 		carries: []string{"record"},
+		occurs:  []string{"record"},
 		why: "THE SECOND COPY BEING ERASED. `encodeStateRecord` assembles a record that is another " +
 			"copy of whatever secret it carries, and this deferred erase is the only thing that can " +
 			"still reach it once the write has returned. It is [zeroizeState] at a site this census " +
@@ -397,22 +457,26 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"encodeStateRecord|call body.Write": {
 		carries: []string{"part"},
+		occurs:  []string{"part"},
 		why: "THE SEED'S OWN ARRAY, one part at a time, going into the buffer the frame is built " +
 			"in. `part` is the range variable over `parts`, so on the identity record's fourth " +
 			"turn of that loop this IS the seed. See [wrapSeedAccumulatorSites] for where the walk " +
 			"stops after this call and why that limit is asserted rather than described.",
 	},
 	"PutDeviceIdentity|return": {
-		carries: []string{"wrapSeed"},
+		carries: []string{"leafKeys", "signerPriv", "signerPub", "wrapSeed"},
+		occurs:  []string{"self.writeRecord(...)"},
 		why: "the SAME statement as the write above, seen by the return clause as well, because " +
 			"`return self.writeRecord(…, wrapSeed)` both passes the seed and hands a value back. " +
 			"What is handed back is an `error`; the seed is borne by the call's ARGUMENTS and the " +
 			"walk does not separate an expression's arguments from its result. Two clauses reporting " +
 			"one statement is the correct answer here and not a duplicate: the day the write moves " +
-			"off the return, one of the two entries goes stale and this file says so.",
+			"off the return, one of the two entries goes stale and this file says so." +
+			" (R68: the signer and leaf keys are carried too, for the same reason.)",
 	},
 	"GetDeviceIdentity|return": {
 		carries: []string{"parts"},
+		occurs:  []string{"parts[0]", "parts[0]", "parts[1]", "parts[1]", "parts[2]", "parts[2]", "parts[3]"},
 		why: "THE READ, all five of its returns at once. A three part record answers `parts[0], " +
 			"parts[1], parts[2], nil, nil` -- a nil error and an EMPTY seed -- and that is the " +
 			"backward-compatibility ruling this package's version lever could not pay for: " +
@@ -425,6 +489,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	// ── THE USE, AND THE ERASE ───────────────────────────────────────────────────────────────
 	"DecapsulateToOwnLeaf|call messagegroup.XwingKeyGenFromSeed": {
 		carries: []string{"self.wrapSeed"},
+		occurs:  []string{"self.wrapSeed"},
 		why: "THE SEED BEING SPENT FOR WHAT IT IS FOR: re-expanded into the pair whose public half " +
 			"this device's leaf publishes. It is re-expanded on EVERY call rather than cached, " +
 			"because a cached pair would be a `*messagegroup.XwingPrivateKey` in a field -- " +
@@ -433,6 +498,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"DecapsulateToOwnLeaf|call messagegroup.XwingDecapsulate": {
 		carries: []string{"private"},
+		occurs:  []string{"private"},
 		why: "the expanded pair reaching the decapsulation. `private` is tainted because it was " +
 			"bound from a call whose argument was the seed -- by DERIVATION, which is the same " +
 			"over-approximation the epoch-key gate records for a sealed record, and it is the " +
@@ -440,6 +506,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"DecapsulateToOwnLeaf|return": {
 		carries: []string{"shared"},
+		occurs:  []string{"shared"},
 		why: "THE SHARED SECRET LEAVING THIS PACKAGE, which is this method's whole purpose and is " +
 			"the one place the over-approximation reaches a value that is deliberately handed out. " +
 			"It is tainted by derivation from the private key; what it is is " +
@@ -449,6 +516,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"openWrapToOwnLeaf|call messagegroup.XwingKeyGenFromSeed": {
 		carries: []string{"self.wrapSeed"},
+		occurs:  []string{"self.wrapSeed"},
 		why: "THE SAME SPEND, FOR THE WRAP DOOR. Ledger item 243's receive leg opens a device wrap " +
 			"addressed to this leaf, and `messagegroup.OpenWrapBody` takes the private key rather " +
 			"than a shared secret -- because the KEM's answer is not the answer: ML-KEM-768 uses " +
@@ -459,6 +527,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"openWrapToOwnLeaf|call messagegroup.OpenWrapBody": {
 		carries: []string{"private"},
+		occurs:  []string{"private"},
 		why: "the expanded pair reaching the wrap door. `private` is tainted by DERIVATION exactly " +
 			"as it is at the decapsulation site above, and correctly: an expanded X-Wing private " +
 			"key IS the seed's content. The other six arguments are wire values off the record -- " +
@@ -467,6 +536,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"openWrapToOwnLeaf|return": {
 		carries: []string{"private"},
+		occurs:  []string{"messagegroup.OpenWrapBody(...)"},
 		why: "THE WRAP'S ENVELOPE AND PAYLOAD LEAVING THIS METHOD, and `private` is listed because " +
 			"the census reads the whole return statement and the expression mentions it. What " +
 			"crosses this boundary is OpenWrapBody's two results: an eleven-octet cleartext " +
@@ -476,6 +546,7 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 	},
 	"Close|call zeroizeState": {
 		carries: []string{"self.wrapSeed"},
+		occurs:  []string{"self.wrapSeed"},
 		why: "THE ERASE. [zeroizeState] overwrites the one array [NewDevice] held, IN PLACE, under " +
 			"the mutex a decapsulation also takes; the field is nil'd after, so a second Close " +
 			"erases nothing and a decapsulation after a Close refuses by name rather than " +
@@ -483,6 +554,144 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 			"uniform-looking wrong secret. See TestClosingADeviceErasesTheSeedAndNotOnlyTheField. " +
 			"It does NOT reach the copy inside the transient *messagegroup.XwingPrivateKey, which " +
 			"declares no erase and which `connect` is not this step's to change.",
+	},
+	// ── R68: SITES THE WALK REACHES INSIDE THIS PACKAGE'S OWN FUNCTIONS. The walk follows a value it holds into
+	// the function it is handed to, to a fixpoint (the review of identity phase 1's Tasks 8 to 10, L1-1), and a
+	// map's key is a carried value (L2-02); these rows are the sites that brought into view, each with its reason.
+	"decodeLeafOccupancy|call append": {
+		carries: []string{"rows"},
+		occurs:  []string{"rows"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	},
+	"decodeLeafOccupancy|call binary.BigEndian.Uint32": {
+		carries: []string{"encoded"},
+		occurs:  []string{"encoded[:]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	},
+	"decodeLeafOccupancy|call binary.BigEndian.Uint64": {
+		carries: []string{"encoded"},
+		occurs:  []string{"encoded[:]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	},
+	"decodeLeafOccupancy|call fmt.Errorf": {
+		carries: []string{"flags"},
+		occurs:  []string{"flags"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	},
+	"decodeLeafOccupancy|literal LeafOccupancy.DepartedEpoch": {
+		carries: []string{"encoded"},
+		occurs:  []string{"binary.BigEndian.Uint64(...)"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	},
+	"decodeLeafOccupancy|literal LeafOccupancy.Leaf": {
+		carries: []string{"encoded"},
+		occurs:  []string{"binary.BigEndian.Uint32(...)"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	},
+	"decodeLeafOccupancy|literal LeafOccupancy.Own": {
+		carries: []string{"flags"},
+		occurs:  []string{"?"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	},
+	"decodeLeafOccupancy|return": {
+		carries: []string{"flags", "rows"},
+		occurs:  []string{"fmt.Errorf(...)", "rows"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	},
+	"decodePqSecretTable|call append": {
+		carries: []string{"at", "encoded", "rows", "width"},
+		occurs:  []string{"encoded[:]", "rows"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	},
+	"decodePqSecretTable|call binary.BigEndian.Uint64": {
+		carries: []string{"at", "encoded"},
+		occurs:  []string{"encoded[:]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	},
+	"decodePqSecretTable|call fmt.Errorf": {
+		carries: []string{"at", "epoch", "width"},
+		occurs:  []string{"?", "?", "epoch", "epoch", "width"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	},
+	"decodePqSecretTable|call int": {
+		carries: []string{"at", "encoded"},
+		occurs:  []string{"encoded[?]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	},
+	"decodePqSecretTable|literal EpochPqSecret.Epoch": {
+		carries: []string{"epoch"},
+		occurs:  []string{"epoch"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	},
+	"decodePqSecretTable|literal EpochPqSecret.PqSecret": {
+		carries: []string{"at", "encoded", "width"},
+		occurs:  []string{"append(...)"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	},
+	"decodePqSecretTable|return": {
+		carries: []string{"at", "epoch", "rows", "width"},
+		occurs:  []string{"fmt.Errorf(...)", "fmt.Errorf(...)", "fmt.Errorf(...)", "rows"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	},
+	"decodePqSecretWitness|call append": {
+		carries: []string{"encoded", "rows"},
+		occurs:  []string{"encoded[:]", "rows"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's witness part decoded, reached because the walk follows a record's parts whole. No wrap seed is in it: each row is an epoch and a digest.",
+	},
+	"decodePqSecretWitness|call binary.BigEndian.Uint64": {
+		carries: []string{"encoded"},
+		occurs:  []string{"encoded[:]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's witness part decoded, reached because the walk follows a record's parts whole. No wrap seed is in it: each row is an epoch and a digest.",
+	},
+	"decodePqSecretWitness|literal EpochPqSecretWitness.Digest": {
+		carries: []string{"encoded"},
+		occurs:  []string{"append(...)"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's witness part decoded, reached because the walk follows a record's parts whole. No wrap seed is in it: each row is an epoch and a digest.",
+	},
+	"decodePqSecretWitness|literal EpochPqSecretWitness.Epoch": {
+		carries: []string{"encoded"},
+		occurs:  []string{"binary.BigEndian.Uint64(...)"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's witness part decoded, reached because the walk follows a record's parts whole. No wrap seed is in it: each row is an epoch and a digest.",
+	},
+	"decodePqSecretWitness|return": {
+		carries: []string{"rows"},
+		occurs:  []string{"rows"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's witness part decoded, reached because the walk follows a record's parts whole. No wrap seed is in it: each row is an epoch and a digest.",
+	},
+	"decodeRemoval|call binary.BigEndian.Uint64": {
+		carries: []string{"part"},
+		occurs:  []string{"part[:]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's removal mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	},
+	"decodeRemoval|call fmt.Errorf": {
+		carries: []string{"part"},
+		occurs:  []string{"part[0]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's removal mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	},
+	"decodeRemoval|return": {
+		carries: []string{"part"},
+		occurs:  []string{"binary.BigEndian.Uint64(...)", "fmt.Errorf(...)", "part[0]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's removal mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	},
+	"decodeWrapDark|call binary.BigEndian.Uint64": {
+		carries: []string{"part"},
+		occurs:  []string{"part[:]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's wrap-dark mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	},
+	"decodeWrapDark|call fmt.Errorf": {
+		carries: []string{"part"},
+		occurs:  []string{"part[0]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's wrap-dark mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	},
+	"decodeWrapDark|return": {
+		carries: []string{"part"},
+		occurs:  []string{"binary.BigEndian.Uint64(...)", "fmt.Errorf(...)", "part[0]"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): a group record's wrap-dark mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	},
+	"zeroizeState|assign octets[at]": {
+		carries: []string{"at"},
+		occurs:  []string{"0"},
+		why:     "Reached by the walk into this package's own functions (LRI R68): THE ERASE: every octet of a value set to zero. at is the loop's index, tainted by ranging over the value; it is a position.",
 	},
 }
 
@@ -532,6 +741,17 @@ var wrapSeedCountedNotCarriedSites = map[string]string{
 		"uint32 prefix, and the prefix itself. On the identity record's fourth part this is the " +
 		"length of the seed, and the refusal beside it formats that length. It is the site M12 " +
 		"drives: one edit turns it into the value.",
+	// ── R68: SITES THE WALK REACHES INSIDE THIS PACKAGE'S OWN FUNCTIONS. The walk follows a value it holds into
+	// the function it is handed to, to a fixpoint (the review of identity phase 1's Tasks 8 to 10, L1-1), and a
+	// map's key is a carried value (L2-02); these rows are the sites that brought into view, each with its reason.
+	"PutDeviceIdentity|len leafKeys":    "Reached by the walk into this package's own functions (LRI R68): the device identity's write, handed its signer and leaf keys beside the seed by deviceIdentity: the walk follows that caller's values whole, and these are written as one record with the seed, which is the arrangement the store's rows describe.",
+	"PutDeviceIdentity|len signerPriv":  "Reached by the walk into this package's own functions (LRI R68): the device identity's write, handed its signer and leaf keys beside the seed by deviceIdentity: the walk follows that caller's values whole, and these are written as one record with the seed, which is the arrangement the store's rows describe.",
+	"PutDeviceIdentity|len signerPub":   "Reached by the walk into this package's own functions (LRI R68): the device identity's write, handed its signer and leaf keys beside the seed by deviceIdentity: the walk follows that caller's values whole, and these are written as one record with the seed, which is the arrangement the store's rows describe.",
+	"decodeLeafOccupancy|len encoded":   "Reached by the walk into this package's own functions (LRI R68): a group record's leaf occupancy part decoded. The record's parts are carried whole, the wrap seed's record among them, and the walk cannot tell them apart; the occupancy is leaf numbers, epochs and a flag, all public.",
+	"decodePqSecretTable|len encoded":   "Reached by the walk into this package's own functions (LRI R68): a group record's pq_secret table decoded, reached because the walk follows a record's parts whole and the seed's record is read through the same reader. No wrap seed is in it.",
+	"decodePqSecretWitness|len encoded": "Reached by the walk into this package's own functions (LRI R68): a group record's witness part decoded, reached because the walk follows a record's parts whole. No wrap seed is in it: each row is an epoch and a digest.",
+	"decodeRemoval|len part":            "Reached by the walk into this package's own functions (LRI R68): a group record's removal mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
+	"decodeWrapDark|len part":           "Reached by the walk into this package's own functions (LRI R68): a group record's wrap-dark mark decoded, reached because the walk follows a record's parts whole. No wrap seed is in it.",
 }
 
 // THE WALK'S OWN HORIZON: every call at which the seed enters an OBJECT this census does not
@@ -602,10 +822,13 @@ func TestEveryWrapSeedInThisPackageGoesWhereTheDispositionSaysItGoes(t *testing.
 	for _, site := range epochKeySortedMap(producers) {
 		t.Logf("    %s  at %v", site, producers[site])
 	}
-	t.Logf("sink sites found (%d), each with THE VALUES IT CARRIES, which is what the disposition "+
-		"is held against a second time:", len(sinks))
+	t.Logf("sink sites found (%d), each with THE VALUES IT CARRIES and each OCCURRENCE, which are "+
+		"what the disposition is held against a second and a third time:", len(sinks))
 	for _, site := range epochKeySortedMap(sinks) {
-		t.Logf("    %s  carries %v  at %v", site, epochKeySortedKeys(carried[site]), sinks[site])
+		occurs := append([]string(nil), census.occurrences[site]...)
+		sort.Strings(occurs)
+		t.Logf("    %s  carries %v  occurs [%s]  at %v", site, epochKeySortedKeys(carried[site]),
+			strings.Join(occurs, " | "), sinks[site])
 	}
 	t.Logf("COUNTED AND NOT CARRIED (%d) -- the sites the one narrowing removed, which are "+
 		"asserted below and not merely printed:", len(counted))
@@ -666,6 +889,13 @@ func TestEveryWrapSeedInThisPackageGoesWhereTheDispositionSaysItGoes(t *testing.
 			}
 		}
 	}
+
+	// ── THE THIRD: HOW MANY TIMES, AND IN WHAT SPELLING (LRI R68, L2-01) ─────────────────────
+	occursListed := map[string][]string{}
+	for site, entry := range wrapSeedSinks {
+		occursListed[site] = entry.occurs
+	}
+	censusHoldOccurrences(t, census.occurrences, occursListed, sinkNarrowing)
 
 	// ── AND THE ONE NARROWING'S OWN COMPLEMENT, ASSERTED THE SAME WAY ─────────────────────────
 	censusHold(t, "counted-not-carried site", counted, wrapSeedCountedNotCarriedSites,
@@ -833,3 +1063,52 @@ func TestEveryWrapSeedInThisPackageGoesWhereTheDispositionSaysItGoes(t *testing.
 // of a snapshot taken before the run, sha256 verified equal after every single revert
 // (`ba343cf4b332595bbafa3192e8d4e97f0fff2b6af4660d7f6eec35702be77368` for statestore_durable.go).
 // No `git checkout --`, no stash.
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// AND RE-MEASURED ON LRI R68'S ENGINE
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// THE ENGINE CHANGED UNDER THIS GATE (LRI R68; see the same block at the foot of
+// pqsecretgate_test.go), so M1 to M15 were run again, each as its prose has it, one at a time in an
+// overlay worktree, with this gate and the pq-secret census together as the killer; the clean
+// overlay passed. Every one is still KILLED, and the texts that moved are these. M10 to M15 are now
+// refused by BOTH censuses, since the walk brings the pq-secret census to the same write path.
+//
+//	M1  -> "deviceIdentity|call fmt.Errorf" has no entry, AND "deviceIdentity|return" occurs as a
+//	       fmt.Errorf(...) more than it lists
+//	M2  -> "DecapsulateToOwnLeaf|call fmt.Errorf" has no entry, AND "DecapsulateToOwnLeaf|return"
+//	       carries "self.wrapSeed", not listed, and occurs as a fmt.Errorf(...) more
+//	M3  -> "PutDeviceIdentity|call fmt.Errorf" has no entry, AND "PutDeviceIdentity|return" occurs
+//	       as a fmt.Errorf(...) more
+//	M4  -> "GetDeviceIdentity|call fmt.Errorf" has no entry, AND "GetDeviceIdentity|return" occurs as
+//	       a fmt.Errorf(...) more
+//	M5  -> "NewDevice|call append" is allowed and not found, AND "NewDevice|literal
+//	       Device.identityPub" carries "wrapSeed", not listed, no longer carries "signerPub", and
+//	       occurs as ["wrapSeed[:]"] where it lists ["append(...)"]
+//	M6  -> "Close|assign self.wrapSeed" has no entry
+//	M7  -> producer site "wrapSeedOf|key.Seed" has no entry, AND "deviceIdentity|xwing.Seed" is
+//	       allowed and not found, AND "wrapSeedOf|return" has no entry
+//	M8  -> "DecapsulateToOwnLeaf|call len" has no entry, AND counted-not-carried site
+//	       "DecapsulateToOwnLeaf|len self.wrapSeed" is allowed and not found
+//	M9  -> counted-not-carried site "NewDevice|len wrapSeed" has no entry
+//	M10 -> this gate: "writeRecord|call fmt.Errorf" and "writeRecord|return" have no entry; the
+//	       pq-secret census: both carry "record", not listed, and the call occurs as a "record" more
+//	M11 -> "encodeStateRecord|call fmt.Errorf" and "encodeStateRecord|return" have no entry, in both
+//	M12 -> counted-not-carried site "writeRecord|len record" has no entry, in both
+//	M13 -> "encodeStateRecord|call spare.Write" and "encodeStateRecord|accumulate spare.Write" have
+//	       no entry, AND "encodeStateRecord|call body.Write" and "…|accumulate body.Write" are allowed
+//	       and not found, in both
+//	M14 -> "writeRecord|call os.WriteFile" has no entry, AND "writeRecord|call temp.Write" is allowed
+//	       and not found, in both; AND this gate's horizon row "writeRecord|accumulate temp.Write" is
+//	       allowed and not found
+//	M15 THE RE-SEEDING CLAUSE, AND THE TEXT THAT MOVED MOST. The walk now follows a value into the
+//	    function it is handed to whatever that function names its parameter, so renaming `parts` to
+//	    `values` no longer switches the widening off; the census follows the seed in under the new
+//	    name, and reports the name:
+//	    -> producer site "writeRecord|parameter values" has no entry, AND "writeRecord|parameter
+//	       parts" is allowed and not found
+//	    -> AND "writeRecord|call encodeStateRecord" carries "values", not listed, no longer carries
+//	       "parts", and occurs as ["values"] where it lists ["parts"]
+//	    -> AND accumulator site "PutDeviceIdentity|accumulate self.writeRecord" has no entry, as
+//	       before, since writeRecord has left [censusReseedingFunctions] -- and the same three in the
+//	       pq-secret census, its horizon at "PutGroupRecord|accumulate self.writeRecord"
