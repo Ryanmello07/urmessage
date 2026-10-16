@@ -14,7 +14,8 @@
 # so does a row whose file is gone. The wirings are the census's. They are written out here because
 # a scan that loads a module some other way than test.sh builds it reads some other program:
 #
-#   plain       go.mod, sdk, sdk/livepeer, sdk/liveprobe: ./... as it stands.
+#   plain       go.mod, sdk, sdk/livepeer, sdk/liveprobe, and messagegroup/testdata/nfkdgen, the
+#               NFKD table's generator, which test.sh runs (LRI R68): ./... as it stands.
 #   tests       sdk/cp3b, the acceptance suite. Every Go file in it is a test, so it is scanned with
 #               the tool's -test flag: without it the tool is handed one package holding no file.
 #   tags:new    protocol/testdata/wiregolden. It builds under exactly one of two tags (test.sh runs
@@ -55,6 +56,7 @@ declare -A how=(
   [sdk/cp3b/go.mod]="tests"
   [sdk/livepeer/go.mod]="plain"
   [sdk/liveprobe/go.mod]="plain"
+  [messagegroup/testdata/nfkdgen/go.mod]="plain"
   [protocol/testdata/wiregolden/go.mod]="tags:new"
   [sdk/cgo/go.mod]="composed"
   [sdk/cgo/loopback.go.mod]="not-scanned"
