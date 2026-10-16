@@ -1245,8 +1245,12 @@ type Capabilities struct {
 	RendezvousMailboxDepth      uint32 `protobuf:"varint,23,opt,name=rendezvous_mailbox_depth,json=rendezvousMailboxDepth,proto3" json:"rendezvous_mailbox_depth,omitempty"`                  // 16 uncollected deposits per rendezvous
 	RendezvousDepositTtlSeconds uint32 `protobuf:"varint,24,opt,name=rendezvous_deposit_ttl_seconds,json=rendezvousDepositTtlSeconds,proto3" json:"rendezvous_deposit_ttl_seconds,omitempty"` // 604800 (7 days)
 	RendezvousTtlSeconds        uint32 `protobuf:"varint,25,opt,name=rendezvous_ttl_seconds,json=rendezvousTtlSeconds,proto3" json:"rendezvous_ttl_seconds,omitempty"`                        // 7776000 (90 days), refreshed on every collect
-	unknownFields               protoimpl.UnknownFields
-	sizeCache                   protoimpl.SizeCache
+	// ── Revision 25: the link box, kind 4 (§4.3.11). Fields 27 and 28 are kept for R's,
+	//    the design for IDs and requests, which numbers them; nothing else takes them.
+	RendezvousDepositSizes []uint32 `protobuf:"varint,26,rep,packed,name=rendezvous_deposit_sizes,json=rendezvousDepositSizes,proto3" json:"rendezvous_deposit_sizes,omitempty"` // every deposit size served; I1: [17526]
+	RendezvousKinds        uint32   `protobuf:"varint,29,opt,name=rendezvous_kinds,json=rendezvousKinds,proto3" json:"rendezvous_kinds,omitempty"`                               // bit k for each kind k served;
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *Capabilities) Reset() {
@@ -1450,6 +1454,20 @@ func (x *Capabilities) GetRendezvousDepositTtlSeconds() uint32 {
 func (x *Capabilities) GetRendezvousTtlSeconds() uint32 {
 	if x != nil {
 		return x.RendezvousTtlSeconds
+	}
+	return 0
+}
+
+func (x *Capabilities) GetRendezvousDepositSizes() []uint32 {
+	if x != nil {
+		return x.RendezvousDepositSizes
+	}
+	return nil
+}
+
+func (x *Capabilities) GetRendezvousKinds() uint32 {
+	if x != nil {
+		return x.RendezvousKinds
 	}
 	return 0
 }
@@ -4005,9 +4023,14 @@ type RendezvousRegisterRequest struct {
 	CollectVerifyPub []byte                 `protobuf:"bytes,3,opt,name=collect_verify_pub,json=collectVerifyPub,proto3" json:"collect_verify_pub,omitempty"` // 32 B Ed25519, held only by the card's owner
 	CardXwingPub     []byte                 `protobuf:"bytes,4,opt,name=card_xwing_pub,json=cardXwingPub,proto3" json:"card_xwing_pub,omitempty"`             // 1216 B, disclosed on Open
 	AlgId            uint32                 `protobuf:"varint,5,opt,name=alg_id,json=algId,proto3" json:"alg_id,omitempty"`
-	RegisterAuth     []byte                 `protobuf:"bytes,15,opt,name=register_auth,json=registerAuth,proto3" json:"register_auth,omitempty"` // Ed25519 under collect_sig_sk over the §5.14 preimage
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	Kind             uint32                 `protobuf:"varint,6,opt,name=kind,proto3" json:"kind,omitempty"`                        // Revision 25: 4, the link box; 0 is the card's
+	PublicCt         []byte                 `protobuf:"bytes,7,opt,name=public_ct,json=publicCt,proto3" json:"public_ct,omitempty"` // Revision 25: kind 4's sealed card, EXACTLY 4124 B
+	// Revision 25, kind 4: 2 is derived from the code, 3 is the new device's own, 4 is absent,
+	//   and 5 is 0x0014. Fields 8 to 10 are kept for R's, which the design for IDs and requests
+	//   numbers; nothing else takes them.
+	RegisterAuth  []byte `protobuf:"bytes,15,opt,name=register_auth,json=registerAuth,proto3" json:"register_auth,omitempty"` // Ed25519 under collect_sig_sk over the §5.14 preimage
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RendezvousRegisterRequest) Reset() {
@@ -4075,6 +4098,20 @@ func (x *RendezvousRegisterRequest) GetAlgId() uint32 {
 	return 0
 }
 
+func (x *RendezvousRegisterRequest) GetKind() uint32 {
+	if x != nil {
+		return x.Kind
+	}
+	return 0
+}
+
+func (x *RendezvousRegisterRequest) GetPublicCt() []byte {
+	if x != nil {
+		return x.PublicCt
+	}
+	return nil
+}
+
 func (x *RendezvousRegisterRequest) GetRegisterAuth() []byte {
 	if x != nil {
 		return x.RegisterAuth
@@ -4083,9 +4120,10 @@ func (x *RendezvousRegisterRequest) GetRegisterAuth() []byte {
 }
 
 type RendezvousRegisterResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ExpireTimeMs  uint64                 `protobuf:"varint,1,opt,name=expire_time_ms,json=expireTimeMs,proto3" json:"expire_time_ms,omitempty"` // when this registration lapses without a collect
-	MailboxDepth  uint32                 `protobuf:"varint,2,opt,name=mailbox_depth,json=mailboxDepth,proto3" json:"mailbox_depth,omitempty"`   // uncollected deposits waiting right now
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	ExpireTimeMs uint64                 `protobuf:"varint,1,opt,name=expire_time_ms,json=expireTimeMs,proto3" json:"expire_time_ms,omitempty"` // when this registration lapses without a collect
+	// (Revision 25, kind 4: fixed at registration)
+	MailboxDepth  uint32 `protobuf:"varint,2,opt,name=mailbox_depth,json=mailboxDepth,proto3" json:"mailbox_depth,omitempty"` // uncollected deposits waiting right now
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4187,10 +4225,13 @@ func (x *RendezvousOpenRequest) GetOpenAuth() []byte {
 }
 
 type RendezvousOpenResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CardXwingPub  []byte                 `protobuf:"bytes,1,opt,name=card_xwing_pub,json=cardXwingPub,proto3" json:"card_xwing_pub,omitempty"`
-	AlgId         uint32                 `protobuf:"varint,2,opt,name=alg_id,json=algId,proto3" json:"alg_id,omitempty"`
-	DepositBytes  uint32                 `protobuf:"varint,3,opt,name=deposit_bytes,json=depositBytes,proto3" json:"deposit_bytes,omitempty"` // echoes Capabilities.rendezvous_deposit_bytes
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	CardXwingPub []byte                 `protobuf:"bytes,1,opt,name=card_xwing_pub,json=cardXwingPub,proto3" json:"card_xwing_pub,omitempty"`
+	AlgId        uint32                 `protobuf:"varint,2,opt,name=alg_id,json=algId,proto3" json:"alg_id,omitempty"`
+	DepositBytes uint32                 `protobuf:"varint,3,opt,name=deposit_bytes,json=depositBytes,proto3" json:"deposit_bytes,omitempty"` // echoes Capabilities.rendezvous_deposit_bytes
+	// (Revision 25, kind 4: 17526, the box's own)
+	PublicCt      []byte   `protobuf:"bytes,4,opt,name=public_ct,json=publicCt,proto3" json:"public_ct,omitempty"`                     // Revision 25: kind 4's sealed card
+	DepositSizes  []uint32 `protobuf:"varint,5,rep,packed,name=deposit_sizes,json=depositSizes,proto3" json:"deposit_sizes,omitempty"` // Revision 25: the sizes this box takes; kind 4: [17526]
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4246,11 +4287,26 @@ func (x *RendezvousOpenResponse) GetDepositBytes() uint32 {
 	return 0
 }
 
+func (x *RendezvousOpenResponse) GetPublicCt() []byte {
+	if x != nil {
+		return x.PublicCt
+	}
+	return nil
+}
+
+func (x *RendezvousOpenResponse) GetDepositSizes() []uint32 {
+	if x != nil {
+		return x.DepositSizes
+	}
+	return nil
+}
+
 type RendezvousDepositRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RendezvousId  []byte                 `protobuf:"bytes,1,opt,name=rendezvous_id,json=rendezvousId,proto3" json:"rendezvous_id,omitempty"`
-	DepositCt     []byte                 `protobuf:"bytes,2,opt,name=deposit_ct,json=depositCt,proto3" json:"deposit_ct,omitempty"`        // EXACTLY rendezvous_deposit_bytes
-	DepositAuth   []byte                 `protobuf:"bytes,15,opt,name=deposit_auth,json=depositAuth,proto3" json:"deposit_auth,omitempty"` // Ed25519 under deposit_sig_sk over
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RendezvousId []byte                 `protobuf:"bytes,1,opt,name=rendezvous_id,json=rendezvousId,proto3" json:"rendezvous_id,omitempty"`
+	DepositCt    []byte                 `protobuf:"bytes,2,opt,name=deposit_ct,json=depositCt,proto3" json:"deposit_ct,omitempty"` // EXACTLY rendezvous_deposit_bytes
+	// (Revision 25, kind 4: EXACTLY 17526 B)
+	DepositAuth   []byte `protobuf:"bytes,15,opt,name=deposit_auth,json=depositAuth,proto3" json:"deposit_auth,omitempty"` // Ed25519 under deposit_sig_sk over
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4307,8 +4363,10 @@ func (x *RendezvousDepositRequest) GetDepositAuth() []byte {
 }
 
 type RendezvousDepositResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DepositId     uint64                 `protobuf:"varint,1,opt,name=deposit_id,json=depositId,proto3" json:"deposit_id,omitempty"` // the id assigned, or the existing one on an
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	DepositId uint64                 `protobuf:"varint,1,opt,name=deposit_id,json=depositId,proto3" json:"deposit_id,omitempty"` // the id assigned, or the existing one on an
+	// idempotent replay of identical bytes
+	DepositHash   []byte `protobuf:"bytes,2,opt,name=deposit_hash,json=depositHash,proto3" json:"deposit_hash,omitempty"` // Revision 25: H(deposit_ct), the idempotency key
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4350,16 +4408,24 @@ func (x *RendezvousDepositResponse) GetDepositId() uint64 {
 	return 0
 }
 
+func (x *RendezvousDepositResponse) GetDepositHash() []byte {
+	if x != nil {
+		return x.DepositHash
+	}
+	return nil
+}
+
 type RendezvousCollectRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	RendezvousId        []byte                 `protobuf:"bytes,1,opt,name=rendezvous_id,json=rendezvousId,proto3" json:"rendezvous_id,omitempty"`
 	SinceDepositId      uint64                 `protobuf:"varint,2,opt,name=since_deposit_id,json=sinceDepositId,proto3" json:"since_deposit_id,omitempty"`
 	AckThroughDepositId uint64                 `protobuf:"varint,3,opt,name=ack_through_deposit_id,json=ackThroughDepositId,proto3" json:"ack_through_deposit_id,omitempty"` // deletes everything through this id
 	Limit               uint32                 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
-	Subscribe           bool                   `protobuf:"varint,5,opt,name=subscribe,proto3" json:"subscribe,omitempty"`                        // push while this connection lives
-	CollectAuth         []byte                 `protobuf:"bytes,15,opt,name=collect_auth,json=collectAuth,proto3" json:"collect_auth,omitempty"` // Ed25519 under collect_sig_sk
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	Subscribe           bool                   `protobuf:"varint,5,opt,name=subscribe,proto3" json:"subscribe,omitempty"` // push while this connection lives
+	// Revision 25: 6 is kept for R's join box, which the design for IDs and requests numbers.
+	CollectAuth   []byte `protobuf:"bytes,15,opt,name=collect_auth,json=collectAuth,proto3" json:"collect_auth,omitempty"` // Ed25519 under collect_sig_sk
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RendezvousCollectRequest) Reset() {
@@ -4435,12 +4501,13 @@ func (x *RendezvousCollectRequest) GetCollectAuth() []byte {
 }
 
 type RendezvousCollectResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Deposits      []*RendezvousDeposit   `protobuf:"bytes,1,rep,name=deposits,proto3" json:"deposits,omitempty"`
-	PendingCount  uint32                 `protobuf:"varint,2,opt,name=pending_count,json=pendingCount,proto3" json:"pending_count,omitempty"`
-	RefusedCount  uint64                 `protobuf:"varint,3,opt,name=refused_count,json=refusedCount,proto3" json:"refused_count,omitempty"`   // refusals since the previous collect, then zeroed
-	ExpireTimeMs  uint64                 `protobuf:"varint,4,opt,name=expire_time_ms,json=expireTimeMs,proto3" json:"expire_time_ms,omitempty"` // refreshed by this call
-	Complete      bool                   `protobuf:"varint,5,opt,name=complete,proto3" json:"complete,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Deposits     []*RendezvousDeposit   `protobuf:"bytes,1,rep,name=deposits,proto3" json:"deposits,omitempty"`
+	PendingCount uint32                 `protobuf:"varint,2,opt,name=pending_count,json=pendingCount,proto3" json:"pending_count,omitempty"`
+	RefusedCount uint64                 `protobuf:"varint,3,opt,name=refused_count,json=refusedCount,proto3" json:"refused_count,omitempty"`   // refusals since the previous collect, then zeroed
+	ExpireTimeMs uint64                 `protobuf:"varint,4,opt,name=expire_time_ms,json=expireTimeMs,proto3" json:"expire_time_ms,omitempty"` // refreshed by this call
+	// (Revision 25, kind 4: the box's fixed expiry)
+	Complete      bool `protobuf:"varint,5,opt,name=complete,proto3" json:"complete,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4869,7 +4936,7 @@ const file_message_proto_rawDesc = "" +
 	"\fnot_after_ms\x18\x03 \x01(\x04R\n" +
 	"notAfterMs\x12&\n" +
 	"\x0fsig_by_previous\x18\x04 \x01(\fR\rsigByPrevious\x12\x1e\n" +
-	"\vsig_by_root\x18\x05 \x01(\fR\tsigByRoot\"\x8f\n" +
+	"\vsig_by_root\x18\x05 \x01(\fR\tsigByRoot\"\xf4\n" +
 	"\n" +
 	"\fCapabilities\x12$\n" +
 	"\x0emax_blob_bytes\x18\x01 \x01(\x04R\fmaxBlobBytes\x12*\n" +
@@ -4897,7 +4964,9 @@ const file_message_proto_rawDesc = "" +
 	"\x18rendezvous_deposit_bytes\x18\x16 \x01(\rR\x16rendezvousDepositBytes\x128\n" +
 	"\x18rendezvous_mailbox_depth\x18\x17 \x01(\rR\x16rendezvousMailboxDepth\x12C\n" +
 	"\x1erendezvous_deposit_ttl_seconds\x18\x18 \x01(\rR\x1brendezvousDepositTtlSeconds\x124\n" +
-	"\x16rendezvous_ttl_seconds\x18\x19 \x01(\rR\x14rendezvousTtlSeconds\"\x7f\n" +
+	"\x16rendezvous_ttl_seconds\x18\x19 \x01(\rR\x14rendezvousTtlSeconds\x128\n" +
+	"\x18rendezvous_deposit_sizes\x18\x1a \x03(\rR\x16rendezvousDepositSizes\x12)\n" +
+	"\x10rendezvous_kinds\x18\x1d \x01(\rR\x0frendezvousKinds\"\x7f\n" +
 	"\fBlobEndpoint\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12&\n" +
@@ -5091,32 +5160,37 @@ const file_message_proto_rawDesc = "" +
 	"\x1brequested_media_ttl_seconds\x18\x05 \x01(\rR\x18requestedMediaTtlSeconds\x12A\n" +
 	"\x1drequested_durable_ttl_seconds\x18\x06 \x01(\rR\x1arequestedDurableTtlSeconds\x120\n" +
 	"\x14durable_clamped_down\x18\a \x01(\bR\x12durableClampedDown\x12+\n" +
-	"\x11durable_defaulted\x18\b \x01(\bR\x10durableDefaulted\"\xfe\x01\n" +
+	"\x11durable_defaulted\x18\b \x01(\bR\x10durableDefaulted\"\xaf\x02\n" +
 	"\x19RendezvousRegisterRequest\x12#\n" +
 	"\rrendezvous_id\x18\x01 \x01(\fR\frendezvousId\x12,\n" +
 	"\x12deposit_verify_pub\x18\x02 \x01(\fR\x10depositVerifyPub\x12,\n" +
 	"\x12collect_verify_pub\x18\x03 \x01(\fR\x10collectVerifyPub\x12$\n" +
 	"\x0ecard_xwing_pub\x18\x04 \x01(\fR\fcardXwingPub\x12\x15\n" +
-	"\x06alg_id\x18\x05 \x01(\rR\x05algId\x12#\n" +
+	"\x06alg_id\x18\x05 \x01(\rR\x05algId\x12\x12\n" +
+	"\x04kind\x18\x06 \x01(\rR\x04kind\x12\x1b\n" +
+	"\tpublic_ct\x18\a \x01(\fR\bpublicCt\x12#\n" +
 	"\rregister_auth\x18\x0f \x01(\fR\fregisterAuth\"g\n" +
 	"\x1aRendezvousRegisterResponse\x12$\n" +
 	"\x0eexpire_time_ms\x18\x01 \x01(\x04R\fexpireTimeMs\x12#\n" +
 	"\rmailbox_depth\x18\x02 \x01(\rR\fmailboxDepth\"Y\n" +
 	"\x15RendezvousOpenRequest\x12#\n" +
 	"\rrendezvous_id\x18\x01 \x01(\fR\frendezvousId\x12\x1b\n" +
-	"\topen_auth\x18\x0f \x01(\fR\bopenAuth\"z\n" +
+	"\topen_auth\x18\x0f \x01(\fR\bopenAuth\"\xbc\x01\n" +
 	"\x16RendezvousOpenResponse\x12$\n" +
 	"\x0ecard_xwing_pub\x18\x01 \x01(\fR\fcardXwingPub\x12\x15\n" +
 	"\x06alg_id\x18\x02 \x01(\rR\x05algId\x12#\n" +
-	"\rdeposit_bytes\x18\x03 \x01(\rR\fdepositBytes\"\x81\x01\n" +
+	"\rdeposit_bytes\x18\x03 \x01(\rR\fdepositBytes\x12\x1b\n" +
+	"\tpublic_ct\x18\x04 \x01(\fR\bpublicCt\x12#\n" +
+	"\rdeposit_sizes\x18\x05 \x03(\rR\fdepositSizes\"\x81\x01\n" +
 	"\x18RendezvousDepositRequest\x12#\n" +
 	"\rrendezvous_id\x18\x01 \x01(\fR\frendezvousId\x12\x1d\n" +
 	"\n" +
 	"deposit_ct\x18\x02 \x01(\fR\tdepositCt\x12!\n" +
-	"\fdeposit_auth\x18\x0f \x01(\fR\vdepositAuth\":\n" +
+	"\fdeposit_auth\x18\x0f \x01(\fR\vdepositAuth\"]\n" +
 	"\x19RendezvousDepositResponse\x12\x1d\n" +
 	"\n" +
-	"deposit_id\x18\x01 \x01(\x04R\tdepositId\"\xf5\x01\n" +
+	"deposit_id\x18\x01 \x01(\x04R\tdepositId\x12!\n" +
+	"\fdeposit_hash\x18\x02 \x01(\fR\vdepositHash\"\xf5\x01\n" +
 	"\x18RendezvousCollectRequest\x12#\n" +
 	"\rrendezvous_id\x18\x01 \x01(\fR\frendezvousId\x12(\n" +
 	"\x10since_deposit_id\x18\x02 \x01(\x04R\x0esinceDepositId\x123\n" +
