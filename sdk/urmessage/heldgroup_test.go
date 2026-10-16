@@ -7,6 +7,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
+	"syscall"
 	"testing"
 
 	messageprotocol "github.com/urnetwork/message/protocol"
@@ -59,6 +61,52 @@ func TestAnInviteIntoAGroupThisDeviceHoldsIsRefused(t *testing.T) {
 	}
 	if epoch := held.Epoch(); epoch != 1 {
 		t.Errorf("the held group stands at epoch %d after two refused invites, want 1", epoch)
+	}
+}
+
+// AN INVITE INTO A GROUP THE LAST RESTORE COULD NOT READ IS REFUSED WITH THAT CLASS'S SENTINEL
+// (R33's X3). A joiner holds a group on its disk, restarts, and its Restore cannot read the group's
+// epoch state: once for a moment (a lock), once for a reason this build cannot classify (a
+// permission refused). An invite into that group is refused -- its record is on the disk -- and
+// with the sentinel the Restore reported it under, NOT [ErrGroupAlreadyHeld], whose "leave it first
+// with ForgetGroup" is not true while the leave of that group is refused. THE CONTROL: once a
+// Restore reads it, the group is live, and the same invite is refused as held.
+//
+// WHAT WOULD GO RED: the gate's held sentence over a group in the not-read set, sending a person to
+// a leave this device refuses.
+func TestAnInviteIntoAGroupTheLastRestoreCouldNotReadAnswersThatClass(t *testing.T) {
+	ctx := context.Background()
+	for _, one := range []struct {
+		name     string
+		failWith error
+		want     error
+	}{
+		{"a lock", asStoreRead(transientErrnos[0]), ErrGroupRecordNotReadNow},
+		{"a permission refused", asStoreRead(syscall.EACCES), ErrGroupReadUnproven},
+	} {
+		dir, groupId := failClosedScene(t)
+		store, device := failClosedRestart(t, dir, groupId, one.failWith)
+		restored, err := device.Restore(ctx)
+		if len(restored) != 0 || !errors.Is(err, one.want) {
+			t.Fatalf("%s: CONTROL FAILED: the Restore answered %d group(s), %v, want none and %v", one.name, len(restored), err, one.want)
+		}
+		invite, inviteId := windowInvite(t, device)
+		if !bytes.Equal(inviteId, groupId) {
+			t.Fatalf("%s: CONTROL FAILED: the invite is into group %x and the device holds %x", one.name, inviteId, groupId)
+		}
+		_, err = device.Join(ctx, invite)
+		t.Logf("%s: the invite into the group not read: %v", one.name, err)
+		if !errors.Is(err, one.want) || errors.Is(err, ErrGroupAlreadyHeld) || strings.Contains(err.Error(), "leave it first") {
+			t.Errorf("%s: the invite answered %v, want %v and not ErrGroupAlreadyHeld's remedy", one.name, err, one.want)
+		}
+		// THE CONTROL: read, the group is live, and the same invite is refused as held
+		store.failWith = nil
+		if restored, err := device.Restore(ctx); err != nil || len(restored) != 1 {
+			t.Fatalf("%s: the Restore with nothing in the way answered %d group(s), %v", one.name, len(restored), err)
+		}
+		if _, err := device.Join(ctx, invite); !errors.Is(err, ErrGroupAlreadyHeld) {
+			t.Errorf("%s: the invite into the live group answered %v, want ErrGroupAlreadyHeld", one.name, err)
+		}
 	}
 }
 

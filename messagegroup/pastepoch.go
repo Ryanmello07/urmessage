@@ -485,6 +485,9 @@ func (self *GroupSession) pastEpochOnLoop(epoch uint64) (*pastEpoch, error) {
 		classKeys: DeriveClassKeys(root),
 		receivers: receivers,
 	}
+	// CACHED FOR THE LIFE OF THE SESSION, which is why the loader must answer only a state this
+	// group holds: a state a join was still judging, served for this epoch by the caller's store,
+	// would be what this epoch opens with until a restart. Open item MG-10.
 	self.pastEpochs[epoch] = past
 	return past, nil
 }

@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -66,6 +67,9 @@ var (
 	steps   int
 	checks  int
 	current string
+
+	// the invitations this run carried that [sealed] has read, for the step that counts them
+	sealedInvites int
 )
 
 // ── the transcript, which this run reads back at the end ─────────────────────────────────────
@@ -268,8 +272,49 @@ func main() {
 		fail("A Open: %v", err)
 	}
 	check(aGroup.IsOpen(), "Open returned no error and the group does not say it is open")
+	sealed("B's invitation, from the founding add", encoded, a, groupId)
 	fmt.Fprintf(out, "  group %x epoch %d; invite %d octets, carried out of band as the design says\n",
 		aGroup.Id()[:8], aGroup.Epoch(), len(encoded))
+
+	// ── the join seal, 1 of 4 ────────────────────────────────────────────────────────────
+	step("an invitation at version 2, the format that carried its secrets in the clear, is refused by its version")
+	fmt.Fprintf(out, "  WHAT THIS IS FOR: version 2 put the join epoch's secret and the group's handle key in the\n"+
+		"  invitation as plain octets. This build writes version 3 and reads nothing else, so that no\n"+
+		"  paste can hand a joiner two secrets somebody on the channel chose. The blob below is the\n"+
+		"  invitation A just made with its version octets changed to 2, under a checksum that covers\n"+
+		"  the change: what is refused is the version, and not a damaged paste.\n")
+	check(2 < len(encoded) && encoded[0] == 0x00 && encoded[1] == 0x03,
+		"the invitation A made begins with the octets %x, want 00 03", encoded[:2])
+	versionTwo := append([]byte{0x00, 0x02}, encoded[2:len(encoded)-sha256.Size]...)
+	versionTwoSum := sha256.Sum256(versionTwo)
+	_, err = urmessage.ParseInvite(append(versionTwo, versionTwoSum[:]...))
+	check(errors.Is(err, urmessage.ErrInviteVersion),
+		"an invitation at version 2, under a checksum that covers it, answered %v, want ErrInviteVersion", err)
+	check(!errors.Is(err, urmessage.ErrInviteDamaged),
+		"the version 2 invitation was refused as DAMAGED (%v): the refusal is the checksum's and says nothing about the version", err)
+	fmt.Fprintf(out, "  refused by its version, before a field of it was read\n")
+
+	// ── the join seal, 2 of 4 ────────────────────────────────────────────────────────────
+	step("an invitation with one bit of its authenticator flipped is refused, and B's join code is not spent")
+	fmt.Fprintf(out, "  WHAT THIS IS FOR: the two join secrets travel sealed to B's own device key, and the seal\n"+
+		"  is authenticated by a key only a member of the epoch B is joining can derive. B checks\n"+
+		"  that before it opens anything, and before anything of the join reaches its disk. So an\n"+
+		"  invitation altered on the way is refused AND costs nothing: B's one-use join code goes\n"+
+		"  back, and the honest invitation joins over it in the next step.\n")
+	altered, err := urmessage.ParseInvite(encoded)
+	if err != nil {
+		fail("parse invite: %v", err)
+	}
+	// a copy, so that the octets A's invitation is carried in are not the ones that are bent
+	altered.JoinAuth = bytes.Clone(altered.JoinAuth)
+	altered.JoinAuth[0] ^= 0x01
+	_, err = b.device.Join(ctx, altered)
+	check(errors.Is(err, urmessage.ErrJoinSealUnauthenticated),
+		"an invitation with one bit of its authenticator flipped answered %v, want ErrJoinSealUnauthenticated", err)
+	check(errors.Is(err, urmessage.ErrJoinRefused) && !errors.Is(err, urmessage.ErrJoinCodeSpent),
+		"that refusal is %v: it must say the join code is not spent, and must not say it is", err)
+	check(len(b.device.Groups()) == 0, "B holds %d group(s) after an invitation it refused", len(b.device.Groups()))
+	fmt.Fprintf(out, "  refused inside the join's window; the next step joins the honest invitation over the SAME join code\n")
 
 	// ── 3 ────────────────────────────────────────────────────────────────────────────────
 	step("B joins from the invite and reads the string A typed")
@@ -298,6 +343,26 @@ func main() {
 	back := receive(aGroup, ctx, "A")
 	check(len(back) == 1 && back[0].Text == reply, "A read %s for B's one answer", texts(back))
 	fmt.Fprintf(out, "  the string crossed both ways; B's sender_handle %x\n", back[0].SenderHandle)
+
+	// ── the join seal, 3 of 4 ────────────────────────────────────────────────────────────
+	step("the invitation B already joined is pasted again and is refused, and B's group is the one it holds")
+	fmt.Fprintf(out, "  WHAT THIS IS FOR: a join writes an epoch state, a record and a map entry under the group's\n"+
+		"  id, so a join over a group a device holds would be that group replaced by whatever the\n"+
+		"  invitation carries, and an invitation authenticates nobody. Until this build an invitation\n"+
+		"  into a held group was honoured. It is refused now, before B's join code is looked at, and\n"+
+		"  the next step is B reading what A sends in the group it still holds.\n")
+	again, err := urmessage.ParseInvite(encoded)
+	if err != nil {
+		fail("parse invite: %v", err)
+	}
+	_, err = b.device.Join(ctx, again)
+	check(errors.Is(err, urmessage.ErrGroupAlreadyHeld),
+		"the invitation B had already joined, pasted again, answered %v, want ErrGroupAlreadyHeld", err)
+	bHolds := b.device.Groups()
+	check(len(bHolds) == 1 && bHolds[0] == bGroup,
+		"B holds %d group(s) after the refused invitation, and the one it joined is not the one it holds", len(bHolds))
+	check(bGroup.Epoch() == 1, "B's group is at epoch %d after the refused invitation, want 1", bGroup.Epoch())
+	fmt.Fprintf(out, "  refused; B holds the group it joined, at the epoch it joined at\n")
 
 	// ── 4 ────────────────────────────────────────────────────────────────────────────────
 	step(fmt.Sprintf("%d messages in order, which is what crosses a fetch page", lineCount))
@@ -365,6 +430,7 @@ func main() {
 	if err != nil {
 		fail("encode C's invite: %v", err)
 	}
+	sealed("C's invitation, from a live add", thirdEncoded, a, groupId)
 	thirdCarried, err := urmessage.ParseInvite(thirdEncoded)
 	if err != nil {
 		fail("parse C's invite: %v", err)
@@ -1301,6 +1367,16 @@ func main() {
 	removalReport("B  owner, committed it", bGroup, cId)
 	removalReport("C  removed, two leaves", cGroup, cId)
 
+	// ── the join seal, 4 of 4 ────────────────────────────────────────────────────────────
+	step("every invitation this run carried is at version 3 and carries neither of its adder's two secrets")
+	fmt.Fprintf(out, "  WHAT THIS IS FOR: it is the claim itself, read off what this run pasted. Each invitation\n"+
+		"  was searched, at the moment it was made, for the join epoch's secret and for the group's\n"+
+		"  handle key as its adder's own disk holds them. What an invitation still shows is the\n"+
+		"  group's id and who is in it: the seal narrows what a paste gives away, and does not make\n"+
+		"  an invitation something to post in public.\n")
+	check(sealedInvites == 2, "this run read %d invitation(s) for their adder's secrets, and it carried 2", sealedInvites)
+	fmt.Fprintf(out, "  %d invitations, one from the founding add and one from a live add; neither secret in either\n", sealedInvites)
+
 	// ── the counters, which are the last thing a reader should see ───────────────────────
 	step("the counters")
 	report("A", aGroup)
@@ -1611,6 +1687,33 @@ func connectAcrossTheReconnectWindow(ctx context.Context, p *party, what string,
 		fail("%s Connect: %v", what, err)
 	}
 	fmt.Fprintf(out, "  %s was routed to after %v\n", what, time.Since(began).Round(time.Millisecond))
+}
+
+// sealed holds one invitation this run carried to the two things the join seal promises of it: it
+// is at version 3, and NEITHER SECRET OF ITS ADDER IS AMONG ITS OCTETS. The adder is a party of
+// this run, so the two values are read off its own durable record and searched for as octets;
+// the control is that the record holds them, since a search for nothing finds nothing.
+func sealed(what string, encoded []byte, adder *party, groupId []byte) {
+	check(2 < len(encoded) && encoded[0] == 0x00 && encoded[1] == 0x03,
+		"%s begins with the octets %x, want 00 03", what, encoded[:2])
+	records, err := adder.stateStore.GroupRecords()
+	if err != nil {
+		fail("%s: reading %s's durable record: %v", what, adder.name, err)
+	}
+	var record *urmessage.GroupRecord
+	for _, one := range records {
+		if bytes.Equal(one.GroupId, groupId) {
+			record = one
+		}
+	}
+	check(record != nil && len(record.PqSecret) == 32 && len(record.GroupHandleKey) == 32,
+		"CONTROL FAILED: %s's durable record does not hold the two secrets to search %s for, so a "+
+			"count of zero would be a search for nothing", adder.name, what)
+	check(!bytes.Contains(encoded, record.PqSecret),
+		"%s CARRIES ITS ADDER'S pq_secret IN THE CLEAR, among its %d octets", what, len(encoded))
+	check(!bytes.Contains(encoded, record.GroupHandleKey),
+		"%s CARRIES THE GROUP'S HANDLE KEY IN THE CLEAR, among its %d octets", what, len(encoded))
+	sealedInvites += 1
 }
 
 func step(s string) {

@@ -86,6 +86,12 @@ const (
 	ExtensionTypeUrmessageGroupPolicy    ExtensionType = 0xF001
 	ExtensionTypeUrmessageLeafKeys       ExtensionType = 0xF002
 	ExtensionTypeUrmessageOwnerSuccessor ExtensionType = 0xF003
+	// urmessage_join_seal is CAPABILITY-ONLY: no extension of this type is ever carried, in a
+	// leaf or in a group context. A key package that lists it says its device opens invite
+	// version 3, whose join secrets arrive sealed to the leaf's urmessage_leaf_keys key, and a
+	// group that requires it admits no device that cannot. It names exactly that one format: a
+	// change to the seal, its payload or its authenticator takes a new code point.
+	ExtensionTypeUrmessageJoinSeal ExtensionType = 0xF004
 )
 
 // Extension is one entry of an extensions vector: a registry code point and an

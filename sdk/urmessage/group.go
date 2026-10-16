@@ -838,6 +838,11 @@ type Group struct {
 	// the record the server stores as is_commit actually carries a commit.
 	commit []byte
 
+	// foundingJoinDigest is H(epoch_keys) of epoch one AS [Group.AddMember] SEALED IT INTO THE
+	// INVITE, kept for [Group.Open] to hold the digest it publishes against. It is a digest and
+	// not a key. Nil on every group but a founder's between its add and its open.
+	foundingJoinDigest []byte
+
 	opened bool
 	closed bool
 
@@ -1297,7 +1302,7 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 	// ONE ADMISSION AT A TIME, from the question below to the hold: see [Device.admitMutex].
 	self.admitMutex.Lock()
 	defer self.admitMutex.Unlock()
-	if err := self.finishLeaveBefore(groupId); err != nil {
+	if err := self.finishLeaveBefore(groupId, "no group is founded under it"); err != nil {
 		return nil, err
 	}
 	// NOTHING IS FOUNDED UNDER AN ID THIS DEVICE HOLDS: see [Device.foundOverHeldGroup]. It is asked
@@ -1401,7 +1406,7 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 	// the map entry is one critical section.
 	self.admitMutex.Lock()
 	defer self.admitMutex.Unlock()
-	if err := self.finishLeaveBefore(invite.GroupId); err != nil {
+	if err := self.finishLeaveBefore(invite.GroupId, "the invite into it is refused"); err != nil {
 		return nil, err
 	}
 	nonce, nonceEpoch, err := self.nonce()
@@ -1446,6 +1451,27 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 			joined, err = nil, fmt.Errorf("%w: %w, and the join code could not be put back: %w", ErrJoinCodeSpent, err, abortErr)
 			return
 		}
+		// A TAKE THAT REMOVED THE JOIN CODE AND THEN FAILED SPENT IT (R26, the fix review's V3a):
+		// the file is gone and nothing puts it back, so the one true sentence is the spent one.
+		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && errors.Is(err, errKeyPackageRemoved) {
+			joined, err = nil, fmt.Errorf("%w: %w", ErrJoinCodeSpent, err)
+			return
+		}
+		// A JOIN CODE THE STORE HOLDS AND COULD NOT READ IS NOT A MISSING ONE (Task 57, F4; R26,
+		// V3b; R33's X1). The engine carries the store's own refusal. A take the store REFUSED for
+		// any reason not PROVEN permanent -- another process held the file for a moment, a
+		// permission refused, the medium, anything [classifyRead] cannot classify -- removed
+		// nothing, so the window's sentence is true of it: nothing was written, the join code is
+		// not spent, and the same invite joins once the store reads it. It used to be the
+		// transient class alone, and a deny ACL on the join code was told "make a new join code"
+		// while the same invite joined once the deny was lifted, measured. A store that holds NO
+		// SUCH join code, and one whose octets are damaged or whose path is of the wrong type, is
+		// no join code, and is said so below.
+		if errors.Is(err, messagegroup.ErrEngineNoKeyPackageForWelcome) && errors.Is(err, ErrStateStoreState) &&
+			!errors.Is(err, ErrStateNotFound) && classifyRead(err) != readPermanent {
+			joined, err = nil, fmt.Errorf("%w: %w", ErrJoinRefused, err)
+			return
+		}
 		// THE ONE REFUSAL IN HERE THAT DOES NOT CARRY THE WINDOW'S SENTENCE: the engine found no
 		// join code of this device that the invite was made for. "The join code is not spent" is
 		// not true of a join code that is not there. See [ErrNoJoinCodeForInvite].
@@ -1469,7 +1495,26 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 		return nil, fmt.Errorf("%w: the welcome stands at epoch %d and this device was removed at epoch %d",
 			ErrReaddStale, handle.Epoch(), removedEpoch)
 	}
-	session, err = messagegroup.NewGroupSession(handle, invite.PqSecret, invite.GroupHandleKey,
+	// ONLY A GROUP THAT REQUIRES THE JOIN SEAL IS JOINED: see [ErrGroupPredatesJoinSeal].
+	if err := requireJoinSeal(handle); err != nil {
+		return nil, err
+	}
+	// THE JOIN SEAL: verified, opened and checked, in that order, before anything is honoured. See
+	// [Device.openJoinSeal]. The two secrets exist in this function only from here.
+	pqSecret, groupHandleKey, err := self.openJoinSeal(handle, invite)
+	if err != nil {
+		return nil, err
+	}
+	// the epoch's secret is this function's copy, and the group below files a copy of its own
+	defer zeroizeState(pqSecret)
+	// the handle key is the group's once the join has committed; a refusal made between here and
+	// the commit erases it with everything else that refusal leaves
+	defer func() {
+		if !committed {
+			zeroizeState(groupHandleKey)
+		}
+	}()
+	session, err = messagegroup.NewGroupSession(handle, pqSecret, groupHandleKey,
 		self.reserver, self.nowMs, nonce)
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: the session at epoch %d: %w", handle.Epoch(), err)
@@ -1491,12 +1536,12 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 		device:         self,
 		id:             append([]byte(nil), invite.GroupId...),
 		handle:         handle,
-		groupHandleKey: append([]byte(nil), invite.GroupHandleKey...),
-		// AT THE EPOCH THE WELCOME ADMITTED THIS DEVICE AT, and at no other. MASTER section 7's
-		// out-of-band delivery is what an [Invite] is: the joiner is handed the secret of the
-		// epoch it is joining, it was not present for any epoch below and can vouch for none of
-		// them, and every epoch ABOVE arrives through that epoch's own device wrap.
-		pqSecrets:    map[uint64][]byte{handle.Epoch(): append([]byte(nil), invite.PqSecret...)},
+		groupHandleKey: groupHandleKey,
+		// AT THE EPOCH THE WELCOME ADMITTED THIS DEVICE AT, and at no other. The join seal hands
+		// the joiner the secret of the epoch it is joining; it was not present for any epoch below
+		// and can vouch for none of them, and every epoch ABOVE arrives through that epoch's own
+		// device wrap.
+		pqSecrets:    map[uint64][]byte{handle.Epoch(): append([]byte(nil), pqSecret...)},
 		session:      session,
 		sessionBound: nonceEpoch,
 		epoch:        handle.Epoch(),
@@ -1532,20 +1577,87 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 		ownFloorHeld: handle.Epoch() <= 1,
 	}
 	group.initTables()
+	// EVERY FAILURE FROM HERE IS PAST THE COMMIT, so it goes through [Device.abandonJoined]: the
+	// state the commit wrote is erased with the group, and nothing of the join outlives it.
 	if err := self.persistGroup(group.groupRecordLocked(true)); err != nil {
-		// the session first and the handle after it, which is [Group.Close]'s own order: the
-		// session owns the loop that the handle is reached through.
-		session.Close()
-		handle.Close()
-		return nil, fmt.Errorf(
-			"%w: this group joined and its record could not be persisted, so a restart would not come back into it: %w", ErrJoinCodeSpent, err)
+		return nil, self.abandonJoined(group, readd, fmt.Errorf(
+			"%w: this group joined and its record could not be persisted, so a restart would not come back into it: %w", ErrJoinCodeSpent, err))
 	}
 	if err := self.holdReplacing(group, replaces); err != nil {
-		session.Close()
-		handle.Close()
-		return nil, err
+		// past the commit, so the join code is spent here too (Task 57, F6)
+		return nil, self.abandonJoined(group, readd, fmt.Errorf(
+			"%w: this group joined and could not be filed on this device: %w", ErrJoinCodeSpent, err))
 	}
 	return group, nil
+}
+
+// abandonJoined is what a join that failed AFTER ITS COMMIT leaves behind, which is nothing: the
+// group is closed, and the epoch state the commit wrote is erased (Task 57, F3).
+//
+// WHY THE STATE GOES. It is the joined leaf's private keys and its path-secret ladder. With no
+// record beside it, nothing lists it, no Restore restores it and no ForgetGroup leaves it (it
+// answers that the directory stands with no record in it), while the adder's group keeps the leaf
+// and goes on wrapping to this
+// device. A later thief of the disk could follow that group for as long as the leaf stands, in a
+// group the person was told they never joined. The join code is spent either way, so erasing it
+// costs nothing that was not already lost.
+//
+// EXACTLY THE JOINED EPOCH IS ERASED, and no other. A re-add joins over a group this device was
+// removed from, whose own epoch states, below the one joined, stand in the same directory and are
+// that group's history; they are not this join's to take. Off a re-add the folder may hold a
+// creation that never finished, whose states the sweep takes on its own authority. A store with no
+// single-epoch erase is refused, re-add or not (R34, item 2): everything below the joined epoch's
+// successor is more than this join wrote whenever anything else stands in the folder.
+//
+// THE GROUP IS CLOSED WITH [Group.Close] AND NOT PIECE BY PIECE (Task 57, F6). Closing its session
+// and its handle left the group's own copy of the join epoch's pq_secret in its table, never erased;
+// Close erases the table first, whatever else fails, and then closes the session and the handle in
+// that order.
+//
+// An erase that fails is said in the answer, after the cause, and does not replace it.
+func (self *Device) abandonJoined(group *Group, readd bool, cause error) error {
+	group.Close()
+	if err := self.eraseJoinedState(group.id, group.epoch); err != nil {
+		return fmt.Errorf("%w, and the joined epoch state could not be erased: %w", cause, err)
+	}
+	// AND THE RECORD, WHEN IT IS THIS JOIN'S (R26, the fix review's V4b; R34, item 2). A record whose
+	// write landed and then reported a failure (its directory sync, or the double failure of its
+	// creation mark), or that was written before the hold refused, is on the disk with no state
+	// behind it, holding the joined epoch's pq_secret and the group's handle key. Off a re-add the
+	// gate found NO record under the admission mutex, so any record standing now is this join's,
+	// and it goes -- that and nothing else of the folder: the gate let the join in over a folder
+	// holding nothing of a group, or a creation that never finished, and either may hold files
+	// this join did not write (a stray file, or the states of the earlier creation, which the sweep
+	// takes on its own authority). It used to take the whole folder through DeleteGroupRecord, on
+	// the gate's word that nothing else was there, and the gate had read that from a record moved
+	// away: a removed group's state and the person's own sent line went with it, measured. On a
+	// re-add the record may be the removed group's, which is not this join's to take (open item
+	// MG-14 in messagegroup/OPENITEMS.md).
+	if store, durable := self.stateStore.(DeviceStore); durable && !readd {
+		eraser, exact := store.(interface{ eraseJoinedRecord([]byte) error })
+		if !exact {
+			return fmt.Errorf("%w, and the joined group's record was not erased: this store cannot erase one join's record alone", cause)
+		}
+		if err := eraser.eraseJoinedRecord(group.id); err != nil {
+			return fmt.Errorf("%w, and the joined group's record could not be erased: %w", cause, err)
+		}
+	}
+	return cause
+}
+
+// groupStateEraser is a store that can erase ONE epoch's state of one group. Both stores this
+// package ships are one.
+type groupStateEraser interface {
+	deleteGroupStateAt(groupId []byte, epoch uint64) error
+}
+
+// eraseJoinedState erases the epoch state a join committed, and no other: see
+// [Device.abandonJoined]. A store that cannot erase one epoch's state is refused (R34, item 2).
+func (self *Device) eraseJoinedState(groupId []byte, epoch uint64) error {
+	if eraser, exact := self.stateStore.(groupStateEraser); exact {
+		return eraser.deleteGroupStateAt(groupId, epoch)
+	}
+	return fmt.Errorf("urmessage: this store cannot erase one epoch's state, so group %x's joined state was not erased: whatever else of the group stands beside it is not this join's to take", groupId)
 }
 
 // AddMember adds one device to this group and answers the [Invite] it joins with.
@@ -1583,9 +1695,29 @@ func (self *Group) AddMember(keyPackage []byte) (*Invite, error) {
 	// CommitAdd carries the Add inside the commit, attributed to the committer, and the SAME
 	// call takes N key packages: one commit admits N members. Nothing is staged on its refusal,
 	// and mls refuses the same things it refused through ProposeAdd, at the same call.
+	// THE JOIN CODE IS JUDGED BEFORE ANYTHING IS BUILT: see [Device.joinerOf].
+	joiner, err := self.device.joinerOf(keyPackage)
+	if err != nil {
+		return nil, err
+	}
 	commit, welcome, ratchetTree, err := self.handle.CommitAdd([][]byte{keyPackage})
 	if err != nil {
-		return nil, fmt.Errorf("urmessage: CommitAdd: %w", err)
+		return nil, joinerAlreadyHasALeaf(fmt.Errorf("urmessage: CommitAdd: %w", err))
+	}
+	// THE JOIN SEAL, OFF THE STAGED COMMIT AND BEFORE THE MERGE. Everything the seal binds is
+	// readable now -- the epoch the commit opens, that epoch's exporter, the leaf the joiner was
+	// installed at -- and nothing is irrevocable yet, so a failure here clears the staged commit
+	// and this call can simply be made again. After the merge it could not: the group would stand
+	// at epoch one with a member nobody can hand an invite to.
+	//
+	// THE SECRET IS EPOCH ZERO'S, which is the one epoch change that does not rotate: see the
+	// paragraph below the merge. [Group.epoch] has not moved, so this read and that one are one
+	// value.
+	foundingSecret := self.pqSecretLocked()
+	joinSeal, joinAuth, joinDigest, err := self.sealFoundingJoinLocked(joiner, welcome, ratchetTree, foundingSecret)
+	if err != nil {
+		self.handle.ClearPendingCommit()
+		return nil, err
 	}
 	if err := self.handle.MergePendingCommit(); err != nil {
 		return nil, fmt.Errorf("urmessage: MergePendingCommit: %w", err)
@@ -1605,10 +1737,9 @@ func (self *Group) AddMember(keyPackage []byte) (*Invite, error) {
 	// than an exception. The device wrap is what delivers a rotated secret, a wrap is addressed to
 	// a leaf's published X-Wing key, and at this moment the only OTHER member of this group has
 	// not joined yet -- it is holding the Welcome this call is about to answer. Its copy of epoch
-	// one's secret is [Invite.PqSecret], out of band, MASTER section 7's founding delivery. So
+	// one's secret is inside [Invite.JoinSeal], sealed to the key that leaf will publish. So
 	// epoch one's entry is filed here as a COPY of epoch zero's, deliberately and once, and every
 	// commit to an OPEN group from then on draws a fresh one ([Group.publishCommitLocked]).
-	foundingSecret := self.pqSecretLocked()
 	self.filePqSecretLocked(self.handle.Epoch(), foundingSecret)
 	session, err := messagegroup.NewGroupSession(self.handle, foundingSecret, self.groupHandleKey,
 		self.device.reserver, self.device.nowMs, nonce)
@@ -1646,16 +1777,44 @@ func (self *Group) AddMember(keyPackage []byte) (*Invite, error) {
 	if err := self.enterEpochLocked(); err != nil {
 		return nil, err
 	}
-	// THE SECRET OF THE EPOCH THIS INVITE ADMITS INTO, read out of the table after the entry above
-	// rather than off a field that used to mean one thing forever. [Device.Join] files it at
-	// `handle.Epoch()`, which is the same epoch, and the two sides are two reads of one value.
+	// THE INVITE CARRIES THE SEAL MADE ABOVE, off the staged commit: the secret of the epoch it
+	// admits into is inside it and nowhere else in what is returned. [Device.Join] files what it
+	// opens at `handle.Epoch()`, which is the epoch that secret was sealed for.
+	self.foundingJoinDigest = joinDigest
 	return &Invite{
-		GroupId:        append([]byte(nil), self.id...),
-		Welcome:        append([]byte(nil), welcome...),
-		RatchetTree:    append([]byte(nil), ratchetTree...),
-		PqSecret:       append([]byte(nil), self.pqSecretLocked()...),
-		GroupHandleKey: append([]byte(nil), self.groupHandleKey...),
+		GroupId:     append([]byte(nil), self.id...),
+		Welcome:     append([]byte(nil), welcome...),
+		RatchetTree: append([]byte(nil), ratchetTree...),
+		JoinSeal:    joinSeal,
+		JoinAuth:    joinAuth,
 	}, nil
+}
+
+// sealFoundingJoinLocked is [Group.sealJoinLocked] for the FOUNDING add, where there is no staged
+// rotation to read the epoch's digest off: it computes H(epoch_keys) of the epoch the staged commit
+// opens from that epoch's exporter and the secret the caller names, and answers it beside the seal
+// so that [Group.Open] can hold what it publishes against what was sealed.
+func (self *Group) sealFoundingJoinLocked(joiner *joinerKeys, welcome []byte, ratchetTree []byte,
+	foundingSecret []byte) (joinSeal []byte, joinAuth []byte, joinDigest []byte, err error) {
+
+	pending, err := self.handle.PendingEpoch()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("urmessage: the epoch the founding commit opens: %w", err)
+	}
+	mlsSecret, err := self.handle.PendingExport(storageExporterLabel, nil, storageExporterBytes)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("urmessage: the exporter of epoch %d: %w", pending.Epoch, err)
+	}
+	joinDigest, err = epochKeysDigestOver(self.id, pending.Epoch, mlsSecret, foundingSecret)
+	zeroizeState(mlsSecret)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	joinSeal, joinAuth, err = self.sealJoinLocked(joiner, welcome, ratchetTree, pending.Epoch, foundingSecret, joinDigest)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return joinSeal, joinAuth, joinDigest, nil
 }
 
 // Open publishes this group on the message server: 6.1's founding commit, the epoch's wrap set,
@@ -1713,7 +1872,7 @@ func (self *Group) Open(ctx context.Context) error {
 	// THE FOUNDING FAN-OUT IS THE ONE THAT CARRIES NO KEY MATERIAL, and it stays that way. Every
 	// other epoch's fan-out delivers pq_secret[n+1] under X-Wing to each leaf that is already a
 	// member; at epoch one there is no such leaf -- the only other member is holding the Welcome
-	// and takes its copy out of band in [Invite.PqSecret], MASTER section 7's founding delivery.
+	// and takes its copy out of the join seal its [Invite] carries.
 	// A wrap addressed to a leaf for a secret the device at that leaf already has would be a second
 	// copy of the same value on the wire for nothing. See [alphaWrapBody], and pqepoch.go's header.
 	//
@@ -1750,6 +1909,13 @@ func (self *Group) Open(ctx context.Context) error {
 	}, writeKey, readKey)
 	if err != nil {
 		return fmt.Errorf("urmessage: the digest of the keys epoch %d opens with: %w", self.epoch, err)
+	}
+	// THE DIGEST THE INVITE WAS SEALED OVER, OR NOTHING IS PUBLISHED. [Group.AddMember] computed
+	// it off the staged commit and this is the same value off the session; the joiner recomputes
+	// it a third time and refuses an invite it does not reproduce. Two derivations in one build
+	// are held together here rather than assumed to agree.
+	if !sameDigest(self.foundingJoinDigest, foundingDigest.EpochKeysDigest) {
+		return fmt.Errorf("%w: epoch %d", ErrInviteDigestDrift, self.epoch)
 	}
 	founding, err := self.founding.SealRecord(message.RetentionPermanent, 0, true,
 		encodeHead(self.device.nowMs()), self.commit, 0, &message.ServerAttachment{
@@ -1840,6 +2006,11 @@ func (self *Group) Open(ctx context.Context) error {
 	// finding out at its first send. The error says what actually happened: the group IS open
 	// on the server, and it is the RECORD that did not land.
 	if err := self.device.persistGroup(self.groupRecordLocked(true)); err != nil {
+		// THE RECORD IS ON THE DISK AND ITS CREATION COULD NOT BE RECORDED AS FINISHED (R34, item 3):
+		// said as what it is, and not as a record that did not land
+		if errors.Is(err, errCreationUnretracted) {
+			return fmt.Errorf("urmessage: this group is open on the server and its record is on this device's disk, but this store could not record that the group's creation finished: %w", err)
+		}
 		return fmt.Errorf("urmessage: this group is open on the server and its record could not be persisted, so a restart would refuse to send in it: %w", err)
 	}
 	return nil
@@ -1890,9 +2061,16 @@ func (self *Group) AddMemberAndPublish(ctx context.Context, keyPackage []byte) (
 	// built: a refusal is a fact about this group and this device's role, and it costs no round
 	// trip and touches no session.
 	if _, err := self.authorizeOutgoingLocked(&outgoingCommit{addKeyPackages: [][]byte{keyPackage}}); err != nil {
-		return nil, err
+		return nil, joinerAlreadyHasALeaf(err)
 	}
 	if err := self.rebindLocked(); err != nil {
+		return nil, err
+	}
+	// THE JOIN CODE IS JUDGED BEFORE ANYTHING IS BUILT: see [Device.joinerOf]. The role model
+	// stands ahead of it, because who may add is a fact about this device and is answered the
+	// same way whatever the join code is.
+	joiner, err := self.device.joinerOf(keyPackage)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1901,27 +2079,33 @@ func (self *Group) AddMemberAndPublish(ctx context.Context, keyPackage []byte) (
 	// Welcome and the ratchet tree it answers are the joiner's whether or not the commit lands.
 	commit, welcome, ratchetTree, err := self.handle.CommitAdd([][]byte{keyPackage})
 	if err != nil {
-		return nil, fmt.Errorf("urmessage: CommitAdd: %w", err)
+		return nil, joinerAlreadyHasALeaf(fmt.Errorf("urmessage: CommitAdd: %w", err))
 	}
 
 	// (2)-(5) announce, submit, and -- once the server has taken it -- merge, enter and fan out
 	// the epoch the commit opens. A refusal erases the staged epoch and answers here with nothing
 	// moved; the key package is the joiner's and a retry after Receive may offer it again.
-	if err := self.publishCommitLocked(ctx, commit); err != nil {
+	//
+	// THE JOIN SEAL IS MADE INSIDE THE PUBLISH, BEFORE ANYTHING IS SUBMITTED, over the two values
+	// the publish itself decided: the ROTATED secret of the epoch the commit opens, which no wrap
+	// can carry to a leaf that does not exist yet, and the digest that epoch's commit record is
+	// about to publish. It is not the table's current entry: until the server has taken the
+	// commit that entry is the epoch that is closing.
+	var joinSeal, joinAuth []byte
+	seal := func(opensEpoch uint64, pqSecret []byte, epochKeysDigest []byte) error {
+		var err error
+		joinSeal, joinAuth, err = self.sealJoinLocked(joiner, welcome, ratchetTree, opensEpoch, pqSecret, epochKeysDigest)
+		return err
+	}
+	if err := self.publishCommitLocked(ctx, commit, seal); err != nil {
 		return nil, err
 	}
-
-	// THE ROTATED SECRET AND NOT THE ONE THE GROUP HAD A MOMENT AGO. publishCommitLocked drew
-	// pq_secret[n+1], fanned it out to the members that were already here and entered the epoch,
-	// so the table's current entry IS the new epoch's -- which is what this joiner needs and what
-	// no wrap could have carried to it, because the leaf it will occupy did not exist when the
-	// fan-out was sealed. See [Group.wrapTargetsAtLocked]'s Add arm.
 	return &Invite{
-		GroupId:        append([]byte(nil), self.id...),
-		Welcome:        append([]byte(nil), welcome...),
-		RatchetTree:    append([]byte(nil), ratchetTree...),
-		PqSecret:       append([]byte(nil), self.pqSecretLocked()...),
-		GroupHandleKey: append([]byte(nil), self.groupHandleKey...),
+		GroupId:     append([]byte(nil), self.id...),
+		Welcome:     append([]byte(nil), welcome...),
+		RatchetTree: append([]byte(nil), ratchetTree...),
+		JoinSeal:    joinSeal,
+		JoinAuth:    joinAuth,
 	}, nil
 }
 
@@ -2057,7 +2241,15 @@ func (self *Group) streamFloorRefusalLocked() error {
 // is granted to it, and that its own table never gains the removed-from epoch's row. The exclusion
 // it drives is this method's derivation and no argument of the case's own, which is what makes it
 // a property of the code rather than of the fixture.
-func (self *Group) publishCommitLocked(ctx context.Context, commit []byte) error {
+//
+// beforeSubmit, WHEN IT IS NOT NIL, RUNS ONCE THE EPOCH IS FULLY DECIDED AND BEFORE ANYTHING OF IT
+// IS ON THE WIRE: after the rotation is staged and the digest the commit record will carry is
+// built, and ahead of the first wrap. It is handed the epoch the commit opens, that epoch's
+// pq_secret and that digest's H(epoch_keys). It is how [Group.AddMemberAndPublish] seals the join
+// secrets over exactly what is about to be published, and a refusal from it erases the staged
+// commit like every other exit above the submit.
+func (self *Group) publishCommitLocked(ctx context.Context, commit []byte,
+	beforeSubmit func(opensEpoch uint64, pqSecret []byte, epochKeysDigest []byte) error) error {
 	// (2) the facts of the epoch the staged commit opens, off the staged value: the epoch, the
 	// member count the fan-out will wrap to, the group context the server keys the epoch under,
 	// and the NEW epoch's write and read keys, derived STRAIGHT OFF the staged exporter -- the
@@ -2139,6 +2331,32 @@ func (self *Group) publishCommitLocked(ctx context.Context, commit []byte) error
 	zeroizeState(newRoot)
 	contextHash := sha256.Sum256(pending.GroupContext)
 
+	// (2b') THE DIGEST THE COMMIT RECORD WILL CARRY, BUILT HERE, AHEAD OF THE WRAPS. It reads only
+	// the staged keys, the epoch and the target count, so nothing about it waits for a submit; it
+	// stands above them so that beforeSubmit is handed the value the record below carries, and
+	// the join seal and the commit cannot come to name two digests.
+	group, err := epochDigestGroupId(self.id)
+	if err != nil {
+		self.handle.ClearPendingCommit()
+		return err
+	}
+	commitDigest, err := message.NewEpochDigestAttachment(group, message.EpochDigestAttachment{
+		Epoch:             newEpoch,
+		AlgId:             epochAttachmentAlgId,
+		GroupContextHash:  contextHash[:],
+		ExpectedWrapCount: uint32(len(targets)),
+	}, writeKey, readKey)
+	if err != nil {
+		self.handle.ClearPendingCommit()
+		return fmt.Errorf("urmessage: the digest of the keys epoch %d opens with: %w", newEpoch, err)
+	}
+	if beforeSubmit != nil {
+		if err := beforeSubmit(newEpoch, pqNext, commitDigest.EpochKeysDigest); err != nil {
+			self.handle.ClearPendingCommit()
+			return err
+		}
+	}
+
 	// (2c) RULING 37's WRAPS: SEALED AND SUBMITTED HERE, PRE-MERGE, AT EPOCH n -- AND AHEAD OF THE
 	// COMMIT RECORD.
 	//
@@ -2165,22 +2383,8 @@ func (self *Group) publishCommitLocked(ctx context.Context, commit []byte) error
 
 	// (3) the commit record, sealed at the OLD epoch by self.session -- which is the epoch the
 	// handle is still at -- announcing the new epoch. The server takes it iff its header names
-	// the current epoch and its attachment opens the next.
-	group, err := epochDigestGroupId(self.id)
-	if err != nil {
-		self.handle.ClearPendingCommit()
-		return err
-	}
-	commitDigest, err := message.NewEpochDigestAttachment(group, message.EpochDigestAttachment{
-		Epoch:             newEpoch,
-		AlgId:             epochAttachmentAlgId,
-		GroupContextHash:  contextHash[:],
-		ExpectedWrapCount: uint32(len(targets)),
-	}, writeKey, readKey)
-	if err != nil {
-		self.handle.ClearPendingCommit()
-		return fmt.Errorf("urmessage: the digest of the keys epoch %d opens with: %w", newEpoch, err)
-	}
+	// the current epoch and its attachment opens the next. The attachment is the digest built at
+	// (2b') above.
 	commitRecord, err := self.session.SealRecord(message.RetentionPermanent, 0, true,
 		encodeHead(self.device.nowMs()), commit, 0, &message.ServerAttachment{
 			Kind:        message.AttachmentEpochDigest,
@@ -2374,7 +2578,7 @@ func (self *Group) haltLocked(refusal error) error {
 		return self.halted
 	}
 	if err := self.device.persistGroup(self.groupRecordLocked(true)); err != nil {
-		return fmt.Errorf("%w -- and this refusal could not be persisted, so a restart would come back to a group that reads healthy: %v",
+		return fmt.Errorf("%w -- and this refusal could not be persisted, so a restart would come back to a group that reads healthy: %w",
 			self.halted, err)
 	}
 	return self.halted
@@ -2414,7 +2618,7 @@ func (self *Group) removedLocked(cause error) error {
 		return self.removed
 	}
 	if err := self.device.persistGroup(self.groupRecordLocked(true)); err != nil {
-		return fmt.Errorf("%w -- and this could not be persisted, so a restart would come back to a group that reads caught up and silent: %v",
+		return fmt.Errorf("%w -- and this could not be persisted, so a restart would come back to a group that reads caught up and silent: %w",
 			self.removed, err)
 	}
 	return self.removed

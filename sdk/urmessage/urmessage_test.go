@@ -14,6 +14,7 @@ import (
 	"github.com/urnetwork/message/messagegroup"
 	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
+	"github.com/urnetwork/message/syntax"
 )
 
 // THE CASES THAT DO NOT NEED A SERVER LIVE HERE, and the one that does lives in the nested module
@@ -30,11 +31,11 @@ import (
 
 func TestAnInviteSurvivesTheOnlyThingACarrierDoesToIt(t *testing.T) {
 	original := &Invite{
-		GroupId:        bytes.Repeat([]byte{0x71}, GroupIdBytes),
-		Welcome:        []byte("a welcome, which carries the mls init secret and is therefore key material"),
-		RatchetTree:    []byte("a ratchet tree"),
-		PqSecret:       bytes.Repeat([]byte{0x2A}, messagegroup.PqSecretBytes),
-		GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32),
+		GroupId:     bytes.Repeat([]byte{0x71}, GroupIdBytes),
+		Welcome:     []byte("a welcome, which carries the mls init secret and is therefore key material"),
+		RatchetTree: []byte("a ratchet tree"),
+		JoinSeal:    testJoinSeal(),
+		JoinAuth:    bytes.Repeat([]byte{0x5C}, joinAuthBytes),
 	}
 	encoded, err := original.Encode()
 	if err != nil {
@@ -52,8 +53,8 @@ func TestAnInviteSurvivesTheOnlyThingACarrierDoesToIt(t *testing.T) {
 		{"group_id", original.GroupId, parsed.GroupId},
 		{"welcome", original.Welcome, parsed.Welcome},
 		{"ratchet_tree", original.RatchetTree, parsed.RatchetTree},
-		{"pq_secret", original.PqSecret, parsed.PqSecret},
-		{"group_handle_key", original.GroupHandleKey, parsed.GroupHandleKey},
+		{"join_seal", original.JoinSeal, parsed.JoinSeal},
+		{"join_auth", original.JoinAuth, parsed.JoinAuth},
 	} {
 		if !bytes.Equal(field.want, field.got) {
 			t.Errorf("%s came back as %x and was encoded as %x", field.name, field.got, field.want)
@@ -70,11 +71,11 @@ func TestAnInviteSurvivesTheOnlyThingACarrierDoesToIt(t *testing.T) {
 func TestAnInviteMissingAnyHalfIsRefused(t *testing.T) {
 	whole := func() *Invite {
 		return &Invite{
-			GroupId:        bytes.Repeat([]byte{0x71}, GroupIdBytes),
-			Welcome:        []byte("a welcome"),
-			RatchetTree:    []byte("a ratchet tree"),
-			PqSecret:       bytes.Repeat([]byte{0x2A}, messagegroup.PqSecretBytes),
-			GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32),
+			GroupId:     bytes.Repeat([]byte{0x71}, GroupIdBytes),
+			Welcome:     []byte("a welcome"),
+			RatchetTree: []byte("a ratchet tree"),
+			JoinSeal:    testJoinSeal(),
+			JoinAuth:    bytes.Repeat([]byte{0x5C}, joinAuthBytes),
 		}
 	}
 	clear := []struct {
@@ -84,8 +85,8 @@ func TestAnInviteMissingAnyHalfIsRefused(t *testing.T) {
 		{"group_id", func(i *Invite) { i.GroupId = nil }},
 		{"welcome", func(i *Invite) { i.Welcome = nil }},
 		{"ratchet_tree", func(i *Invite) { i.RatchetTree = nil }},
-		{"pq_secret", func(i *Invite) { i.PqSecret = nil }},
-		{"group_handle_key", func(i *Invite) { i.GroupHandleKey = nil }},
+		{"join_seal", func(i *Invite) { i.JoinSeal = nil }},
+		{"join_auth", func(i *Invite) { i.JoinAuth = nil }},
 	}
 	if fields := invitefieldCount(); fields != len(clear) {
 		t.Fatalf("Invite declares %d fields and this case empties %d of them, so a field is untested", fields, len(clear))
@@ -105,6 +106,61 @@ func TestAnInviteMissingAnyHalfIsRefused(t *testing.T) {
 	}
 }
 
+// testJoinSeal is octets of the SHAPE a join seal has and nothing more: the four constants of its
+// envelope and filler to its exact length. It opens to nothing, which is all the codec's own cases
+// need; the cases that open a seal make a real one.
+func testJoinSeal() []byte {
+	seal := bytes.Repeat([]byte{0x2A}, joinSealBytes)
+	copy(seal, messagegroup.WrapEnvelope{
+		FormatVersion: messagegroup.WrapFormatVersion,
+		TargetType:    wrapTargetTypeJoiner,
+		PayloadType:   wrapPayloadTypeJoinSecrets,
+		ContentEpoch:  0,
+	}.Encode())
+	return seal
+}
+
+// The seal's shape is refused at the paste: its length, its authenticator's length, and each of the
+// four constants of its envelope, one at a time. The envelope rows are the ones that matter most:
+// a DEVICE WRAP's octets (target 0x01, payload 0x01) and a non-zero content epoch are both
+// well formed wrap bodies, and neither is a join seal.
+func TestAnInviteWhoseSealIsNotTheShapeVersionThreeFixesIsRefused(t *testing.T) {
+	whole := func() *Invite {
+		return &Invite{
+			GroupId:     bytes.Repeat([]byte{0x71}, GroupIdBytes),
+			Welcome:     []byte("a welcome"),
+			RatchetTree: []byte("a ratchet tree"),
+			JoinSeal:    testJoinSeal(),
+			JoinAuth:    bytes.Repeat([]byte{0x5C}, joinAuthBytes),
+		}
+	}
+	if joinSealBytes != 1253 || joinSecretsBytes != 96 {
+		t.Fatalf("a join seal is %d octets over a %d octet payload; invite version 3 fixes 1253 and 96", joinSealBytes, joinSecretsBytes)
+	}
+	if _, err := whole().Encode(); err != nil {
+		t.Fatalf("CONTROL FAILED: the untouched invite does not encode: %v", err)
+	}
+	for _, one := range []struct {
+		name string
+		bend func(*Invite)
+	}{
+		{"a seal one octet short", func(i *Invite) { i.JoinSeal = i.JoinSeal[:joinSealBytes-1] }},
+		{"a seal one octet long", func(i *Invite) { i.JoinSeal = append(i.JoinSeal, 0x00) }},
+		{"an authenticator one octet short", func(i *Invite) { i.JoinAuth = i.JoinAuth[:joinAuthBytes-1] }},
+		{"an authenticator one octet long", func(i *Invite) { i.JoinAuth = append(i.JoinAuth, 0x00) }},
+		{"another wrap format version", func(i *Invite) { i.JoinSeal[0] = 0x02 }},
+		{"the device wrap's target type", func(i *Invite) { i.JoinSeal[1] = wrapTargetTypeDeviceLeaf }},
+		{"the device wrap's payload type", func(i *Invite) { i.JoinSeal[2] = wrapPayloadTypePqSecret }},
+		{"a content epoch that is not zero", func(i *Invite) { i.JoinSeal[10] = 0x01 }},
+	} {
+		invite := whole()
+		one.bend(invite)
+		if _, err := invite.Encode(); !errors.Is(err, ErrJoinSealShape) {
+			t.Errorf("%s answered %v at Encode, want ErrJoinSealShape", one.name, err)
+		}
+	}
+}
+
 // invitefieldCount is [Invite]'s field count READ THROUGH REFLECTION AT TEST TIME, so a sixth
 // field added to the struct with no clause in check() fails the case above instead of passing it.
 // A constant here would be the check that cannot fail.
@@ -114,11 +170,11 @@ func invitefieldCount() int {
 
 func TestAnInviteFromAnotherVersionOrWithOctetsAfterItIsRefused(t *testing.T) {
 	whole := &Invite{
-		GroupId:        bytes.Repeat([]byte{0x71}, GroupIdBytes),
-		Welcome:        []byte("a welcome"),
-		RatchetTree:    []byte("a ratchet tree"),
-		PqSecret:       bytes.Repeat([]byte{0x2A}, messagegroup.PqSecretBytes),
-		GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32),
+		GroupId:     bytes.Repeat([]byte{0x71}, GroupIdBytes),
+		Welcome:     []byte("a welcome"),
+		RatchetTree: []byte("a ratchet tree"),
+		JoinSeal:    testJoinSeal(),
+		JoinAuth:    bytes.Repeat([]byte{0x5C}, joinAuthBytes),
 	}
 	encoded, err := whole.Encode()
 	if err != nil {
@@ -131,8 +187,25 @@ func TestAnInviteFromAnotherVersionOrWithOctetsAfterItIsRefused(t *testing.T) {
 
 	later := append([]byte(nil), encoded...)
 	later[1] = byte(InviteVersion) + 1
-	if _, err := ParseInvite(later); err == nil {
-		t.Error("an invite at a version this build does not write parsed without complaint")
+	if _, err := ParseInvite(later); !errors.Is(err, ErrInviteVersion) {
+		t.Errorf("an invite at a version this build does not write answered %v, want ErrInviteVersion", err)
+	}
+	// VERSION TWO, WHOLE AND WELL FORMED: the plaintext format, with a checksum that covers it.
+	// It is refused by version before a field of it is read.
+	plaintext := syntax.NewWriter()
+	plaintext.WriteUint16(0x0002)
+	plaintext.WriteOpaqueLP(whole.GroupId)
+	plaintext.WriteOpaqueLP(whole.Welcome)
+	plaintext.WriteOpaqueLP(whole.RatchetTree)
+	plaintext.WriteOpaqueLP(bytes.Repeat([]byte{0x2A}, messagegroup.PqSecretBytes))
+	plaintext.WriteOpaqueLP(bytes.Repeat([]byte{0x5C}, 32))
+	versionTwo, err := plaintext.Bytes()
+	if err != nil {
+		t.Fatalf("encoding a version two invite: %v", err)
+	}
+	versionTwoSum := sha256.Sum256(versionTwo)
+	if _, err := ParseInvite(append(versionTwo, versionTwoSum[:]...)); !errors.Is(err, ErrInviteVersion) {
+		t.Errorf("a well formed version two invite answered %v, want ErrInviteVersion", err)
 	}
 
 	// an octet after the last field UNDER A CHECKSUM THAT COVERS IT, so the refusal is the framing's
@@ -166,11 +239,11 @@ func TestAnInviteFromAnotherVersionOrWithOctetsAfterItIsRefused(t *testing.T) {
 // WHAT WOULD GO RED: take the checksum comparison out of ParseInvite, and almost every flip parses.
 func TestEveryBitFlippedAnywhereInAnInviteIsRefusedAtParse(t *testing.T) {
 	whole := &Invite{
-		GroupId:        bytes.Repeat([]byte{0x71}, GroupIdBytes),
-		Welcome:        bytes.Repeat([]byte("a welcome of some length "), 12),
-		RatchetTree:    []byte("a ratchet tree"),
-		PqSecret:       bytes.Repeat([]byte{0x2A}, messagegroup.PqSecretBytes),
-		GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32),
+		GroupId:     bytes.Repeat([]byte{0x71}, GroupIdBytes),
+		Welcome:     bytes.Repeat([]byte("a welcome of some length "), 12),
+		RatchetTree: []byte("a ratchet tree"),
+		JoinSeal:    testJoinSeal(),
+		JoinAuth:    bytes.Repeat([]byte{0x5C}, joinAuthBytes),
 	}
 	encoded, err := whole.Encode()
 	if err != nil {
@@ -314,11 +387,11 @@ func TestEverythingIsRefusedBeforeHello(t *testing.T) {
 		t.Errorf("CreateGroup before Hello answered %v, want ErrNotConnected", err)
 	}
 	if _, err := device.Join(ctx, &Invite{
-		GroupId:        bytes.Repeat([]byte{0x71}, GroupIdBytes),
-		Welcome:        []byte("a welcome"),
-		RatchetTree:    []byte("a ratchet tree"),
-		PqSecret:       bytes.Repeat([]byte{0x2A}, messagegroup.PqSecretBytes),
-		GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32),
+		GroupId:     bytes.Repeat([]byte{0x71}, GroupIdBytes),
+		Welcome:     []byte("a welcome"),
+		RatchetTree: []byte("a ratchet tree"),
+		JoinSeal:    testJoinSeal(),
+		JoinAuth:    bytes.Repeat([]byte{0x5C}, joinAuthBytes),
 	}); !errors.Is(err, ErrNotConnected) {
 		t.Errorf("Join before Hello answered %v, want ErrNotConnected", err)
 	}

@@ -119,6 +119,9 @@ type advShadow struct {
 	exporter []byte
 	epoch    uint64
 	ownLeaf  uint32
+	// the X-Wing key the shadow opens a join seal with: made from the RANDOM seed that replaced the
+	// joiner's, unless a scenario grants the true one with [advTrueSeed]
+	xwing *messagegroup.XwingPrivateKey
 }
 
 // advShor is the grant rule and the grant.
@@ -180,7 +183,85 @@ func advShor(t *testing.T, captured [][]byte, joinCode []byte, preJoinStateDir s
 	if err != nil {
 		advHarness(t, "the shadow's exporter: %v", err)
 	}
-	return &advShadow{handle: handle, exporter: exporter, epoch: handle.Epoch(), ownLeaf: handle.OwnLeafIndex()}, true
+	xwing, err := messagegroup.XwingKeyGenFromSeed(seed)
+	if err != nil {
+		advHarness(t, "an x-wing key from the replacement seed: %v", err)
+	}
+	return &advShadow{handle: handle, exporter: exporter, epoch: handle.Epoch(), ownLeaf: handle.OwnLeafIndex(), xwing: xwing}, true
+}
+
+// advTrueSeed is the DEVICE COMPROMISE grant, and it is not a quantum computer's: the joiner's own
+// X-Wing seed, read out of a copy of its state directory. A scenario that passes it is measuring
+// what a thief of that directory holds, and says so in its name.
+func advTrueSeed(t *testing.T, stateDir string) func(*advShadow) {
+	t.Helper()
+	return func(shadow *advShadow) {
+		copyDir := filepath.Join(t.TempDir(), "seed-thief")
+		copyAppData(t, stateDir, copyDir)
+		store, err := urmessage.OpenDurableStateStore(copyDir)
+		if err != nil {
+			advHarness(t, "the seed thief's copy does not open: %v", err)
+		}
+		defer store.Close()
+		_, _, _, seed, err := store.GetDeviceIdentity()
+		if err != nil || len(seed) != messagegroup.XwingSeedSize {
+			advHarness(t, "the seed thief's copy holds a %d octet x-wing seed: %v", len(seed), err)
+		}
+		xwing, err := messagegroup.XwingKeyGenFromSeed(seed)
+		if err != nil {
+			advHarness(t, "an x-wing key from the joiner's seed: %v", err)
+		}
+		shadow.xwing = xwing
+	}
+}
+
+// advLeafId is u32(leaf): a join seal's target id.
+func advLeafId(leaf uint32) []byte {
+	return binary.BigEndian.AppendUint32(nil, leaf)
+}
+
+// advOpenSeal opens a join seal with the X-Wing key the shadow holds, stating the wrap by the
+// constants of its format: target type 0x03, payload type 0x04, content epoch 0, target id
+// u32(leaf). It answers the first two thirds of a 96 octet payload.
+func advOpenSeal(t *testing.T, shadow *advShadow, groupId []byte, joinSeal []byte) ([]byte, []byte, bool) {
+	t.Helper()
+	_, payload, err := messagegroup.OpenWrapBody(shadow.xwing, groupId, 0, 0x03, advLeafId(shadow.ownLeaf), 0x04, joinSeal)
+	if err != nil || len(payload) != 96 {
+		t.Logf("the shadow's x-wing key does not open the join seal: %d octets, %v", len(payload), err)
+		return nil, nil, false
+	}
+	return payload[:32], payload[32:64], true
+}
+
+// advForgedSeal is a join seal an OUTSIDER makes: a wrap body sealed to the X-Wing key one leaf of
+// the invitation's own ratchet tree publishes, carrying secrets the attacker chose, with every
+// octet of the envelope right. Anybody can encapsulate to a public key, and the tree is in the
+// clear in the invitation the attacker is rewriting.
+func advForgedSeal(t *testing.T, groupId []byte, ratchetTree []byte, leaf uint32, pqSecret []byte, groupHandleKey []byte) []byte {
+	t.Helper()
+	tree, err := mls.UnmarshalRatchetTree(ratchetTree)
+	if err != nil {
+		advHarness(t, "the invitation's ratchet tree does not decode: %v", err)
+	}
+	leafKeys, err := mls.LeafKeysOf(tree.Leaf(mls.LeafIndex(leaf)))
+	if err != nil {
+		advHarness(t, "leaf %d of the invitation's tree publishes no leaf keys: %v", leaf, err)
+	}
+	target, err := messagegroup.ParseXwingPublicKey(leafKeys.DeviceXwingPub)
+	if err != nil {
+		advHarness(t, "leaf %d's x-wing key: %v", leaf, err)
+	}
+	// the third value is the epoch's digest, which an outsider cannot compute: any 32 octets
+	payload := append(append(append([]byte(nil), pqSecret...), groupHandleKey...), bytes.Repeat([]byte{0x01}, 32)...)
+	seal, err := messagegroup.SealWrapBody(rand.Reader, target, messagegroup.WrapEnvelope{
+		FormatVersion: messagegroup.WrapFormatVersion,
+		TargetType:    0x03,
+		PayloadType:   0x04,
+	}, groupId, advLeafId(leaf), payload)
+	if err != nil {
+		advHarness(t, "the forger's seal: %v", err)
+	}
+	return seal
 }
 
 // THE INIT KEY READER'S OWN CONTROL. The grant rule turns on thirty-two octets read by offset, so
@@ -469,6 +550,31 @@ func advRemoveEpochStates(stateDir string, groupId []byte) error {
 		}
 		return nil
 	})
+}
+
+// advDamageEpochStates cuts every epoch state a durable store holds for one group to half its
+// length, and leaves its record: what "the group's MLS state does not read" is on the disk -- bytes
+// the store reads and finds wrong, which is proof that they never will (R33), where a file removed
+// is not. The device must be stopped first, because its store holds the directory while it runs.
+func advDamageEpochStates(t *testing.T, stateDir string, groupId []byte) {
+	t.Helper()
+	sum := sha256.Sum256(groupId)
+	marker := "/" + hex.EncodeToString(sum[:]) + "/epoch/"
+	cut := 0
+	err := filepath.WalkDir(stateDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !bytes.Contains([]byte(filepath.ToSlash(path)), []byte(marker)) {
+			return err
+		}
+		state, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		cut += 1
+		return os.WriteFile(path, state[:len(state)/2], 0o600)
+	})
+	if err != nil || cut == 0 {
+		advHarness(t, "cutting the group's epoch states under %s to half their length: %d file(s) cut, %v", stateDir, cut, err)
+	}
 }
 
 // advDamageRecord cuts the record a durable store holds for one group to half its length, and

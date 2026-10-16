@@ -2,6 +2,7 @@ package urmessage
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -149,5 +150,121 @@ func TestAMarkNeedsNoRecordAndMustNameTheDirectoryItSitsIn(t *testing.T) {
 	}
 	if _, err := store.GroupsBeingForgotten(); !errors.Is(err, ErrStateStoreFormat) {
 		t.Errorf("a mark naming another group's directory answered %v, want ErrStateStoreFormat", err)
+	}
+}
+
+// A LEAVE MARK NAMES THE JOIN OF THE GROUP IT DECIDED ON, AND FINISHES ONLY THAT ONE (R36, item 2: the
+// round-5 review's Z2, the store half, on every platform). A device holds a group at epochs 1 to 3,
+// its record at 2, and leaves it: the mark carries the group id and 3, the highest epoch held, and
+// the leave finishes. The device joins the group again, at epoch 6, and the OLD mark is put back:
+//   - it is no instruction: no group is being left, the mark is gone, and the record reads;
+//   - put back again, the erase itself holds it against what stands, and erases nothing;
+//   - the same with only a later epoch state standing, as a join that died before its record leaves;
+//   - a mark that names no epoch decides nothing: the leave refuses it as unproven, and nothing goes.
+//
+// WHAT WOULD GO RED: a mark finished on its group id alone -- the round-5 review emptied a live
+// re-joined group's folder on a mark put back, at 93cc0af.
+func TestALeaveMarkNamesTheJoinItDecidedOn(t *testing.T) {
+	store := openTestStore(t, t.TempDir())
+	groupId := bytes.Repeat([]byte{0x5B}, GroupIdBytes)
+	record := func(epoch uint64) *GroupRecord {
+		return &GroupRecord{GroupId: groupId, PqSecret: testPriv, GroupHandleKey: testPub, Epoch: epoch, Opened: true}
+	}
+	groupDir := store.groupDir(groupId)
+	for epoch := uint64(1); epoch <= 3; epoch++ {
+		if err := store.PutGroupState(groupId, epoch, testState); err != nil {
+			t.Fatalf("PutGroupState %d: %v", epoch, err)
+		}
+	}
+	if err := store.PutGroupRecord(record(2)); err != nil {
+		t.Fatalf("PutGroupRecord: %v", err)
+	}
+	if err := store.MarkGroupForgetting(groupId); err != nil {
+		t.Fatalf("MarkGroupForgetting: %v", err)
+	}
+	parts, err := store.readRecord(store.forgettingPath(groupId), stateKindForgetting)
+	if err != nil || len(parts) != 2 || !bytes.Equal(parts[0], groupId) || len(parts[1]) != 8 || binary.BigEndian.Uint64(parts[1]) != 3 {
+		t.Fatalf("the leave mark reads %d part(s), %v, want the group id and epoch 3, the highest this device held", len(parts), err)
+	}
+	old, err := os.ReadFile(store.forgettingPath(groupId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// THE CONTROL: the mark finishes the join it decided on
+	if marked, err := store.GroupBeingForgotten(groupId); err != nil || !marked {
+		t.Fatalf("CONTROL FAILED: the mark of the join it decided on answered %v, %v", marked, err)
+	}
+	if err := store.DeleteGroupRecord(groupId); err != nil {
+		t.Fatalf("CONTROL FAILED: the leave of the join it decided on: %v", err)
+	}
+	if left := filesUnder(t, groupDir); len(left) != 0 {
+		t.Fatalf("CONTROL FAILED: the finished leave left %v", left)
+	}
+
+	// THE LATER JOIN, and the old mark put back
+	if err := store.PutGroupState(groupId, 6, testState); err != nil {
+		t.Fatalf("PutGroupState 6: %v", err)
+	}
+	if err := store.PutGroupRecord(record(6)); err != nil {
+		t.Fatalf("PutGroupRecord 6: %v", err)
+	}
+	before := filesUnder(t, groupDir)
+	putBack := func() {
+		t.Helper()
+		if err := os.WriteFile(store.forgettingPath(groupId), old, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	putBack()
+	if leaving, err := store.GroupsBeingForgotten(); err != nil || len(leaving) != 0 {
+		t.Errorf("an old mark put back over a later join answered %d group(s) being left, %v, want none", len(leaving), err)
+	}
+	if _, err := os.Stat(store.forgettingPath(groupId)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the stale mark still stands: %v", err)
+	}
+	if records, err := store.GroupRecords(); err != nil || len(records) != 1 || records[0].Epoch != 6 {
+		t.Errorf("the later join's record answered %d record(s), %v, want the one at epoch 6", len(records), err)
+	}
+	putBack()
+	if marked, err := store.GroupBeingForgotten(groupId); err != nil || marked {
+		t.Errorf("the one-id question over an old mark answered %v, %v, want no leave under way", marked, err)
+	}
+	putBack()
+	if err := store.DeleteGroupRecord(groupId); !errors.Is(err, errLeaveMarkStale) {
+		t.Errorf("the erase over an old mark answered %v, want errLeaveMarkStale", err)
+	}
+	if after := filesUnder(t, groupDir); len(after) != len(before) {
+		t.Errorf("the later join's files went %d to %d: %v", len(before), len(after), after)
+	}
+
+	// A LATER EPOCH STATE ALONE, as a join that died between its commit and its record leaves
+	for _, name := range []string{store.groupRecordPath(groupId), store.recordedPath(groupId)} {
+		if err := os.Remove(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	putBack()
+	if err := store.DeleteGroupRecord(groupId); !errors.Is(err, errLeaveMarkStale) {
+		t.Errorf("the erase over an old mark beside a later epoch state answered %v, want errLeaveMarkStale", err)
+	}
+	if _, err := store.GetGroupState(groupId, 6); err != nil {
+		t.Errorf("the later epoch state went: %v", err)
+	}
+
+	// A MARK THAT NAMES NO EPOCH DECIDES NOTHING
+	if err := store.writeRecord(store.forgettingPath(groupId), stateKindForgetting, groupId); err != nil {
+		t.Fatal(err)
+	}
+	if marked, err := store.GroupBeingForgotten(groupId); marked || !errors.Is(err, ErrGroupReadUnproven) {
+		t.Errorf("a mark that names no epoch answered %v, %v, want it refused as unproven", marked, err)
+	}
+	if err := store.DeleteGroupRecord(groupId); !errors.Is(err, ErrGroupReadUnproven) {
+		t.Errorf("the erase over a mark that names no epoch answered %v, want it refused as unproven", err)
+	}
+	if leaving, err := store.GroupsBeingForgotten(); len(leaving) != 0 || !errors.Is(err, ErrGroupReadUnproven) {
+		t.Errorf("the list over a mark that names no epoch answered %d group(s), %v, want none and the unproven report", len(leaving), err)
+	}
+	if _, err := store.GetGroupState(groupId, 6); err != nil {
+		t.Errorf("the epoch state beside a mark that names no epoch went: %v", err)
 	}
 }

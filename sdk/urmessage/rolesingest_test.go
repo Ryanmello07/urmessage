@@ -898,6 +898,7 @@ func keylessKeyPackage(t *testing.T, dev *crossProcessDevice) []byte {
 		Extensions: []mls.ExtensionType{
 			mls.ExtensionTypeUrmessageGroupPolicy,
 			mls.ExtensionTypeUrmessageLeafKeys,
+			mls.ExtensionTypeUrmessageJoinSeal,
 		},
 		Proposals:   []mls.ProposalType{},
 		Credentials: []mls.CredentialType{mls.CredentialTypeBasic},

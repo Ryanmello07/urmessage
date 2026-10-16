@@ -933,11 +933,11 @@ func urnet_message_group_add_member_and_publish(self C.uint64_t, ctx C.uint64_t,
 	return C.uint64_t(newHandle(invite))
 }
 
-// urnet_message_invite_encode is the buffer-out pattern. WHAT COMES OUT IS KEY MATERIAL: two of
-// an invite's four fields are secret (pq_secret, and the MLS init secret inside the Welcome), so
-// an invite that reaches a third party is a group that third party is in. Move it the way you
-// would move a private key, once, over a channel that is already authenticated and already
-// confidential, and destroy it afterwards.
+// urnet_message_invite_encode is the buffer-out pattern. TREAT WHAT COMES OUT AS SECRET. Since
+// invite version 3 it carries no secret in the clear: the join secrets are sealed to the joiner's
+// own device key. It still carries the Welcome, which is sealed classically, and it names the
+// group and who is in it. Move it the way you would move a private key, once, over a channel that
+// is already authenticated and already confidential, and destroy it afterwards.
 //
 //export urnet_message_invite_encode
 func urnet_message_invite_encode(self C.uint64_t, out *C.uint8_t, inoutLen *C.int32_t, outError **C.char) C.bool {

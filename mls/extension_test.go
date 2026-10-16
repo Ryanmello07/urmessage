@@ -1511,6 +1511,7 @@ var registryCodePoints = map[string]map[string]uint64{
 		"ExtensionTypeUrmessageGroupPolicy":    0xF001,
 		"ExtensionTypeUrmessageLeafKeys":       0xF002,
 		"ExtensionTypeUrmessageOwnerSuccessor": 0xF003,
+		"ExtensionTypeUrmessageJoinSeal":       0xF004,
 	},
 }
 

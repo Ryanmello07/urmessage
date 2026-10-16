@@ -284,13 +284,19 @@ type Device struct {
 
 	// admitMutex is held by every call that puts a group onto this device -- [Device.Join],
 	// [Device.CreateGroup] and [Device.Restore] -- from the question "does this device hold that
-	// group" to the hold that answers it. Without it two admissions of one group id overlap, both
+	// group" to the hold that answers it, and by the one that takes a group off it,
+	// [Device.ForgetGroup] (Task 57, F6). Without it two admissions of one group id overlap, both
 	// read "not held", and the second replaces the first. It is taken before [Device.mutex] and
 	// never while that one is held.
 	admitMutex sync.Mutex
 	// unrestored is the groups the last [Device.Restore] found on the disk and could not bring
 	// back, by id. Guarded by mutex. It is what [Device.ForgetGroup] reads to leave one of them.
 	unrestored map[string]bool
+	// notRead is the groups the latest restore could not READ, by id, with the class of the
+	// failure (R29, the second review's W2): transient or unproven, never proven permanent, which
+	// is [Device.unrestored]'s. Guarded by mutex. [Device.ForgetGroup] tries each one's restore
+	// again before it answers (R30); a hold of the group clears it.
+	notRead map[string]readClass
 
 	// joinStage is the store the engine was built over: [Device.stateStore] with one join at a time
 	// staged in memory until [Device.Join] has finished judging it. A join holds admitMutex from
@@ -471,6 +477,7 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		commitAuthorizer: config.CommitAuthorizer,
 		groups:           map[string]*Group{},
 		unrestored:       map[string]bool{},
+		notRead:          map[string]readClass{},
 		joinStage:        stage,
 		inbox:            inbox,
 	}, nil
@@ -729,7 +736,20 @@ func (self *Device) rebindAll() error {
 //
 // IT IS SINGLE USE AND THE STORE ENFORCES THAT: the private halves are taken destructively at the
 // join, so two joins off one published package is not something this device can do.
+//
+// A DEVICE WITH NO X-WING SEED PUBLISHES NO JOIN CODE. Every join code this build mints lists the
+// join seal capability, and that is a promise: seal the join secrets to my leaf's X-Wing key and I
+// will open them. A store written before the seed was kept restores without one
+// ([DurableStateStore.GetDeviceIdentity]), and a join code from that device would be a promise it
+// cannot keep: every add of it would leave a leaf in somebody's group that nobody can hand a
+// working invite to. It is refused here, by the name the missing seed already has.
 func (self *Device) KeyPackage() ([]byte, error) {
+	self.mutex.Lock()
+	seedless := len(self.wrapSeed) == 0
+	self.mutex.Unlock()
+	if seedless {
+		return nil, fmt.Errorf("%w, and so it publishes no join code: an invite to one is sealed to that leaf", ErrNoDeviceWrapKey)
+	}
 	keyPackage, err := self.engine.NewKeyPackage()
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: this device's key package: %w", err)

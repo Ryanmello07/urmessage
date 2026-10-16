@@ -216,14 +216,41 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	// on the disk. A group being left is never restored ([DurableStateStore.GroupRecords] skips
 	// it), and an erase that fails again is reported and tried again at the next Restore.
 	// one mark it cannot read is reported, and does not stop the others being finished
+	//
+	// AND ONLY A MARK THAT STILL NAMES THE JOIN OF ITS GROUP THAT STANDS IS FINISHED (R36, item 2).
+	// A mark naming an earlier join -- a quarantined mark put back after this device was removed and
+	// joined the group again -- is removed by the store and finishes nothing, so the group it stood
+	// beside is restored below; the store holds the mark against what stands again at the erase
+	// itself. A mark that cannot be held against what stands now (its record could not be read just
+	// now) is reported with its class, stays, and is decided by a later Restore.
 	leaving, unfinished := store.GroupsBeingForgotten()
 	for _, groupId := range leaving {
 		if self.holdsGroup(groupId) {
 			continue
 		}
-		if err := store.DeleteGroupRecord(groupId); err != nil && unfinished == nil {
+		err := store.DeleteGroupRecord(groupId)
+		switch {
+		case err == nil, errors.Is(err, errLeaveMarkStale), unfinished != nil:
+		case errors.Is(err, ErrGroupReadUnproven), errors.Is(err, ErrGroupRecordNotReadNow):
+			unfinished = err
+		default:
 			unfinished = fmt.Errorf("%w: group %x: %w", ErrForgetUnfinished, groupId, err)
 		}
+	}
+	// EPOCH STATE WITH NO RECORD BESIDE IT IS ERASED, and that is not a refusal (Task 57, F3). It
+	// is what a join that died between its commit and its record leaves, or a founder that died
+	// before Open: a leaf's private keys that nothing restores, lists or leaves. A group this
+	// device holds is skipped, because a group founded here has no record until it is opened, and
+	// so is anything with a record or a leave mark. What was erased is
+	// [DurableStateStore.ErasedWithNoRecord]; an erase that fails is tried again next time.
+	//
+	// AND ONLY WHERE THE STORE MARKED THE DIRECTORY'S CREATION ITSELF (R33): a record that is
+	// absent proves nothing, because a quarantine can move it away and back, so the erase is
+	// decided on the store's own `pending` mark ([DurableStateStore.pendingPath]).
+	if sweeper, sweeps := store.(interface {
+		eraseGroupsWithNoRecord(held [][]byte) ([]string, error)
+	}); sweeps {
+		sweeper.eraseGroupsWithNoRecord(self.heldGroupIds())
 	}
 	nonce, nonceEpoch, err := self.nonce()
 	if err != nil {
@@ -236,8 +263,22 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	// first failure, answered inside [ErrRestore] like any other group that did not come back.
 	// It is named by the store's name for it and not by a group id, which the store cannot give
 	// (see [DurableStateStore.GroupRecords]); [Device.ForgetGroup] leaves it by its id.
+	//
+	// AND ONE RECORD THAT COULD NOT BE READ JUST NOW DOES NOT COST THE OTHERS EITHER (Task 57,
+	// F1). It is reported the same way, under [ErrGroupRecordNotReadNow] and NOT as damage, and
+	// nothing is noted of it: the next Restore tries it again, and ForgetGroup of it is refused
+	// until it reads, so an owner is asked the owner's question.
+	//
+	// AND ONE THIS BUILD CANNOT CLASSIFY DOES NOT EITHER (R29): reported under
+	// [ErrGroupReadUnproven], noted nowhere, and its leave refused until it reads.
+	//
+	// THE NOT-READ SET IS THE LAST RESTORE'S, so it starts empty here: a group this one cannot
+	// read again is put back below, and a group whose record this one finds damaged is not kept
+	// refused on the strength of an earlier read.
+	self.clearNotRead()
 	records, err := store.GroupRecords()
-	if err != nil && !errors.Is(err, ErrGroupRecordDamaged) {
+	if err != nil && !errors.Is(err, ErrGroupRecordDamaged) && !errors.Is(err, ErrGroupRecordNotReadNow) &&
+		!errors.Is(err, ErrGroupReadUnproven) {
 		return nil, err
 	}
 	restored := []*Group{}
@@ -259,9 +300,28 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 			}
 		}
 		if err != nil {
-			// REMEMBERED, so that [Device.ForgetGroup] can leave a group that will not come back:
-			// its record is still on the disk, and a join into it is refused while it is.
-			self.noteUnrestored(record.GroupId)
+			// REMEMBERED AS WILL-NOT-COME-BACK ONLY ON PROOF (R29). A group noted unrestored is
+			// one [Device.ForgetGroup] leaves WITHOUT the owner's question, irreversibly, so only
+			// a failure [classifyRead] proves permanent is noted that way: its record is still on
+			// the disk, a join into it is refused while it is, and the leave is its way out.
+			//
+			// ANY OTHER FAILURE, OF ANY FILE OF THE GROUP, IS NOT (R26's V1, R29's W1): the
+			// subject is the group's restore, not a file. A transient failure (another process
+			// held a file) and an unproven one (nothing proves it will or will not pass) are each
+			// reported under their own sentinel and kept in the not-read set instead (W2). Either
+			// way the note is only the LATEST attempt's: a leave of the group tries its restore
+			// again and decides on that (R30). Both reports begin as the list's own report of a
+			// record not read begins, so an app reads one sentence for each.
+			switch classifyRead(err) {
+			case readPermanent:
+				self.noteUnrestored(record.GroupId)
+			case readTransient:
+				self.noteNotRead(record.GroupId, readTransient)
+				err = fmt.Errorf("%w: %w: group %x: %w", ErrRestore, ErrGroupRecordNotReadNow, record.GroupId, err)
+			default:
+				self.noteNotRead(record.GroupId, readUnproven)
+				err = fmt.Errorf("%w: %w: group %x: %w", ErrRestore, ErrGroupReadUnproven, record.GroupId, err)
+			}
 			if firstFailure == nil {
 				firstFailure = err
 			}
@@ -295,6 +355,12 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 func (self *Device) restoreOne(store DeviceStore, record *GroupRecord, nonce []byte, nonceEpoch uint64) (*Group, error) {
 	handle, err := self.engine.LoadGroup(record.GroupId, record.Epoch)
 	if err != nil {
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	// ONLY A GROUP THAT REQUIRES THE JOIN SEAL IS RESTORED: see [ErrGroupPredatesJoinSeal]. It is
+	// asked before a session is built, so nothing of the group is in memory when it is refused.
+	if err := requireJoinSeal(handle); err != nil {
+		handle.Close()
 		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
 	}
 	// THE TABLE THIS RECORD CAME BACK WITH, AND WHAT IT IS WHEN THERE IS NONE. A record written
@@ -548,6 +614,17 @@ func (self *Device) pastEpochLoader(groupId []byte) messagegroup.PastEpochLoader
 	return func(epoch uint64) (messagegroup.GroupHandle, error) {
 		return self.engine.LoadGroup(id, epoch)
 	}
+}
+
+// heldGroupIds is the id of every group this device holds in memory, for the sweep in Restore.
+func (self *Device) heldGroupIds() [][]byte {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	held := [][]byte{}
+	for id := range self.groups {
+		held = append(held, []byte(id))
+	}
+	return held
 }
 
 // holdsGroup reports whether this device already has a live view of that group, so that a second

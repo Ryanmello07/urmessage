@@ -42,11 +42,11 @@ func windowInvite(t *testing.T, joiner *Device) (*Invite, []byte) {
 // bentInvite is a copy of an invite with one thing changed.
 func bentInvite(invite *Invite, change func(*Invite)) *Invite {
 	bent := &Invite{
-		GroupId:        bytes.Clone(invite.GroupId),
-		Welcome:        bytes.Clone(invite.Welcome),
-		RatchetTree:    bytes.Clone(invite.RatchetTree),
-		PqSecret:       bytes.Clone(invite.PqSecret),
-		GroupHandleKey: bytes.Clone(invite.GroupHandleKey),
+		GroupId:     bytes.Clone(invite.GroupId),
+		Welcome:     bytes.Clone(invite.Welcome),
+		RatchetTree: bytes.Clone(invite.RatchetTree),
+		JoinSeal:    bytes.Clone(invite.JoinSeal),
+		JoinAuth:    bytes.Clone(invite.JoinAuth),
 	}
 	change(bent)
 	return bent
@@ -54,8 +54,8 @@ func bentInvite(invite *Invite, change func(*Invite)) *Invite {
 
 // EVERY REFUSAL INSIDE THE JOIN'S WINDOW BEGINS WITH ONE SENTENCE, AND COSTS NOTHING. Three
 // refusals, made at the three places the window can refuse: the engine (a Welcome for another
-// group), this package's own checks (a secret the session will not take), and the create-only
-// commit (a state already held at the joined epoch). Each answers [ErrJoinRefused] and begins with
+// group), this package's own checks (a join seal whose authenticator is not a member's), and the
+// create-only commit (a state already held at the joined epoch). Each answers [ErrJoinRefused] and begins with
 // its sentence; none answers [ErrJoinCodeSpent]; the device holds no group; and the honest invite
 // then joins OVER THE SAME JOIN CODE, which is what "not spent" means.
 //
@@ -83,8 +83,8 @@ func TestEveryRefusalInsideTheJoinWindowSaysTheJoinCodeIsNotSpent(t *testing.T) 
 	}{
 		{"a welcome for another group, refused by the engine",
 			func(invite *Invite) { invite.GroupId = bytes.Repeat([]byte{0x5D}, GroupIdBytes) }, false, nil},
-		{"a pq_secret one octet short, refused by this package",
-			func(invite *Invite) { invite.PqSecret = invite.PqSecret[:len(invite.PqSecret)-1] }, false, nil},
+		{"a join seal whose authenticator has one bit flipped, refused by this package",
+			func(invite *Invite) { invite.JoinAuth[0] ^= 0x01 }, false, ErrJoinSealUnauthenticated},
 		{"a state already held at the joined epoch, refused by the commit",
 			func(invite *Invite) {}, true, ErrJoinWouldOverwrite},
 	} {
@@ -221,7 +221,7 @@ func TestARefusalThatCannotPutTheJoinCodeBackSaysItIsSpent(t *testing.T) {
 		name string
 		bend func(*Invite)
 	}{
-		{"this package's refusal", func(invite *Invite) { invite.PqSecret = invite.PqSecret[:len(invite.PqSecret)-1] }},
+		{"this package's refusal", func(invite *Invite) { invite.JoinAuth[0] ^= 0x01 }},
 		{"the engine's refusal", func(invite *Invite) { invite.GroupId = bytes.Repeat([]byte{0x5D}, GroupIdBytes) }},
 	} {
 		store := &keyPackageSink{MemoryStateStore: NewMemoryStateStore()}
@@ -246,10 +246,20 @@ func TestARefusalThatCannotPutTheJoinCodeBackSaysItIsSpent(t *testing.T) {
 	}
 }
 
-// recordSink is a durable store that will not write a group record once it is armed.
+// recordSink is a durable store that will not write a group record once it is armed. It notes
+// each group state written while it is armed, so that a case can tell a failure past the commit
+// from one inside the window after the commit's state has been erased again.
 type recordSink struct {
 	*DurableStateStore
-	armed bool
+	armed     bool
+	statesPut int
+}
+
+func (self *recordSink) PutGroupState(groupId []byte, epoch uint64, state []byte) error {
+	if self.armed {
+		self.statesPut += 1
+	}
+	return self.DurableStateStore.PutGroupState(groupId, epoch, state)
 }
 
 func (self *recordSink) PutGroupRecord(record *GroupRecord) error {
@@ -274,7 +284,7 @@ func TestAJoinWhoseRecordCannotBeWrittenSaysTheJoinCodeIsSpent(t *testing.T) {
 	t.Cleanup(func() { durable.Close() })
 	store := &recordSink{DurableStateStore: durable}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
-	honest, groupId := windowInvite(t, joiner)
+	honest, _ := windowInvite(t, joiner)
 	store.armed = true
 	_, err = joiner.Join(ctx, honest)
 	if !errors.Is(err, ErrJoinCodeSpent) {
@@ -286,8 +296,9 @@ func TestAJoinWhoseRecordCannotBeWrittenSaysTheJoinCodeIsSpent(t *testing.T) {
 	if held := len(joiner.Groups()); held != 0 {
 		t.Errorf("the device holds %d group(s) after a join that did not complete", held)
 	}
-	// what "past the window" means: the joined state did reach the store
-	if _, err := durable.GetGroupState(groupId, 1); err != nil {
-		t.Errorf("CONTROL FAILED: the store holds no state for the joined epoch (%v), so this failure was inside the window and not after it", err)
+	// what "past the window" means: the joined state did reach the store. It is counted as it is
+	// written, because since Task 57's F3 a join that fails past the commit erases it again.
+	if store.statesPut == 0 {
+		t.Errorf("CONTROL FAILED: no state was written to the store for the joined epoch, so this failure was inside the window and not after it")
 	}
 }

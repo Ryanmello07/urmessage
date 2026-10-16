@@ -72,6 +72,16 @@ func (self *MemoryStateStore) DeleteGroupStateBefore(groupId []byte, epoch uint6
 	return nil
 }
 
+// deleteGroupStateAt erases one epoch's state of one group: see [Device.abandonJoined].
+func (self *MemoryStateStore) deleteGroupStateAt(groupId []byte, epoch uint64) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	key := fmt.Sprintf("%x/%d", groupId, epoch)
+	zeroizeState(self.groupStates[key])
+	delete(self.groupStates, key)
+	return nil
+}
+
 func (self *MemoryStateStore) PutPrivateKey(pub []byte, priv []byte) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -113,7 +123,9 @@ func (self *MemoryStateStore) TakeKeyPackage(ref []byte) ([]byte, []byte, []byte
 	defer self.lock.Unlock()
 	held, isHeld := self.keyPackages[fmt.Sprintf("%x", ref)]
 	if !isHeld {
-		return nil, nil, nil, fmt.Errorf("urmessage: no mls key package for %x", ref)
+		// the SAME sentinel the durable store answers: [Device.Join] tells a join code that is not
+		// here from one the store could not read by it (Task 57, F4)
+		return nil, nil, nil, fmt.Errorf("%w: no mls key package for %x", ErrStateNotFound, ref)
 	}
 	delete(self.keyPackages, fmt.Sprintf("%x", ref))
 	return held[0], held[1], held[2], nil

@@ -152,6 +152,9 @@ var wrapSeedProducerSites = map[string]string{
 		"function whose loop touches the seed's own array one part at a time.",
 	"DecapsulateToOwnLeaf|self.wrapSeed": "the field read, under [Device.mutex], on the one path " +
 		"that uses the seed for what it is for.",
+	"KeyPackage|self.wrapSeed": "the field read, under the same mutex, by the door that publishes " +
+		"a join code, and only for its LENGTH: a device that holds no seed publishes none. Nothing " +
+		"of the seed leaves the comparison.",
 	"openWrapToOwnLeaf|self.wrapSeed": "the field read, under the same mutex, on the SECOND path " +
 		"that uses it for what it is for: opening a device wrap addressed to this leaf, which is " +
 		"ledger item 243's receive leg. Two paths and not one because the wrap door needs the " +
@@ -510,6 +513,10 @@ var wrapSeedCountedNotCarriedSites = map[string]string{
 	"DecapsulateToOwnLeaf|len self.wrapSeed": "the EMPTY-seed guard, which is a store written " +
 		"before the seed was retained or a device that has been Closed. It refuses by name " +
 		"([ErrNoDeviceWrapKey]) rather than expanding zero octets into a valid-looking key.",
+	"KeyPackage|len self.wrapSeed": "the SAME empty-seed guard on the door that publishes a join " +
+		"code. A join code lists the join seal capability, which asks for an invite sealed to this " +
+		"leaf's X-Wing key, so a device holding no seed for that key publishes none. It refuses by " +
+		"the same name, and what is read is the seed's length and never the seed.",
 	"openWrapToOwnLeaf|len self.wrapSeed": "the SAME empty-seed guard on the wrap door, and it is " +
 		"a site of its own rather than a shared one because this census keys on the enclosing " +
 		"function: a door that stopped making the check would leave the other door's entry still " +

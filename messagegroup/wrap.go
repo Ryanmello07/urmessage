@@ -149,7 +149,9 @@ const WrapEnvelopeBytes = 1 + 1 + 1 + 8
 // recovery wrap, whose body is under no record AEAD, four cleartext octets would convert a per-leaf
 // pseudonym the server already sees into a TREE POSITION. A field here would put it back.
 //
-// TargetType and PayloadType HAVE NO CODE POINT IN ANY DOCUMENT and this type assigns none. They
+// TargetType and PayloadType HAVE NO CODE POINT IN ANY DOCUMENT FOR A DEVICE OR A RECOVERY WRAP,
+// and this type assigns none. (The join seal's two, target 0x03 and payload 0x04, are ruled and
+// written down in MASTER section 7.3, and sdk/urmessage/joinseal.go passes them in.) They
 // are u8 because MASTER says u8; which octet a device leaf takes, which a member's RECOVERY_PUB
 // takes, which a pq_secret payload takes and which an eph_root payload takes are four wire
 // decisions nobody has made. See the file header and open item MG-7.

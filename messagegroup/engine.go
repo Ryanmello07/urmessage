@@ -773,6 +773,12 @@ func (self *connectMlsEngine) CreateGroup(groupId []byte, policy []byte, leafKey
 // refuses them for a reason this device cannot name. sdk's own restore made this comparison before
 // this method existed and it is kept HERE so that every caller of the interface gets it rather than
 // the one caller that remembered.
+//
+// WHAT A CALLER DOES WITH A REFUSAL HERE IS ITS OWN, and sdk/urmessage's is fail-closed: a group whose
+// load failed is erased without its owner's question only on proof that it can never be read, and a
+// failure it cannot classify -- this method's ErrEngineLoadedEpoch among them, and a state the store
+// does not hold, since an absence is no longer proof -- keeps the group, for ever if the failure does
+// (open item MG-15).
 func (self *connectMlsEngine) LoadGroup(groupId []byte, epoch uint64) (GroupHandle, error) {
 	group, err := mls.LoadGroup(&mls.GroupConfig{
 		Crypto:  self.crypto,
@@ -821,14 +827,24 @@ func (self *connectMlsEngine) LoadGroup(groupId []byte, epoch uint64) (GroupHand
 // mls.JoinFromWelcome needs the material in order to decide. THE WINDOW THIS LEAVES AND DOES NOT
 // CLOSE: a crash between the take and the put-back loses the key package permanently, and the
 // device must publish a fresh one and be re-added. That is the store's to close, with a
-// Get/Delete split or a normative sentence, and not this method's.
+// Get/Delete split or a normative sentence, and not this method's. Open item MG-9 measures it on
+// sdk/urmessage's durable store and files the fix with the healing track.
+//
+// AND WHAT A JOIN THROUGH THIS DOOR STILL CANNOT TELL, beyond MG-1, is filed beside it: a re-add
+// over a group the device was removed from cannot tell that group from a second founder's under
+// the same id (open item MG-12), and a joiner whose adder sealed it a wrong secret meets a server
+// refusal and no sentence (open item MG-11). A Welcome naming several refs is answered by the LAST
+// refusal the store gave (open item MG-13), and a re-add that fails after its record write landed
+// leaves the removed group's record overwritten (open item MG-14).
 //
 // THE REFUSAL CARRIES WHAT THE INTERFACE CANNOT SAY. TakeKeyPackage answers a bare error with no
 // declared not-found value, so a loop that treated every error as "not mine" reports a broken disk
 // as an unaddressed Welcome. ErrEngineNoKeyPackageForWelcome therefore carries the ref count, the
-// refusal count and the LAST STORE ERROR VERBATIM, so an operator reading the message can tell the
-// two apart even though a caller matching on the type cannot. The taxonomy that would let the type
-// tell them apart is owed by whoever owns the store interface.
+// refusal count and the LAST STORE ERROR, WRAPPED (%w) and so with its type: an operator reads it
+// in the message, and a caller whose store has a not-found sentinel of its own matches on it to
+// tell "no join code here" from "the join code here could not be read" (Task 57, F4; sdk/urmessage
+// does). This interface still declares no not-found value; that taxonomy is owed by whoever owns
+// the store interface.
 func (self *connectMlsEngine) JoinFromWelcome(welcome []byte, ratchetTree []byte) (GroupHandle, error) {
 	return self.joinFromWelcome(welcome, ratchetTree, nil)
 }
@@ -878,7 +894,11 @@ func (self *connectMlsEngine) joinFromWelcome(welcome []byte, ratchetTree []byte
 		}
 		return handle, nil
 	}
-	return nil, fmt.Errorf("%w: the welcome names %d key package refs, this store refused %d of them, and the last refusal it answered was %v",
+	if lastStoreRefusal == nil {
+		return nil, fmt.Errorf("%w: the welcome names %d key package refs, and this store refused none of them",
+			ErrEngineNoKeyPackageForWelcome, len(parsed.Welcome.Secrets))
+	}
+	return nil, fmt.Errorf("%w: the welcome names %d key package refs, this store refused %d of them, and the last refusal it answered was %w",
 		ErrEngineNoKeyPackageForWelcome, len(parsed.Welcome.Secrets), refused, lastStoreRefusal)
 }
 
@@ -968,6 +988,7 @@ func engineCapabilities() mls.Capabilities {
 		Extensions: []mls.ExtensionType{
 			mls.ExtensionTypeUrmessageGroupPolicy,
 			mls.ExtensionTypeUrmessageLeafKeys,
+			mls.ExtensionTypeUrmessageJoinSeal,
 		},
 		Proposals:   []mls.ProposalType{},
 		Credentials: []mls.CredentialType{mls.CredentialTypeBasic},
@@ -981,6 +1002,7 @@ func engineRequiredCapabilities() mls.RequiredCapabilities {
 		ExtensionTypes: []mls.ExtensionType{
 			mls.ExtensionTypeUrmessageGroupPolicy,
 			mls.ExtensionTypeUrmessageLeafKeys,
+			mls.ExtensionTypeUrmessageJoinSeal,
 		},
 	}
 }

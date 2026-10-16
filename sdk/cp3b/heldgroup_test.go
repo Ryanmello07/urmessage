@@ -347,15 +347,17 @@ func TestAReaddBelowTheRemovalIsRefusedAndTheRealReaddStillJoins(t *testing.T) {
 // device that has merely restarted is not let past it. A group Restore could not bring back is
 // left, record and all, and after that the device holds nothing under the id.
 //
+// THE DAMAGE IS CUT BYTES, AND THIS CASE WAS CHANGED BY R33 TO SAY SO: it removed the epoch states,
+// and an absence is no longer proof that a group will never read (a quarantine puts the file back).
+// A group whose epoch states are cut does not decode, which is.
+//
 // WHAT WOULD GO RED: refuse the group that did not restore, and a record is on the disk for good,
 // refusing every invitation into it; or leave any group that is on the disk, and a restart is a
 // way round the owner's refusal.
 func TestForgetGroupOverAGroupOnTheDiskAnswersByWhatRestoreSaid(t *testing.T) {
 	scene := advFounding(t, true)
 	scene.bob.kill()
-	if err := advRemoveEpochStates(scene.bob.stateDir, scene.groupId); err != nil {
-		t.Fatalf("removing bob's epoch states: %v", err)
-	}
+	advDamageEpochStates(t, scene.bob.stateDir, scene.groupId)
 	bob := scene.world.durablePersona(t, scene.bob.name, scene.bob.stateDir, scene.bob.streamDir)
 	if err := bob.device.Connect(scene.ctx); err != nil {
 		t.Fatalf("the restarted bob's Connect: %v", err)

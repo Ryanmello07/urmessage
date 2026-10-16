@@ -841,6 +841,31 @@ names and leaves to the implementation — *"may or may not compare the carried 
 and refuse a mismatch"* — so it rules nothing: the wire does not move, and the ruling M1-55 owes is
 owed exactly as before.
 
+### What the join seal takes, and what it settles for itself
+
+The sealed invite (`sdk/urmessage/joinseal.go`, invite version `0x0003`) is the second user of this
+door. It takes two more code points and it is the first wrap whose version octet is authenticated.
+
+- **Code points, now with two users, and the join seal's two are ruled.** The join seal's envelope is
+  `u8(0x01) ‖ u8(target_type = 0x03 JOINER) ‖ u8(payload_type = 0x04 JOIN_SECRETS_V1) ‖ u64(0)`,
+  with `target_id = u32(joiner_leaf)`. The device wrap keeps target `0x01` and payloads `0x01` and
+  `0x02`; target `0x02` and payload `0x03` stay unassigned for the recovery wrap. This package still
+  takes all of them as parameters and chooses none: the table this item asks MASTER §7 for now has
+  five rows and not three. The join seal's two, target `0x03` and payload `0x04`, stand by the
+  lead's ruling of 2026-10-09 and are written down in MASTER §7.3 (message-server ledger item 296);
+  the device wrap's three stay provisional here until this item is ruled.
+- **The content epoch is the constant zero**, so that the epoch a member joined at is not in the
+  clear. The seal's own key therefore names no epoch, and a seal made for one add of a device opens,
+  as a wrap, under a later add of the same device at the same leaf. What refuses it is not this
+  door: it is the invite's authenticator.
+- **The version octet of a join seal IS authenticated.** `join_auth` is an HMAC-SHA-256, keyed by
+  the join epoch's exporter, over a preimage that carries `SHA-256(join_seal)`: all eleven envelope
+  octets and the whole body. The joiner verifies it before it opens the seal, and refuses any
+  envelope that is not the four constants above before that. So this item's second half is closed
+  **for the join seal and for no other wrap**: a device wrap's version octet is authenticated by
+  nothing, exactly as this item's reproduction measures, and `M1-52` and `M1-54` are owed exactly
+  as before.
+
 ### What a ruling has to choose
 
 1. **The three code points**, as a table: which octet a device leaf is and which a member's
@@ -961,3 +986,381 @@ Nothing below is decided, and this package must not decide it.
 The healing track of the hardening program, whose plan takes this item, and a `SPEC-LEDGER.md`
 number from whoever owns that register. Until one exists, `errors.go` cites this row beside the
 sentence it is about.
+
+---
+
+## MG-9 — a crash inside a join's window loses the join code, and nobody is told
+
+**Status: OPEN. Filed 2026-10-14 from the T1 red team (Task 57, its F2), which measured it. The
+design accepted the window; the fix is the healing track's (T3). It does not touch the seal, the
+payload or the authenticator.**
+
+### The property
+
+A join spends its join code only when it completes, or when it says so (`ErrJoinCodeSpent`). A
+process that dies inside the join's window is told nothing, so for it the join code must survive.
+
+### The evidence
+
+The durable store's `TakeKeyPackage` deletes the key-package file AT THE TAKE
+(`sdk/urmessage/statestore_durable.go`, the `removeLocked(path)` in `TakeKeyPackage`), and the stage
+puts it back only on a refusal the process lives to make (`sdk/urmessage/joinstage.go`, `abort`).
+The red team copied the joiner's disk at each instant of an honest join and started a new device
+over each copy (`TestT57CrashInsideTheJoinWindow`, kept in the Task 57 report and not in this
+tree):
+
+| crash at | on the disk | next start |
+|---|---|---|
+| after the engine took the join code, or before the commit | the device identity only; the key-package file is gone | `Restore` gives 0 groups and nil; the same invite answers `ErrNoJoinCodeForInvite` |
+| after the commit, before the record | also an orphan epoch state | as above; since F3, `Restore` erases the orphan state |
+| control: after the join | the record | `Restore` gives 1 group |
+
+The adder's leaf for the device stands in every row. Nobody is told that the join code is gone.
+
+### What a fix would be
+
+The stage takes the package and puts it back at once; the commit removes it just before it writes
+the state. The window in which a crash costs the join code shrinks to two fsyncs. It is a change to
+the stage and the store's take, and it is the healing track's.
+
+### What is owed elsewhere
+
+The healing track (T3) of the hardening program.
+
+---
+
+## MG-10 — a stale Welcome's staged state is served to the removed group's past-epoch loader
+
+**Status: OPEN. Filed 2026-10-14 from the T1 red team (Task 57, its F7), read from the code. Nothing
+leaks and nothing persists. Owner: the healing track (T3).**
+
+### The property
+
+During a join, the stage holds the joined state in memory and serves it for that group and epoch
+(`sdk/urmessage/joinstage.go`, `joinStage.GetGroupState`). A re-add into a group this device was
+removed from is refused when its Welcome stands at or below the removal epoch (`ErrReaddStale`,
+`sdk/urmessage/group.go`), but only after the engine joined and the state was staged.
+
+### The evidence
+
+In that interval, the REMOVED group's past-epoch loader (`Device.pastEpochLoader`,
+`sdk/urmessage/restore.go`) reads through the engine's store, which is the stage, so a hostile
+stale Welcome's state is what it is handed for that epoch. The session caches what it loads
+(`messagegroup/pastepoch.go`, `self.pastEpochs[epoch] = past`), so that epoch's history fails to
+open until a restart. Adversary: the holder of a join code, or the hostile founder of a Welcome. No
+secret of the removed group leaks, and nothing is written to the disk.
+
+### What a fix would be
+
+`begin(groupId, removedEpoch)`, and the stage serves its staged state only above that epoch.
+
+### What is owed elsewhere
+
+The healing track (T3).
+
+---
+
+## MG-11 — the joiner of a dark join sees a server refusal and no join sentence
+
+**Status: OPEN. Filed 2026-10-14 from the T1 red team (Task 57, its F8), measured. The adversary is
+a member (A4), out of scope. Owner: the identity track (T2).**
+
+### The property
+
+A join that cannot read its group should say so in a sentence an app can show, as every other join
+failure does.
+
+### The evidence
+
+Appendix B's mutant MJ22 (a member seals the wrong secret into a live add) was driven to the
+joiner's first read: the join succeeds, the first `Receive` answers "the message server refused
+this fetch: REASON_REJECTED", and `Send` is refused by the floor gate. The digest in the payload
+does not stop it, because a member holds everything the digest is over; the payload does not bind
+`group_handle_key`, so a member can seal a wrong one of that too. Same class.
+
+### What a fix would be (optional)
+
+A typed sentence for a fetch refusal made before a joined group has ever completed a walk.
+
+### What is owed elsewhere
+
+The identity track (T2), with A4.
+
+---
+
+## MG-12 — a second founder's invitation replaces a group this device was removed from (S7g)
+
+**Status: OPEN, and PINNED: `sdk/cp3b`'s strict scenario `S7g-removed-group-second-founder`
+(`TestAdvSimASecondFoundersInvitationOverAGroupTheDeviceWasRemovedFrom`) stands open until the
+identity track (T2) closes it. Re-ruled 2026-10-14 (ruling R24, the T1 red team's Step 1): pinning is
+enough until T2's re-add proof.**
+
+### The property
+
+The held-group gate honours a re-add into a group a commit removed this device from
+(`sdk/urmessage/heldgroup.go`, `joinOverHeldGroup`). An invite authenticates nobody (MG-1), so the
+gate cannot tell the group that removed the device from another founder's group under the same id
+at a later epoch, and that invite replaces the removed group's record.
+
+### The evidence
+
+The pinned scenario runs the second founder on a server of its own. The red team measured the same
+attempt on the victim's own server: the second founder's `Open` under the held id is refused
+("the founding commit was answered REASON_REJECTED, and REASON_REJECTED again after a fresh
+Hello"). So it needs an attacker's server. What it costs is local: the removed group's record, its
+history slot and its "removed" mark are replaced. Against MG-1, the attacker gains only the reuse of
+that conversation's slot.
+
+### What a fix would be
+
+A re-add proof keyed by an epoch secret the removed device held. That is a new invite field, so a
+new invite version. A cheap mitigation for the app meanwhile: say "this replaces a conversation you
+were removed from".
+
+### What is owed elsewhere
+
+The identity track (T2): the re-add proof and its invite version.
+
+---
+
+## MG-13 — a Welcome with several key package refs is answered by the engine's LAST store refusal only
+
+**Status: OPEN. Filed 2026-10-14 from the T1 fix review (its V3c), read from the code. A NIT,
+reachable only through a hostile Welcome: an honest alpha Welcome names one ref. Not fixed (ruling
+R26). Owner: the healing track (T3).**
+
+### The property
+
+When no key package a Welcome names can be taken, the engine's refusal should let its caller say
+what is true of THIS device's join code.
+
+### The evidence
+
+`joinFromWelcome` (`messagegroup/engine.go`) loops over every ref the Welcome names and keeps only
+`lastStoreRefusal`. `sdk/urmessage`'s Join chooses its sentence from that one refusal (`Device.Join`'s
+deferred exit, R26's V3). So in a Welcome whose refs are this device's (read failed for a moment)
+followed by a foreign one (not found), the answer is "no join code" although this device's join
+code is on the disk.
+
+### What a fix would be
+
+Carry every refusal (or the one for a ref this store holds), and let the caller judge each.
+
+### What is owed elsewhere
+
+The healing track (T3).
+
+---
+
+## MG-14 — a failed re-add whose record write landed leaves the removed group's record overwritten
+
+**Status: OPEN. Filed 2026-10-14 from the T1 fix review (its V4b), read from the code. Not fixed
+(ruling R26). Owner: the healing track (T3).**
+
+### The property
+
+A join that fails after its commit leaves nothing of itself on the disk and changes nothing that
+was there before it.
+
+### The evidence
+
+A re-add joins over a group this device was removed from, in the same directory. If the re-add's
+record write lands (the rename) and then reports a failure (its directory sync), `Device.Join`
+answers `ErrJoinCodeSpent`, and `Device.abandonJoined` (`sdk/urmessage/group.go`) erases the joined
+epoch's state. It does not erase the record, because off a re-add the directory is the removed
+group's too. But that record is now the re-add's own, overwritten, so the removed group's record,
+with its removal mark, is gone, and the record left names an epoch whose state was erased. A
+re-add whose write did NOT land keeps the removed group whole, and
+`TestAReaddThatFailsAfterItsCommitKeepsTheRemovedGroupsEpochsAndRecord` (`sdk/cp3b`) holds that.
+
+### What a fix would be
+
+Keep the removed group's record (a copy taken before the write) and put it back on this failure,
+or write the re-add's record under a name of its own until the join has been held.
+
+### What is owed elsewhere
+
+The healing track (T3).
+
+---
+
+## MG-15 — a group whose restore failure this build cannot classify can never be left
+
+**Status: OPEN. Filed 2026-10-14 by ruling R29, which made the erase without the owner's question
+fail-closed. Not fixed here: the way out is a new export, and this plan changes no header. Owner: a
+later change that may add an export.**
+
+### The property
+
+A device can always be rid of a copy of a group it can no longer use: restore it, leave it, or be
+told what to do.
+
+### The evidence
+
+`sdk/urmessage`'s one classifier (`classifyRead`, `sdk/urmessage/transientread.go`) answers three
+classes for a failed restore, and since R29 only a PROVEN-permanent failure is noted as a group that
+will not come back, and since R30 the leave tries that group's restore again and leaves it unasked
+only on that FRESH proven-permanent verdict, which is a fact about the data. A failure in neither of
+its lists -- a permission refused and the medium (R30 took both off the proven list, because they
+are facts about the environment), a store error with no errno, an errno outside both (too many open
+files, out of memory, no system resources, a device not ready), a failure that is not the store's,
+and the engine's own `ErrEngineLoadedEpoch` (a record naming an epoch whose state stands at
+another), which the allow-list does not name -- is UNPROVEN. Restore reports it under `urmessage.ErrGroupReadUnproven`
+and `ForgetGroup` refuses it, "so nothing was left". That is the point: the erase is irreversible
+and an owner's copy erased without the transfer can leave a group without an owner. But a group
+that STAYS unproven -- the same unclassified failure at every launch -- can never be left, restored
+or joined again by this build. R30 grows this on purpose: a group whose folder stays unreadable for
+an environmental reason (a permission, the medium) cannot be left from the app until its access is
+fixed, and fixing the access is the way through. `TestARestoreFailureThisBuildCannotClassifyIsNotNotedAndTheLeaveIsRefused`
+(`sdk/urmessage/failclosed_test.go`) holds the refusal.
+
+**R33 grows it again, by A REQUIRED FILE ABSENT.** An absence is no longer proof of anything: an
+antivirus quarantine, a sync tool or a backup tool moves a file away and puts it back, and Go on
+Windows folds ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND and ERROR_BAD_NETPATH into one
+`os.ErrNotExist`. So a group whose epoch state is missing is unproven too: it is not restored, its
+leave is refused "so nothing was left", and it cannot be left from the app until the file is back,
+or until the export below exists. The unproven row's advice, "Check that URmessage can read its
+folder", is the right advice for a quarantine or a sync tool. Three shapes of it are worth
+naming:
+- a group whose RECORD is missing is not reported by Restore at all: the list skips a directory with
+  no record in it and erases nothing (it never could name the group: a directory's name is a hash),
+  and a ForgetGroup that names the group by its id refuses it as unproven;
+- an erase interrupted after the epoch states and before the record, where no leave mark stands --
+  `Device.abandonJoined`'s erase, a failed admission erasing what it wrote -- leaves a record whose
+  states are gone, which is now unproven where it used to be left;
+- `TestAnEpochStateMovedAwayIsNeverTheReasonForAnErase` and
+  `TestARecordMovedAwayIsNeverTheReasonForAnErase` (`sdk/cp3b/quarantine_test.go`) hold the two
+  quarantines the round-3 review made, with a rename standing in for the quarantine.
+
+**And the sweep keeps one narrow window (R33 (2)).** `Device.Restore` erases a group directory that
+holds the store's own `pending` mark and no record: the mark is written when a call CREATES the
+directory, before its first epoch state, and taken away once the record is synced. A crash after the
+record is synced and before the mark is removed leaves the mark beside the record, and the next
+Restore takes it away. If the record then vanishes BEFORE that Restore -- moved away in the window
+between the crash and the next launch -- the sweep erases the group's epoch states on the stale
+mark. The same is true of a live group whose WHOLE directory is removed under it and then written
+into again (its seal persists an epoch state, which creates the directory, and so marks it): if the
+process stops before the group's record is written again, the next Restore sweeps what the seal
+wrote, as it did before R33.
+
+**R34 (item 3) closes the same window when no crash is involved, and leaves one double failure.**
+A mark whose removal FAILS -- a scanner holding it with no delete sharing at the moment the record
+lands -- is retracted by a file the store writes beside it, `recorded`, and a folder holding that
+retraction is not in the creating state, so the sweep never takes a group on it. If the retraction
+cannot be written either, the record is still on the disk and the store says so: `Group.Open`
+answers that the record is on this device's disk and that the store could not record that the
+group's creation finished. That founding's mark then stands beside its record with nothing
+retracting it, and if the record goes missing before a later write of it or a Restore that reads it,
+the sweep erases the group's epoch states as an unfinished creation.
+
+**And R34 (items 1 and 2) leaves one in a join.** A join that fails after its commit erases what it
+wrote and nothing else: its own epoch state, and the record that only it can have written, because
+the join gate, under the admission mutex, found no record and read the folder as holding nothing of
+a group or a creation that never finished. That reading is the gate's, at the start of the join. If
+another program puts a whole group folder back WHILE the join is in flight -- a backup restore, a
+sync tool's copy -- and the join then fails, a record the folder brought back stands where the
+join's would, and the failed join takes it as its own.
+
+**And two cells of R34's authority-by-adversary table are accepted rather than closed.**
+- A stray at one of the store's OWN names, of the wrong type -- a file where the store keeps `sent`,
+  a directory where it keeps `meta`, `heads` or an epoch state -- is a path of the wrong type, which
+  R29 and R33 rule proof that the group can never be read, when the store's own Lstat of the name,
+  at the verdict, finds that type (R36): a PLAIN directory where the store writes a file, a PLAIN
+  regular file where it keeps a directory, or a symbolic link at either -- and never anything Go
+  reports as irregular, a cloud placeholder of the store's own file, a WOF-compressed file, a
+  junction or a mount point among them (R38). A leave then takes the group without the owner's
+  question, although taking the stray away would have made it readable again. A stray under any
+  other name is never taken, and since R38 it never enters a verdict in ANY listing: a file not named
+  the way the store names its entries is skipped wherever a listing decides anything, as an
+  unfinished write is -- inside `sent/` too, where a restore used to refuse one as a copy the store
+  did not write, a format verdict on which the person's leave took the group without the owner's
+  question (found and reproduced at T1 FIX 6) -- and a folder in the groups' root not named as the
+  store names a group's is not read at all. The leave's own erase still stops at a stray, which is
+  the cost R38 accepts.
+- A folder REPLACED by another program between a decision and the erase it decides -- a leave's
+  fresh verdict and its erase, or the sweep's reading of the creating state and its removals -- is
+  erased on the decision made about the folder that was there before. Both run inside one call
+  under the store's lock, so the window is that call's.
+
+**R36 closes the table's column 7, ONE STORE FILE PUT BACK, and names what stays.** R33's adversary
+also puts back single files -- a quarantine restored, a sync tool's re-download -- and every
+authority but the fresh verdict and the epoch window is a fact read from one small file. Each such
+fact is now one that a single file put back cannot bring back false:
+- the creating mark's: `recorded`, the creation's retraction, is kept for the group's life, and only
+  a leave or a failed join takes it, so a creation mark put back beside it is never a creation;
+- the leave mark's: the mark names E, the highest epoch the device held of the group at the
+  decision, and a leave is finished only while nothing of a later join stands above E, so a mark
+  put back after the group was joined again is removed and erases nothing;
+- an empty `epoch` or `sent` folder holds nothing of a group, so one a leave could not remove -- an
+  open handle with no delete sharing on it -- no longer refuses every re-join of the group;
+- and a wrong-type code is proof only beside the type the store's own Lstat finds at the name -- a
+  plain directory, a plain regular file or a symbolic link, and never anything irregular (R38).
+
+What stays:
+- **A quarantined leave mark undoes a leave.** A leave that stopped part way -- a file held while
+  its erase ran -- and whose mark another program then moves away is a group on the disk that is not
+  being left: its leave answers that the group has not been restored, and Restore brings it back.
+  Nothing is erased that the person did not ask for, and the group can be left again, but the
+  person's leave did not hold.
+- **W1: a file of a FINISHED leave, put back, strands the group id on this device** (round 6;
+  ACCEPTED in T1 by R39). The sequence: ONE of the group's files -- its record `meta`, an epoch state,
+  or `recorded` (or a copy of a sent line) -- is quarantined while the group is live; the person
+  leaves, the leave finishes, and the folder is removed; then the file is restored. The finished
+  leave removed its own mark last, so no fact is left to name the restored file as the left group's.
+  The cost, form by form: a restored `meta` reads as a live record whose states are gone, so Restore
+  reports the group unproven at every start, and its leave and a re-join are refused; a restored
+  epoch state or `recorded` (or sent copy) is one of the store's own names with no record beside it,
+  so Restore lists nothing and says nothing, and it is the leave and a re-join that answer unproven.
+  Either way the restored file's secrets stay on the disk -- the pq_secret table and handle key, or
+  a leaf's private keys -- on a store that is not encrypted at rest (S2-24). Nothing is erased: the
+  library refuses to erase a file it has no true reason to erase, which is the property working, so
+  what W1 costs is liveness and hygiene, and findings of that class wait for the two fixes below --
+  the store track, and "erase anyway", the person's explicit command, which is the store track's
+  first item. A tombstone mark kept by every finished leave was weighed and is not built in T1
+  (R39): it adds a kept fact per left group, a finished-or-under-way distinction on every road, and
+  put-back cells of its own.
+- **A single `meta` put back during a join** (R36's L3), into a folder the join gate read as holding
+  nothing of a group or a creation that never finished: if the join then fails after its commit,
+  `eraseJoinedRecord` takes that file unread as the join's own record; if the join succeeds, the
+  join's own record write replaces it. Neither half can be produced without interleaving inside
+  `Device.Join`.
+- **Anything that needs two or more of the store's files moved or put back in a sequence, or two or
+  more events.** Each is filed here with its sequence, for the store track below; by R36's budget
+  none is fixed inside T1:
+  - the creation mark put back while the record AND its retraction are both away, which is the
+    creating state again, so the sweep takes the group's epoch states; or the double failure above;
+  - `recorded` failing to write as a record lands (a full disk after `meta`), then the creation mark
+    put back, then `meta` moved away: the creating state again, three events;
+  - an old leave mark put back into the folder of a SECOND founder's group under the same id (MG-12's
+    attacker server), whose epochs are at or below the mark's E: the finish takes that group --
+    MG-12 and a put-back;
+  - a symbolic link at one of the store's names, over an intact target on a mount that answers
+    ERROR_INVALID_FUNCTION (code 1) for it: the link confirms a wrong type (R38), so the code is
+    proof -- two conditions, a link somebody made at a store name AND such a mount, and not what
+    ordinary software does.
+  (The two-event leak T1 FIX 6b filed here -- a join over an unfinished creation whose persist fails
+  after the record lands -- is DROPPED as unreachable: PutGroupRecord returns the directory sync's
+  error before it writes `recorded` or clears `pending`, so the mark stays, and the only failure after
+  a successful PutGroupRecord in a join is holdReplacing's refusal, which cannot happen under the
+  admission mutex.)
+
+### What a fix would be
+
+An explicit export, "erase this copy anyway", that a person chooses knowing what it costs, with the
+owner's question asked where the roster can still be read. Until then, the way out is deleting
+URmessage's folder, which this file says so that nobody has to find it out.
+
+And for the whole class above -- an authority kept as a fact in one small file, which another program
+that moves or puts back the store's files can make false -- the fix is a different store: THE STORE
+TRACK. A store in which a group's files change in one transaction needs no mark at all, and so has
+none to bring back; Spec A §8.1 describes such a store, on SQLite. It is filed after T1 as its own
+plan (R36's budget), and until then this item holds the class.
+
+THE STORE TRACK'S FIRST ITEM IS "ERASE ANYWAY" (R39): the person's explicit command to remove what is
+left of a group on this device, which is a true reason. With it, W1 and every other case above where
+the library correctly refuses to erase -- a group that stays unproven, a group id this device cannot
+re-join -- has one way out, and deleting URmessage's folder stops being it.
+
+### What is owed elsewhere
+
+A later change that may add an export to the C header, and the app's row for it.
