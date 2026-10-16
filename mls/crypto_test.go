@@ -6411,6 +6411,10 @@ func realDeclaration(secret []byte, length int) []byte {
 	copy(answer, secret)
 	return answer
 }
+
+func (self redacted) Format(state fmt.State, verb rune) {
+	fmt.Fprint(state, "redacted")
+}
 `
 
 // A package holding one reached declaration and one nothing names, for the same reason the
@@ -7086,6 +7090,20 @@ func declarationAddress(where string, name string) string {
 	return where + "/" + name
 }
 
+// THE SHAPES THAT ARE NOT PLACEHOLDERS, scoped to a file and a shape, under LRI R65 item 7: no code
+// is spelled around a gate. A method an interface makes is handed every parameter the interface
+// names, and one whose body has no use for a parameter is not a stub for that. fmt.Formatter hands
+// Format a verb, and a redaction writes the same text under every verb (the review of identity
+// phase 1's Tasks 8 to 10, L1-4). Writing the parameter _ is refused by the provider's argument
+// builder above, which resolves arguments by name, so the parameter keeps its name and the row is
+// here. Held both ways; the shape control's own Format is the control, which the matcher reports.
+var providerShapesThatAreNotPlaceholders = map[string]string{
+	"../messagegroup/phrase.go: messagegroup.Format does not read verb": "(RecoveryPhrase).Format, " +
+		"fmt.Formatter's redaction of P34: the same text under every verb",
+	"../messagegroup/identity_keys.go: messagegroup.Format does not read verb": "(PhraseKeys).Format, " +
+		"the same redaction of a ceremony's keys",
+}
+
 // No declaration anywhere under the guardrail roots is a placeholder.
 //
 // The roots are the ones the primitive guardrails already walk, which is this package and
@@ -7116,7 +7134,12 @@ func TestNoStubShapesRemainInSource(t *testing.T) {
 		"control.stubThatPanics does not read secret",
 		"control.stubThatPanics panics as a statement of its body rather than inside a check",
 		"control.stubThatReadsOneOfTwo does not read secret",
+		// the control of providerShapesThatAreNotPlaceholders: a redaction's Format still reads as
+		// the shape, here, where no row names it
+		"control.Format does not read verb",
 	}
+	slices.Sort(control)
+	slices.Sort(want)
 	if !slices.Equal(control, want) {
 		t.Errorf("the shape matcher read %v out of the control, want %v", control, want)
 	}
@@ -7126,10 +7149,28 @@ func TestNoStubShapesRemainInSource(t *testing.T) {
 	}
 	scanned := 0
 	packages := map[string][]parsedSource{}
+	excusedShapes := map[string]bool{}
+	defer func() {
+		// the rows, held both ways: each names a shape the matcher still reports in its file
+		for row := range providerShapesThatAreNotPlaceholders {
+			if !excusedShapes[row] {
+				t.Errorf("providerShapesThatAreNotPlaceholders names %q, which the matcher does not report; a row that excuses nothing reads as coverage", row)
+			}
+		}
+	}()
 	for path, text := range productionSources(mustScanSources(t, urmessageScanRoots()).sourceTexts) {
 		scanned++
 		parsed := mustParseText(t, path, text)
-		if shapes := providerStubShapesIn(parsed); len(shapes) != 0 {
+		shapes := []string{}
+		for _, shape := range providerStubShapesIn(parsed) {
+			row := filepath.ToSlash(path) + ": " + shape
+			if _, notAPlaceholder := providerShapesThatAreNotPlaceholders[row]; notAPlaceholder {
+				excusedShapes[row] = true
+				continue
+			}
+			shapes = append(shapes, shape)
+		}
+		if len(shapes) != 0 {
 			t.Errorf("%s still holds a placeholder: %v", path, shapes)
 		}
 		where := filepath.ToSlash(filepath.Dir(path))

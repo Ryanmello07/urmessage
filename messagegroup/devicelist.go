@@ -626,21 +626,35 @@ func signIskCert(irk ed25519.PrivateKey, cert *IskCert) error {
 	return nil
 }
 
-// signBase checks a base and fills its two signatures: the author's, by its device key, and
-// ISK_g's. A base that is not well formed is refused here as at every receiver, so a list of 11
-// devices is never signed.
-func signBase(isk ed25519.PrivateKey, author ed25519.PrivateKey, base *DeviceListBase) error {
-	if len(author) != ed25519.PrivateKeySize {
-		return fmt.Errorf("%w: an author key of %d octets", ErrIdentitySigningKey, len(author))
+// SignBaseAuthor fills base's author signature: its author's device key, over
+// LP("URmessage/v1/device-list-author") and the base's tbs. The base names author already, as a
+// phrase device it lists; ISK_g's signature over the same tbs is the ceremony's,
+// (*PhraseKeys).SignBase. The two may be made in either order, and both are needed.
+func SignBaseAuthor(base *DeviceListBase, author ed25519.PrivateKey) error {
+	if base == nil {
+		return fmt.Errorf("%w: no base", ErrDeviceListShape)
 	}
-	base.AuthorKey = append([]byte(nil), author[ed25519.SeedSize:]...)
+	return signBaseByAuthor(author, base)
+}
+
+// The base's tbs, once its form and its author are checked. A base that is not well formed is
+// refused here as at every receiver, so a list of 11 devices is never signed by either key.
+func baseTbsToSign(base *DeviceListBase) ([]byte, error) {
 	if err := checkBaseForm(base); err != nil {
-		return err
+		return nil, err
 	}
 	if !baseNamesPhraseDevice(base, base.AuthorKey) {
-		return fmt.Errorf("%w: the base does not name its author as a phrase device", ErrDeviceListShape)
+		return nil, fmt.Errorf("%w: the base does not name its author as a phrase device", ErrDeviceListShape)
 	}
-	tbs, err := identityEncoding(func(w *syntax.Writer) { encodeBaseTbs(w, base) })
+	return identityEncoding(func(w *syntax.Writer) { encodeBaseTbs(w, base) })
+}
+
+// signBaseByAuthor is the author's half of a base's signatures.
+func signBaseByAuthor(author ed25519.PrivateKey, base *DeviceListBase) error {
+	if len(author) != ed25519.PrivateKeySize || !sameOctets(author[ed25519.SeedSize:], base.AuthorKey) {
+		return fmt.Errorf("%w: an author key of %d octets, or not the key the base names", ErrIdentitySigningKey, len(author))
+	}
+	tbs, err := baseTbsToSign(base)
 	if err != nil {
 		return err
 	}
@@ -648,11 +662,20 @@ func signBase(isk ed25519.PrivateKey, author ed25519.PrivateKey, base *DeviceLis
 	if err != nil {
 		return err
 	}
+	base.AuthorSignature = authorSignature
+	return nil
+}
+
+// signBaseByPhraseKey is ISK_g's half.
+func signBaseByPhraseKey(isk ed25519.PrivateKey, base *DeviceListBase) error {
+	tbs, err := baseTbsToSign(base)
+	if err != nil {
+		return err
+	}
 	signature, err := identitySign(isk, deviceListLabel, tbs)
 	if err != nil {
 		return err
 	}
-	base.AuthorSignature = authorSignature
 	base.Signature = signature
 	return nil
 }

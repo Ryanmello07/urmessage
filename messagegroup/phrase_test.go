@@ -10,6 +10,7 @@
 package messagegroup
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -163,9 +164,11 @@ func TestAPhraseRoundTripsAndOneWrongWordIsRefusedByItsPosition(t *testing.T) {
 		}{{"A", phraseAP34Hex, phraseAWords}, {"B", phraseBP34Hex, phraseBWords}} {
 			phrase := &RecoveryPhrase{}
 			copy(phrase.p34[:], phraseHexOctets(t, known.p34))
-			if got := phrase.Words(); !slices.Equal(got, known.words) {
+			got := phrase.Words()
+			if !slices.Equal(got, known.words) {
 				t.Errorf("phrase %s writes %v, want %v", known.name, got, known.words)
 			}
+			clear(got)
 			read := phraseMustParse(t, strings.Join(known.words, " "))
 			if phraseHexText(read.p34[:]) != known.p34 {
 				t.Errorf("phrase %s's words read as %x, want %s", known.name, read.p34, known.p34)
@@ -202,6 +205,7 @@ func TestAPhraseRoundTripsAndOneWrongWordIsRefusedByItsPosition(t *testing.T) {
 					string(p34) == string(phrase.p34[:]), holds)
 			}
 			seen[string(phrase.p34[:])] = true
+			clear(words)
 			read.Erase()
 			if read.p34 != [phraseOctets]byte{} {
 				t.Fatal("Erase left the phrase's octets")
@@ -519,6 +523,87 @@ func TestNoInputIsEverCorrected(t *testing.T) {
 			if !errors.Is(err, near.sentinel) || errors.Unwrap(err) != near.sentinel {
 				t.Errorf("%s: the refusal is %v, want %v", near.name, err, near.sentinel)
 			}
+		}
+	}
+}
+
+// A RECOVERY PHRASE AND A CEREMONY'S KEYS PRINT NOTHING BUT A REDACTION, under every verb (the
+// review of Tasks 8 to 10, L1-4). fmt reads unexported fields by reflection, so before Format a
+// phrase under %v printed P34 and a ceremony's keys under %+v printed IRK's private half; and a
+// String method alone would have left %d, %o, %b, %c and %U printing them. Each type is asked as a
+// pointer and as a value, top level, nested, and through fmt.Errorf, and every answer must be the
+// fixed redaction and nothing else.
+func TestRecoveryPhraseAndPhraseKeysPrintNothingButARedaction(t *testing.T) {
+	phrase := phraseOfKnownAnswers(t, phraseKnownAnswersSeam["B"])
+	verbs := []string{"%v", "%+v", "%#v", "%s", "%d", "%x", "%X", "%q", "%o", "%b", "%c", "%U", "%08d", "%T"}
+	check := func(what string, value any, redacted string) {
+		t.Helper()
+		for _, verb := range verbs {
+			got := fmt.Sprintf(verb, value)
+			if verb == "%T" {
+				continue
+			}
+			if got != redacted {
+				t.Errorf("%s under %s prints %q, want only %q", what, verb, got, redacted)
+			}
+		}
+		if got := fmt.Errorf("confirm %v: %w", value, ErrRecoveryPhraseChecksum).Error(); !strings.Contains(got, redacted) || strings.Contains(got, "[") {
+			t.Errorf("%s inside a wrapped error prints %q", what, got)
+		}
+	}
+	check("*RecoveryPhrase", phrase, recoveryPhraseRedacted)
+	check("RecoveryPhrase", *phrase, recoveryPhraseRedacted)
+	if got := fmt.Sprintf("%v", []any{phrase}); got != "["+recoveryPhraseRedacted+"]" {
+		t.Errorf("a phrase inside a slice prints %q", got)
+	}
+	err := withPhraseKeys(phrase, []uint32{1}, phraseStretchForTests, func(keys *PhraseKeys) error {
+		check("*PhraseKeys", keys, phraseKeysRedacted)
+		check("PhraseKeys", *keys, phraseKeysRedacted)
+		// the control: the secrets are there to be printed, so a redaction is what stopped them
+		if len(keys.irk) != ed25519.PrivateKeySize {
+			t.Error("CONTROL: the ceremony's keys hold no IRK, so the redaction was asked of nothing")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the control: P34 is not zero, so a print of it would have carried octets
+	if phrase.p34 == [phraseOctets]byte{} {
+		t.Error("CONTROL: phrase B's P34 is zero, so the redaction was asked of nothing")
+	}
+}
+
+// THE SINGLE-WORD CHECK READS ONE TOKEN THROUGH THE SAME FOLD A PHRASE IS READ THROUGH (the review of
+// Tasks 8 to 10, L3-10; Spec A section 9.3a's check_word, which Task 14 consumes). The whole-phrase
+// parser cannot answer it: it refuses one word as a count and names two list words joined by any
+// white space as no word at all.
+func TestTheSingleWordCheckReadsOneTokenThroughTheSameFold(t *testing.T) {
+	for _, one := range []struct {
+		typed  string
+		listed bool
+	}{
+		{"abandon", true},
+		{"Abandon", true},
+		{"  zoo\t", true},
+		{"\uff41\uff42\uff41\uff4e\uff44\uff4f\uff4e", true}, // fullwidth: the fold makes it abandon
+		{"abandon\u00a0", true},                              // NBSP is white space
+		{"", false},
+		{"   ", false},
+		{"apricott", false},
+		{"abandon ability", false},
+		{"abandon\u00a0ability", false},
+		{"aband", false},
+		{"caf\u00e9", false}, // an accent folds to a letter and a mark: not a list word
+	} {
+		if got := CheckRecoveryPhraseWord(one.typed); got != one.listed {
+			t.Errorf("CheckRecoveryPhraseWord(%q) = %v, want %v", one.typed, got, one.listed)
+		}
+	}
+	// and every list word is one
+	for _, word := range phraseList {
+		if !CheckRecoveryPhraseWord(word) {
+			t.Fatalf("the list word %q is not one by the check", word)
 		}
 	}
 }

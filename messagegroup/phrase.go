@@ -141,8 +141,10 @@ func NewRecoveryPhrase() (*RecoveryPhrase, error) {
 }
 
 // Words answers the phrase's 25 words, for the one time it is shown. Each is a string of the list
-// itself, so answering them makes no copy of a word; the slice that orders them is the caller's
-// to drop when the words are off the screen.
+// itself, so answering them makes no copy of a word; but the slice that orders them IS the phrase
+// -- its 25 string headers point into the list at its words -- so the caller clears it,
+// clear(words), when the words are off the screen. A slice dropped without that holds the phrase
+// in freed heap until the memory is reused (the review of Tasks 8 to 10, L1-6).
 func (self *RecoveryPhrase) Words() []string {
 	phraseIndices := phraseIndicesOf(&self.p34)
 	defer clear(phraseIndices[:])
@@ -151,6 +153,27 @@ func (self *RecoveryPhrase) Words() []string {
 		phraseWords[position] = phraseList[phraseIndex]
 	}
 	return phraseWords
+}
+
+// Format writes a fixed redaction under every verb, so that no fmt call -- a log line, a wrapped
+// error -- carries an octet of P34 (the review of Tasks 8 to 10, L1-4). fmt.Formatter rather than
+// String, because fmt consults a Stringer only for v, s, x, X and q, and %d of P34 would print it;
+// and a value receiver, so that a RecoveryPhrase value is covered as a pointer is. It writes the
+// same text whatever the verb.
+func (self RecoveryPhrase) Format(state fmt.State, verb rune) {
+	fmt.Fprint(state, recoveryPhraseRedacted)
+}
+
+// What every fmt verb writes for a RecoveryPhrase.
+const recoveryPhraseRedacted = "messagegroup.RecoveryPhrase{redacted}"
+
+// CheckRecoveryPhraseWord answers whether typed is one word of the list, read through the same
+// fold a phrase is: NFKD, lowercase, white space collapsed. Spec A section 9.3a's check_word, for
+// a screen that marks each word as it is typed (Task 14). Two list words, or none, answer false.
+func CheckRecoveryPhraseWord(typed string) bool {
+	phraseIndices, count, notInTheList := phraseTokensOf(typed)
+	clear(phraseIndices[:])
+	return count == 1 && len(notInTheList) == 0
 }
 
 // Equal answers whether two phrases are the same phrase, in constant time: it is what "typed back

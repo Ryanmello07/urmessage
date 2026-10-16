@@ -122,27 +122,33 @@ func phraseOfKnownAnswers(t *testing.T, known phraseKnownAnswers) *RecoveryPhras
 	return phrase
 }
 
-// One ceremony's view of its keys, copied out while it runs.
+// One ceremony's view of its keys, copied out while it runs: per key number of its set, ISK_g and
+// isk_seed[g].
 type phraseCeremonyView struct {
-	keyNumber uint32
-	irk       string
-	isk       string
-	iskSeed   string
-	keys      *PhraseKeys
+	keyNumbers []uint32
+	irk        string
+	isk        map[uint32]string
+	iskSeed    map[uint32]string
+	keys       *PhraseKeys
 }
 
-func phraseCeremonyUnder(t *testing.T, phrase *RecoveryPhrase, keyNumber uint32,
+func phraseCeremonyUnder(t *testing.T, phrase *RecoveryPhrase, keyNumbers []uint32,
 	parameters phraseStretchParameters) phraseCeremonyView {
 
 	t.Helper()
-	view := phraseCeremonyView{}
-	err := withPhraseKeys(phrase, keyNumber, parameters, func(keys *PhraseKeys) error {
-		view = phraseCeremonyView{
-			keyNumber: keys.KeyNumber(),
-			irk:       phraseHexText(keys.IdentityKey()),
-			isk:       phraseHexText(keys.PhraseKey()),
-			iskSeed:   phraseHexText(keys.PhraseKeySeed()),
-			keys:      keys,
+	view := phraseCeremonyView{isk: map[uint32]string{}, iskSeed: map[uint32]string{}}
+	err := withPhraseKeys(phrase, keyNumbers, parameters, func(keys *PhraseKeys) error {
+		view.keyNumbers, view.irk, view.keys = keys.KeyNumbers(), phraseHexText(keys.IdentityKey()), keys
+		for _, keyNumber := range keyNumbers {
+			phraseKey, err := keys.PhraseKey(keyNumber)
+			if err != nil {
+				return err
+			}
+			seed, err := keys.PhraseKeySeed(keyNumber)
+			if err != nil {
+				return err
+			}
+			view.isk[keyNumber], view.iskSeed[keyNumber] = phraseHexText(phraseKey), phraseHexText(seed)
 		}
 		return nil
 	})
@@ -160,13 +166,13 @@ func phraseCeremonyUnder(t *testing.T, phrase *RecoveryPhrase, keyNumber uint32,
 // production path, so a composition that skipped or reordered a step -- MI8's HKDF straight over
 // the bits -- answers keys these are not.
 func TestTheKeysAreTheKnownAnswersForTwoPhrases(t *testing.T) {
-	if phraseStretchFrozen != (phraseStretchParameters{time: 3, memoryKiB: 262144, lanes: 4}) {
-		t.Fatalf("the frozen parameters are %+v, want MASTER section 5.2's t = 3, m = 262,144 KiB, p = 4", phraseStretchFrozen)
+	if phraseStretchFrozen() != (phraseStretchParameters{time: 3, memoryKiB: 262144, lanes: 4}) {
+		t.Fatalf("the frozen parameters are %+v, want MASTER section 5.2's t = 3, m = 262,144 KiB, p = 4", phraseStretchFrozen())
 	}
 	for _, name := range []string{"A", "B"} {
 		known := phraseKnownAnswersFrozen[name]
 		phrase := phraseOfKnownAnswers(t, known)
-		stretched := stretchPhrase(phrase.p34[:], phraseStretchFrozen)
+		stretched := stretchPhrase(phrase.p34[:], phraseStretchFrozen())
 		masterKey := keyScheduleExtract([]byte(phraseMasterKeySalt), stretched)
 		irkSeed := keyScheduleExpand(masterKey, []byte(identityKeyInfo), phraseKeyOctets)
 		iskRoot := keyScheduleExpand(masterKey, []byte(iskRootInfo), phraseKeyOctets)
@@ -190,13 +196,20 @@ func TestTheKeysAreTheKnownAnswersForTwoPhrases(t *testing.T) {
 				t.Errorf("phrase %s: ISK_%d is %s, want %s", name, keyNumber, got, want[1])
 			}
 		}
-		view := phraseCeremonyUnder(t, phrase, 1, phraseStretchFrozen)
-		if view.irk != known.irk || view.isk != known.iskSeeds[1][1] || view.iskSeed != known.iskSeeds[1][0] || view.keyNumber != 1 {
-			t.Errorf("phrase %s through WithPhraseKeys: IRK %s, ISK_1 %s, isk_seed[1] %s; want %s, %s, %s",
-				name, view.irk, view.isk, view.iskSeed, known.irk, known.iskSeeds[1][1], known.iskSeeds[1][0])
+		// EVERY KEY NUMBER OF THE SET IN ONE STRETCH (LRI R68, L3-3): one ceremony over the three
+		// known key numbers answers each one's known seed and key
+		view := phraseCeremonyUnder(t, phrase, []uint32{1, 2, 4294967295}, phraseStretchFrozen())
+		if view.irk != known.irk || !slices.Equal(view.keyNumbers, []uint32{1, 2, 4294967295}) {
+			t.Errorf("phrase %s through WithPhraseKeys: IRK %s over the set %v; want %s over [1 2 4294967295]", name, view.irk, view.keyNumbers, known.irk)
+		}
+		for keyNumber, want := range known.iskSeeds {
+			if view.isk[keyNumber] != want[1] || view.iskSeed[keyNumber] != want[0] {
+				t.Errorf("phrase %s through WithPhraseKeys: ISK_%d %s and isk_seed %s; want %s and %s",
+					name, keyNumber, view.isk[keyNumber], view.iskSeed[keyNumber], want[1], want[0])
+			}
 		}
 		// and WithPhraseKeys itself, the exported entry, answers the same keys
-		err := WithPhraseKeys(phrase, 1, func(keys *PhraseKeys) error {
+		err := WithPhraseKeys(phrase, []uint32{1}, func(keys *PhraseKeys) error {
 			if phraseHexText(keys.IdentityKey()) != known.irk {
 				return errors.New("WithPhraseKeys answered another IRK")
 			}
@@ -216,30 +229,30 @@ func TestEveryKeyNumbersSeedIsTheKnownAnswerAndNoneIsTheRoot(t *testing.T) {
 		phrase := phraseOfKnownAnswers(t, known)
 		seeds := map[string]uint32{}
 		for keyNumber, want := range known.iskSeeds {
-			view := phraseCeremonyUnder(t, phrase, keyNumber, phraseStretchForTests)
-			if view.iskSeed != want[0] || view.isk != want[1] {
+			view := phraseCeremonyUnder(t, phrase, []uint32{keyNumber}, phraseStretchForTests)
+			if view.iskSeed[keyNumber] != want[0] || view.isk[keyNumber] != want[1] {
 				t.Errorf("phrase %s, key number %d: isk_seed %s and ISK %s, want %s and %s",
-					name, keyNumber, view.iskSeed, view.isk, want[0], want[1])
+					name, keyNumber, view.iskSeed[keyNumber], view.isk[keyNumber], want[0], want[1])
 			}
 			if view.irk != known.irk {
 				t.Errorf("phrase %s, key number %d: IRK %s, want %s: the identity key does not depend on g", name, keyNumber, view.irk, known.irk)
 			}
 			// a function of isk_root and g alone: the same seed out of the known isk_root, with no
 			// phrase and no stretch in sight
-			if direct := phraseHexText(iskSeedOf(phraseHexOctets(t, known.iskRoot), keyNumber)); direct != view.iskSeed {
-				t.Errorf("phrase %s, key number %d: isk_seed from isk_root alone is %s and the ceremony's is %s", name, keyNumber, direct, view.iskSeed)
+			if direct := phraseHexText(iskSeedOf(phraseHexOctets(t, known.iskRoot), keyNumber)); direct != view.iskSeed[keyNumber] {
+				t.Errorf("phrase %s, key number %d: isk_seed from isk_root alone is %s and the ceremony's is %s", name, keyNumber, direct, view.iskSeed[keyNumber])
 			}
 			for _, root := range []string{known.iskRoot, known.irkSeed, known.masterKey, known.stretched} {
-				if view.iskSeed == root {
+				if view.iskSeed[keyNumber] == root {
 					t.Errorf("phrase %s: isk_seed[%d] is one of S, master_key, IRK's seed or isk_root", name, keyNumber)
 				}
 			}
-			if other, seen := seeds[view.iskSeed]; seen {
+			if other, seen := seeds[view.iskSeed[keyNumber]]; seen {
 				t.Errorf("phrase %s: key numbers %d and %d have one seed", name, other, keyNumber)
 			}
-			seeds[view.iskSeed] = keyNumber
+			seeds[view.iskSeed[keyNumber]] = keyNumber
 			// and the keys the ceremony was handed are blank once it is over
-			if view.keys.irk != nil || view.keys.isk != nil || view.keys.iskSeed != nil {
+			if view.keys.irk != nil || view.keys.numbers != nil {
 				t.Errorf("phrase %s, key number %d: the keys outlived the ceremony", name, keyNumber)
 			}
 		}
@@ -247,19 +260,28 @@ func TestEveryKeyNumbersSeedIsTheKnownAnswerAndNoneIsTheRoot(t *testing.T) {
 	// a ceremony that fails still ends with its keys erased, and its error is answered as it is
 	refused := errors.New("the ceremony refused")
 	var kept *PhraseKeys
-	err := withPhraseKeys(phraseOfKnownAnswers(t, phraseKnownAnswersSeam["B"]), 7, phraseStretchForTests,
+	err := withPhraseKeys(phraseOfKnownAnswers(t, phraseKnownAnswersSeam["B"]), []uint32{7, 8}, phraseStretchForTests,
 		func(keys *PhraseKeys) error {
 			kept = keys
 			return refused
 		})
-	if err != refused || kept == nil || kept.irk != nil || kept.isk != nil || kept.iskSeed != nil {
-		t.Errorf("a failed ceremony answered %v and left its keys %v", err, kept)
+	if err != refused || kept == nil || kept.irk != nil || kept.numbers != nil {
+		t.Errorf("a failed ceremony answered %v and left its keys", err)
 	}
-	if err := WithPhraseKeys(nil, 1, func(*PhraseKeys) error { return nil }); !errors.Is(err, ErrPhraseKeysCeremony) {
+	if err := WithPhraseKeys(nil, []uint32{1}, func(*PhraseKeys) error { return nil }); !errors.Is(err, ErrPhraseKeysCeremony) {
 		t.Errorf("no phrase: %v", err)
 	}
-	if err := WithPhraseKeys(phraseOfKnownAnswers(t, phraseKnownAnswersSeam["A"]), 1, nil); !errors.Is(err, ErrPhraseKeysCeremony) {
+	if err := WithPhraseKeys(phraseOfKnownAnswers(t, phraseKnownAnswersSeam["A"]), []uint32{1}, nil); !errors.Is(err, ErrPhraseKeysCeremony) {
 		t.Errorf("no ceremony: %v", err)
+	}
+	// a set that is empty, holds 0, or names a number twice is refused before anything is stretched
+	for _, refusedSet := range [][]uint32{nil, {}, {0}, {1, 0}, {2, 2}, {1, 2, 1}} {
+		ran := false
+		err := withPhraseKeys(phraseOfKnownAnswers(t, phraseKnownAnswersSeam["A"]), refusedSet, phraseStretchForTests,
+			func(*PhraseKeys) error { ran = true; return nil })
+		if !errors.Is(err, ErrPhraseKeyNumber) || ran {
+			t.Errorf("the set %v answered %v, the ceremony ran: %v", refusedSet, err, ran)
+		}
 	}
 }
 
@@ -370,13 +392,19 @@ func TestTheAccountIdIsTheKnownAnswerAndMovesWithTheSalt(t *testing.T) {
 // the seam (MI9). Five clauses, each over every production file of this package:
 //
 //  1. the one Argon2id call is stretchPhrase's, and it reads its parameters off its argument;
-//  2. the one phraseStretchParameters value production spells is phraseStretchFrozen's own;
-//  3. phraseStretchFrozen is never written, nor its address taken, so it is what it was declared;
-//  4. every production call of a function taking the parameters passes phraseStretchFrozen or
-//     forwards its own parameter, and the exported entry passes phraseStretchFrozen;
+//  2. the one phraseStretchParameters value production spells is the literal phraseStretchFrozen
+//     answers, and phraseStretchFrozen is a FUNCTION whose whole body returns it;
+//  3. so the parameters are unwritable by construction: there is no variable to write, and no
+//     production body writes, steps or takes the address of a parameter of the type, or of a field
+//     of one, and the type declares no method;
+//  4. every production call of a function taking the parameters passes phraseStretchFrozen() or
+//     forwards its own parameter, and the exported entry passes phraseStretchFrozen();
 //  5. the seam's name appears in no production file.
 //
-// So the seam's cheap parameters can reach a stretch only from a test file.
+// So the seam's cheap parameters can reach a stretch only from a test file. The review of Tasks 8
+// to 10 lightened the variable this gate used to hold, through a pointer-receiver method (its M3,
+// beside the plan's MI9) and with -- (its M3b), and both passed clause 3 as it was (L2-03); neither
+// can be written against a function, and clause 3 now holds the parameters' own copies as well.
 func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 	fileSet, sources := messagegroupProductionSources(t)
 	const parametersType = "phraseStretchParameters"
@@ -410,7 +438,7 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 		t.Errorf("the functions taking %s are %v, want derivePhraseKeys, stretchPhrase and withPhraseKeys", parametersType, taking)
 	}
 
-	argon2Calls, literals, frozenPasses := 0, 0, 0
+	argon2Calls, literals, frozenPasses, frozenBodies := 0, 0, 0, 0
 	for _, source := range sources {
 		text := source.path
 		if strings.Contains(messagegroupSourceText(t, source.path), "phraseStretchForTests") {
@@ -423,29 +451,26 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 					if literal, isLiteral := node.(*ast.CompositeLit); isLiteral {
 						if identifier, isName := literal.Type.(*ast.Ident); isName && identifier.Name == parametersType {
 							literals += 1
+							t.Errorf("%s declares a %s outside a function: %s", text, parametersType, phraseNodeText(t, fileSet, literal))
 						}
 					}
 					return true
 				})
-				// the one literal is the frozen var's own initialiser
-				for _, spec := range typed.Specs {
-					value, isValue := spec.(*ast.ValueSpec)
-					if !isValue {
-						continue
-					}
-					for at, name := range value.Names {
-						if name.Name != frozen {
-							continue
-						}
-						literal, isLiteral := value.Values[at].(*ast.CompositeLit)
-						if !isLiteral || phraseNodeText(t, fileSet, literal) != "phraseStretchParameters{time: 3, memoryKiB: 262144, lanes: 4}" {
-							t.Errorf("%s is declared as %s", frozen, phraseNodeText(t, fileSet, value.Values[at]))
-						}
-					}
-				}
 			case *ast.FuncDecl:
 				if typed.Body == nil {
 					continue
+				}
+				// the type declares no method: one with a pointer receiver could rewrite a copy
+				if typed.Recv != nil && strings.Contains(phraseNodeText(t, fileSet, typed.Recv.List[0].Type), parametersType) {
+					t.Errorf("%s declares a method %s on %s", text, typed.Name.Name, parametersType)
+				}
+				// the one literal is the frozen function's whole body
+				if typed.Name.Name == frozen {
+					frozenBodies += 1
+					if typed.Recv != nil || len(typed.Body.List) != 1 ||
+						phraseNodeText(t, fileSet, typed.Body) != "{\n\treturn phraseStretchParameters{time: 3, memoryKiB: 262144, lanes: 4}\n}" {
+						t.Errorf("%s is %s", frozen, phraseNodeText(t, fileSet, typed))
+					}
 				}
 				// the function's own parameter of the type, which it may forward
 				own := ""
@@ -459,17 +484,23 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 					case *ast.CompositeLit:
 						if identifier, isName := shape.Type.(*ast.Ident); isName && identifier.Name == parametersType {
 							literals += 1
-							t.Errorf("%s builds a %s in %s: %s", text, parametersType, typed.Name.Name, phraseNodeText(t, fileSet, shape))
+							if typed.Name.Name != frozen {
+								t.Errorf("%s builds a %s in %s: %s", text, parametersType, typed.Name.Name, phraseNodeText(t, fileSet, shape))
+							}
 						}
 					case *ast.AssignStmt:
 						for _, left := range shape.Lhs {
-							if strings.HasPrefix(phraseNodeText(t, fileSet, left), frozen) {
-								t.Errorf("%s writes %s in %s", text, frozen, typed.Name.Name)
+							if spelled := phraseNodeText(t, fileSet, left); own != "" && (spelled == own || strings.HasPrefix(spelled, own+".")) {
+								t.Errorf("%s writes %s in %s", text, spelled, typed.Name.Name)
 							}
 						}
+					case *ast.IncDecStmt:
+						if spelled := phraseNodeText(t, fileSet, shape.X); own != "" && strings.HasPrefix(spelled, own) {
+							t.Errorf("%s steps %s in %s", text, spelled, typed.Name.Name)
+						}
 					case *ast.UnaryExpr:
-						if shape.Op == token.AND && strings.HasPrefix(phraseNodeText(t, fileSet, shape.X), frozen) {
-							t.Errorf("%s takes the address of %s in %s", text, frozen, typed.Name.Name)
+						if spelled := phraseNodeText(t, fileSet, shape.X); shape.Op == token.AND && own != "" && strings.HasPrefix(spelled, own) {
+							t.Errorf("%s takes the address of %s in %s", text, spelled, typed.Name.Name)
 						}
 					case *ast.CallExpr:
 						callee := phraseNodeText(t, fileSet, shape.Fun)
@@ -490,7 +521,7 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 						}
 						passed := phraseNodeText(t, fileSet, shape.Args[position])
 						switch {
-						case passed == frozen:
+						case passed == frozen+"()":
 							frozenPasses += 1
 							if typed.Name.Name != "WithPhraseKeys" {
 								t.Errorf("%s passes %s to %s from %s; only the exported entry chooses the parameters", text, frozen, callee, typed.Name.Name)
@@ -505,9 +536,9 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 			}
 		}
 	}
-	if argon2Calls != 1 || literals != 1 || frozenPasses != 1 {
-		t.Errorf("%d argon2.IDKey calls, %d %s literals and %d passes of %s; want 1, 1 and 1",
-			argon2Calls, literals, parametersType, frozenPasses, frozen)
+	if argon2Calls != 1 || literals != 1 || frozenPasses != 1 || frozenBodies != 1 {
+		t.Errorf("%d argon2.IDKey calls, %d %s literals, %d passes of %s() and %d declarations of it; want 1, 1, 1 and 1",
+			argon2Calls, literals, parametersType, frozenPasses, frozen, frozenBodies)
 	}
 }
 

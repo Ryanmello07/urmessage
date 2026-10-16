@@ -2697,6 +2697,8 @@ var authComparatorCallsOfNoData = map[[3]string]string{
 	{"../messagegroup", "identityVerify", "ed25519.Verify"}: "the identity layer's one verifier of " +
 		"Ed25519 signatures over public keys and public signatures (identity phase 1, Task 11): a " +
 		"signature check, which crypto/ed25519 decides, and no equality of two strings",
+	{"../messagegroup", "withPhraseKeys", "slices.Contains"}: "a ceremony's set of key numbers checked " +
+		"for a repeat (LRI R68): uint32s, public, and no octet string of anybody's",
 }
 
 // THE VERIFIERS THAT VERIFY NO TAG, scoped to their root. This file's verifier class is every

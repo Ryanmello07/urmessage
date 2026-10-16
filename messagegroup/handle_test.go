@@ -298,13 +298,13 @@ var handleLeafIndexReadings = map[string]string{
 	// 299) puts the phrase's key number into a derivation, and MASTER writes it as every u32 is
 	// written, four octets big endian with no length prefix. It is "raw" because it is: M1-8's
 	// question, how LP(leaf_index) is spelled, is not asked of it, and leafIndexLP is not its
-	// helper. The three callers bind g only through iskSeedOf, so their reading is that one.
+	// helper. It is the class's one member of its kind: the three callers that bound g only through
+	// it took it as a uint32 until the ceremony took a SET of key numbers (LRI R68), and with it they
+	// left this class, so the review's L2-14 -- a transitive row licensing its function to spell u32(g)
+	// itself -- has no row left to hold.
 	"iskSeedOf": "raw -- isk_seed[g] = HKDF-Expand(isk_root, \"iskgen/v1\" | u32(g), 32), MASTER " +
 		"section 5.2 at Revision 10: the phrase's KEY NUMBER g, not a leaf index, written as four " +
 		"octets big endian after the label and never length prefixed",
-	"derivePhraseKeys": "raw -- it binds the key number only through iskSeedOf, so its reading is that one",
-	"withPhraseKeys":   "raw -- WithPhraseKeys's body, binding the key number only through derivePhraseKeys",
-	"WithPhraseKeys":   "raw -- the exported entry, binding the key number only through withPhraseKeys",
 }
 
 // THE DECLARATIONS THAT TURN A uint32 INTO OCTETS FOR A NUMBER THAT IS NOT A LEAF INDEX, AND REACH

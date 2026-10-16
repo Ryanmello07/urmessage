@@ -26,10 +26,13 @@ import (
 // call of zeroize or clear carrying exactly that value -- and it is held both ways like every other:
 // an erase that is deleted is a site the disposition names and the census no longer finds.
 //
-// GO CANNOT PROMISE ZEROED MEMORY (PLAN's promise table: a residual, stated in Spec A section 8).
-// What this census holds is the dataflow the source spells; a copy the runtime makes -- a stack
-// frame, a moved array, Argon2id's own working memory, the SHA-256 and HMAC states -- is outside
-// any census, and the dispositions below name the ones this package's own source makes visible.
+// GO CANNOT PROMISE ZEROED MEMORY (PLAN's promise table: a residual, which Spec A section 8 states as
+// LRI R68 has it stated, with its measured scope: the words, S, master_key, isk_root and IRK's private
+// half can survive in freed heap, in Argon2id's working memory and in hash and HMAC states, even
+// after a collection; the review of Tasks 8 to 10 measured it, L1-2). What this census holds is the
+// dataflow the source spells; a copy the runtime makes -- a stack frame, a moved array, Argon2id's
+// own working memory, the SHA-256 and HMAC states -- is outside any census, and the dispositions
+// below name the ones this package's own source makes visible.
 
 // The names that PRODUCE a phrase secret, in every position a name can produce one: the callee of
 // a call, a field read, a parameter, or a result of a function this net names. It is the SEARCH
@@ -70,6 +73,8 @@ var phraseSecretProducerNames = map[string]bool{
 // somewhere nobody weighed; an entry with no site is a disposition that has stopped describing the
 // code, or a rename this census has gone blind to.
 var phraseSecretProducerSites = map[string]string{
+	"CheckRecoveryPhraseWord|phraseTokensOf":           "the typed word read into the reading's indices, its count and the positions of the words not on the list",
+	"DeriveIdentityKeyed|self.irk":                     "IRK's seed, the first 32 octets of its private half, read as the key of D2 IL8's derivation; and its length, which says whether the ceremony is still running",
 	"Equal|other.p34":                                  "the other side of it",
 	"Equal|self.p34":                                   "one side of the constant time comparison that is 'typed back in full'",
 	"Erase|self.p34":                                   "P34, read only to be blanked",
@@ -82,13 +87,12 @@ var phraseSecretProducerSites = map[string]string{
 	"ParseRecoveryPhrase|phraseTokensOf":               "the typed words read into 25 list indices, a count and the positions of words not on the list",
 	"ParseRecoveryPhrase|result notInTheList":          "the positions of the words not on the list: positions, never words. In the net only because every result of a net function is",
 	"ParseRecoveryPhrase|result phrase":                "the phrase ParseRecoveryPhrase answers, holding P34",
-	"PhraseKeySeed|self.iskSeed":                       "ISK_SEED[g], copied for the phrase key record",
-	"PhraseKey|self.isk":                               "ISK_g, read only for its public half",
-	"SignBase|self.irk":                                "IRK, read for its length, which says whether the ceremony is still running",
-	"SignBase|self.isk":                                "ISK_g's private half, read to sign a base inside the ceremony",
+	"PhraseKeySeed|number.iskSeed":                     "ISK_SEED[g], copied for the phrase key record",
+	"PhraseKey|number.isk":                             "ISK_g, read only for its public half",
+	"SignBase|number.isk":                              "ISK_g's private half, read to sign a base inside the ceremony",
 	"SignIdentityStep|self.irk":                        "IRK's private half, read to sign the step to the next identity key inside the ceremony",
+	"SignIskCert|number.isk":                           "ISK_g, read for its public half, which the certificate names",
 	"SignIskCert|self.irk":                             "IRK's private half, read to sign IskCert(g) inside the ceremony, and its length to refuse a call after it",
-	"SignIskCert|self.isk":                             "ISK_g, read for its length and its public half, which the certificate names",
 	"Words|phraseIndicesOf":                            "the 25 indices of P ‖ CS8",
 	"Words|result phraseWords":                         "THE WORDS, answered for the one time they are shown",
 	"Words|self.p34":                                   "P34, read to write its 25 words the one time they are shown",
@@ -98,9 +102,10 @@ var phraseSecretProducerSites = map[string]string{
 	"end|self.phraseIndices":                           "the reading's indices, the one a listed word's index is written into",
 	"end|self.typedLetters":                            "the gathered word, looked up and then blanked",
 	"erase|self.irk":                                   "IRK's private half, read to be blanked and dropped",
-	"erase|self.isk":                                   "ISK_g's private half, read to be blanked and dropped",
-	"erase|self.iskSeed":                               "isk_seed[g], read to be blanked and dropped",
+	"erase|self.isk":                                   "ISK_g's private half, read to be blanked and dropped by its key number's erase",
+	"erase|self.iskSeed":                               "isk_seed[g], read to be blanked and dropped by its key number's erase",
 	"iskSeedOf|parameter iskRoot":                      "ISK_ROOT, which no device keeps: isk_seed[g] is expanded from it and g alone",
+	"keyNumberOf|self.irk":                             "IRK, read for its length, which says whether the ceremony is still running",
 	"phraseBitsAt|parameter phraseCarried":             "the 280 bits an index is read out of",
 	"phraseBitsAt|result value":                        "one index",
 	"phraseCarriedFromIndices|parameter phraseIndices": "the 25 indices",
@@ -122,7 +127,7 @@ var phraseSecretProducerSites = map[string]string{
 	"phraseTokensOf|reading.phraseIndices":             "the indices the reading gathered, copied out and then blanked",
 	"phraseTokensOf|result phraseIndices":              "the 25 indices it answers",
 	"phraseTokensOf|result reading":                    "the reading's count and positions. reading is a root of two results that are not secret, and the walk cannot tell its fields apart",
-	"signBase|parameter isk":                           "ISK_g's private half, as the base's signer takes it",
+	"signBaseByPhraseKey|parameter isk":                "ISK_g's private half, as the base's ISK signer takes it",
 	"signIdentityStep|parameter irk":                   "IRK's private half, as the step's signer takes it",
 	"signIskCert|parameter irk":                        "IRK's private half, as the certificate's signer takes it",
 	"stretchPhrase|parameter p34":                      "P34, the stretch's password",
@@ -137,6 +142,13 @@ type phraseSecretSink struct {
 }
 
 var phraseSecretSinks = map[string]phraseSecretSink{
+	"CheckRecoveryPhraseWord|call clear":                 {carries: []string{"phraseIndices"}, why: "ERASED: the reading's indices, at the end of the call that read them"},
+	"CheckRecoveryPhraseWord|return":                     {carries: []string{"count"}, why: "a bool: whether exactly one listed word was read. The walk cannot tell the answer from the count and the positions it is decided by"},
+	"DeriveIdentityKeyed|call ed25519.NewKeyFromSeed":    {carries: []string{"derivedSeed"}, why: "the derived seed into the derived key"},
+	"DeriveIdentityKeyed|call keyScheduleExpand":         {carries: []string{"self.irk"}, why: "IRK's seed into D2 IL8's derivation, HKDF-Expand(IRK's seed, label, 32)"},
+	"DeriveIdentityKeyed|call phrasePublicHalf":          {carries: []string{"derived"}, why: "the derived key into its public half, copied out"},
+	"DeriveIdentityKeyed|call zeroize":                   {carries: []string{"derived", "derivedSeed"}, why: "ERASED: the derived seed and private key, before the public half is answered"},
+	"DeriveIdentityKeyed|return":                         {carries: []string{"derived"}, why: "the derived key's PUBLIC half, a copy: D2 IL8's answer. The walk cannot tell it from the private key it was cut from; TestTheCeremonySignsTheCertificateTheStepAndTheBaseAndNothingAfterIt holds it to its known answer"},
 	"Equal|call subtle.ConstantTimeCompare":              {carries: []string{"other.p34", "self.p34"}, why: "the two phrases compared in constant time"},
 	"Equal|return":                                       {carries: []string{"other.p34", "self.p34"}, why: "a bool, whether the two are one phrase. The walk cannot tell the answer from what was compared"},
 	"Erase|call zeroize":                                 {carries: []string{"self.p34"}, why: "ERASED: P34, at the end of its ceremony"},
@@ -150,32 +162,37 @@ var phraseSecretSinks = map[string]phraseSecretSink{
 	"ParseRecoveryPhrase|call phraseFromIndices":         {carries: []string{"phrase", "phrase.p34", "phraseIndices"}, why: "the indices read back into the parsed phrase's own P34"},
 	"ParseRecoveryPhrase|call phraseTokensOf":            {carries: []string{"phraseTyped"}, why: "the typed words, read"},
 	"ParseRecoveryPhrase|return":                         {carries: []string{"count", "notInTheList", "phrase"}, why: "the phrase to its ceremony, or the positions and the count of a refusal, which name no word"},
-	"PhraseKeySeed|call append":                          {carries: []string{"self.iskSeed"}, why: "isk_seed[g] copied"},
-	"PhraseKeySeed|return":                               {carries: []string{"self.iskSeed"}, why: "ISK_SEED[g], THE ONE PHRASE SECRET THAT OUTLIVES A CEREMONY, for the one place it may go: a phrase device's phrase key record, store kind 13 (MASTER section 5.2; Task 12)"},
-	"PhraseKey|call phrasePublicHalf":                    {carries: []string{"self.isk"}, why: "ISK_g into its public half, copied out"},
-	"PhraseKey|return":                                   {carries: []string{"self.isk"}, why: "ISK_g's PUBLIC half, a copy, the key a base is checked under"},
-	"SignBase|call signBase":                             {carries: []string{"self.isk"}, why: "ISK_g's private half to the base's signer, inside the ceremony; it signs and keeps nothing"},
-	"SignBase|return":                                    {carries: []string{"self.isk"}, why: "the base signer's error. The walk cannot tell it from the key the signer was called with"},
+	"PhraseKeySeed|call append":                          {carries: []string{"number.iskSeed"}, why: "isk_seed[g] copied"},
+	"PhraseKeySeed|return":                               {carries: []string{"number.iskSeed"}, why: "ISK_SEED[g], THE ONE PHRASE SECRET THAT OUTLIVES A CEREMONY, for the one place it may go: a phrase device's phrase key record, store kind 13 (MASTER section 5.2; Task 12)"},
+	"PhraseKey|call phrasePublicHalf":                    {carries: []string{"number.isk"}, why: "ISK_g into its public half, copied out"},
+	"PhraseKey|return":                                   {carries: []string{"number.isk"}, why: "ISK_g's PUBLIC half, a copy, the key a base is checked under"},
+	"SignBase|call signBaseByPhraseKey":                  {carries: []string{"number.isk"}, why: "ISK_g's private half to the base's ISK signer, inside the ceremony; it signs and keeps nothing"},
+	"SignBase|return":                                    {carries: []string{"number.isk"}, why: "the base signer's error. The walk cannot tell it from the key the signer was called with"},
 	"SignIdentityStep|call signIdentityStep":             {carries: []string{"self.irk"}, why: "IRK's private half to the step's signer, inside the ceremony; it signs and keeps nothing"},
 	"SignIdentityStep|return":                            {carries: []string{"self.irk"}, why: "the step: IRK's public half and a signature. The walk cannot tell the step from the key that signed it"},
-	"SignIskCert|call signIskCert":                       {carries: []string{"self.irk"}, why: "IRK's private half to the certificate's signer, inside the ceremony; it signs and keeps nothing"},
+	"SignIskCert|call phrasePublicHalf":                  {carries: []string{"number.isk"}, why: "ISK_g into its public half, copied out"},
+	"SignIskCert|call signIskCert":                       {carries: []string{"cert", "self.irk"}, why: "IRK's private half to the certificate's signer, inside the ceremony, with the certificate it fills; it signs and keeps nothing"},
+	"SignIskCert|literal IskCert.IskPub":                 {carries: []string{"number.isk"}, why: "ISK_g's public half, which the certificate names. The walk cannot tell the public half from the key it was copied out of"},
+	"SignIskCert|return":                                 {carries: []string{"cert"}, why: "IskCert(g): IRK's and ISK_g's public halves, g and IRK's signature, every one public. The walk cannot tell the certificate from the keys it names"},
 	"Words|assign phraseWords[position]":                 {carries: []string{"phraseIndex"}, why: "each word, a string of the list itself, into the slice Words answers"},
 	"Words|call clear":                                   {carries: []string{"phraseIndices"}, why: "ERASED: the indices, at the end of the call that read them"},
 	"Words|call phraseIndicesOf":                         {carries: []string{"self.p34"}, why: "P34 read into its 25 indices"},
-	"Words|return":                                       {carries: []string{"phraseWords"}, why: "THE WORDS, to the screen that shows them once. They are strings of the list, so no copy of a word is made; the slice is the caller's to drop"},
+	"Words|return":                                       {carries: []string{"phraseWords"}, why: "THE WORDS, to the screen that shows them once. They are strings of the list, so no copy of a word is made; but the slice's string headers point at the list's words, so the caller clears it, clear(words)"},
+	"derivePhraseKeys|call append":                       {carries: []string{"numbers"}, why: "each key number's seed and key into the ceremony's set, erased by erase when the ceremony ends"},
 	"derivePhraseKeys|call ed25519.NewKeyFromSeed":       {carries: []string{"irkSeed", "iskSeed"}, why: "the two seeds into IRK and ISK_g"},
 	"derivePhraseKeys|call iskSeedOf":                    {carries: []string{"iskRoot"}, why: "isk_root into isk_seed[g]"},
 	"derivePhraseKeys|call keyScheduleExpand":            {carries: []string{"masterKey"}, why: "master_key into IRK's seed and isk_root"},
 	"derivePhraseKeys|call keyScheduleExtract":           {carries: []string{"stretched"}, why: "S into master_key, HKDF-Extract(\"URmessage/v1\", S)"},
 	"derivePhraseKeys|call stretchPhrase":                {carries: []string{"phrase.p34"}, why: "P34 into the one stretch"},
-	"derivePhraseKeys|call zeroize":                      {carries: []string{"irkSeed", "iskRoot", "masterKey", "stretched"}, why: "ERASED: S, master_key, IRK's seed and isk_root, at the end of the call that made them and before any ceremony runs, so no ceremony holds isk_root"},
+	"derivePhraseKeys|call zeroize":                      {carries: []string{"irkSeed", "iskRoot", "masterKey", "stretched"}, why: "ERASED: S, master_key, isk_root and the buffer IRK's seed was expanded into, at the end of the call that made them and before any ceremony runs, so no ceremony holds isk_root. IRK's private key, its seed in its first 32 octets, is in the ceremony's keys until the ceremony returns"},
 	"derivePhraseKeys|literal PhraseKeys.irk":            {carries: []string{"irkSeed"}, why: "IRK into the ceremony's keys, erased by erase when the ceremony ends"},
-	"derivePhraseKeys|literal PhraseKeys.isk":            {carries: []string{"iskSeed"}, why: "ISK_g into the ceremony's keys, erased the same way"},
-	"derivePhraseKeys|literal PhraseKeys.iskSeed":        {carries: []string{"iskSeed"}, why: "isk_seed[g] into the ceremony's keys, erased the same way"},
+	"derivePhraseKeys|literal PhraseKeys.numbers":        {carries: []string{"numbers"}, why: "the set into the ceremony's keys, erased by erase when the ceremony ends"},
+	"derivePhraseKeys|literal phraseKeyNumber.isk":       {carries: []string{"iskSeed"}, why: "ISK_g into the ceremony's set, erased by erase when the ceremony ends"},
+	"derivePhraseKeys|literal phraseKeyNumber.iskSeed":   {carries: []string{"iskSeed"}, why: "isk_seed[g] into the ceremony's set, erased the same way"},
 	"end|assign self.phraseIndices[?]":                   {carries: []string{"phraseIndex"}, why: "a listed word's index into the reading"},
 	"end|call string":                                    {carries: []string{"self.typedLetters"}, why: "the gathered word as a map key, for the lookup: Go does not allocate a string for m[string(b)], so no copy of the word is made"},
 	"end|call zeroize":                                   {carries: []string{"self.typedLetters"}, why: "ERASED: the gathered word, at the end of every word"},
-	"erase|call zeroize":                                 {carries: []string{"self.irk", "self.isk", "self.iskSeed"}, why: "ERASED: IRK's private half, ISK_g and isk_seed[g], when the ceremony returns"},
+	"erase|call zeroize":                                 {carries: []string{"self.irk", "self.isk", "self.iskSeed"}, why: "ERASED: IRK's private half, by the ceremony's erase, and each key number's ISK_g and isk_seed[g], by that number's erase, which the ceremony's calls for each, when the ceremony returns. The walk names the two erases as one, by their name"},
 	"iskSeedOf|call keyScheduleExpand":                   {carries: []string{"iskRoot"}, why: "HKDF-Expand(isk_root, \"iskgen/v1\" ‖ u32(g), 32)"},
 	"iskSeedOf|return":                                   {carries: []string{"iskRoot"}, why: "isk_seed[g], to derivePhraseKeys. The walk cannot tell the expansion from its key"},
 	"phraseBitsAt|call uint16":                           {carries: []string{"phraseCarried"}, why: "a bit of P34 ‖ CS8, widened into the index being built"},
@@ -204,8 +221,8 @@ var phraseSecretSinks = map[string]phraseSecretSink{
 	"phraseTokensOf|call phraseFoldOf":                   {carries: []string{"phraseCharacter"}, why: "each typed code point into its fold"},
 	"phraseTokensOf|call reading.take":                   {carries: []string{"phraseCharacter"}, why: "the fold into the reading"},
 	"phraseTokensOf|return":                              {carries: []string{"phraseIndices", "reading"}, why: "the indices, the count and the positions, to ParseRecoveryPhrase, which erases the indices"},
-	"signBase|assign base.Signature":                     {carries: []string{"signature"}, why: "the base's signature, which is public"},
-	"signBase|call identitySign":                         {carries: []string{"isk"}, why: "ISK_g's private half to the one signer"},
+	"signBaseByPhraseKey|assign base.Signature":          {carries: []string{"signature"}, why: "the base's ISK_g signature, which is public"},
+	"signBaseByPhraseKey|call identitySign":              {carries: []string{"isk"}, why: "ISK_g's private half to the one signer"},
 	"signIdentityStep|call append":                       {carries: []string{"oldPublic"}, why: "IRK's public half, copied into the step"},
 	"signIdentityStep|call identitySign":                 {carries: []string{"irk"}, why: "IRK's private half to the one signer"},
 	"signIdentityStep|call sameOctets":                   {carries: []string{"oldPublic"}, why: "IRK's PUBLIC half, compared with the next key so that no key succeeds itself"},
@@ -213,7 +230,7 @@ var phraseSecretSinks = map[string]phraseSecretSink{
 	"signIdentityStep|literal IdentityStep.Signature":    {carries: []string{"signature"}, why: "the step's signature, which is public"},
 	"signIskCert|assign cert.Signature":                  {carries: []string{"signature"}, why: "the certificate's signature, which is public; the walk follows it because IRK made it"},
 	"signIskCert|call identitySign":                      {carries: []string{"irk"}, why: "IRK's private half to the one signer, Ed25519 over LP(label) ‖ tbs; ed25519.Sign keeps nothing"},
-	"stretchPhrase|call argon2.IDKey":                    {carries: []string{"p34"}, why: "P34 into Argon2id. Its 256 MiB of working memory is a function of P34 and is not erased by the library, the residual Spec A section 8 states"},
+	"stretchPhrase|call argon2.IDKey":                    {carries: []string{"p34"}, why: "P34 into Argon2id. Its 256 MiB of working memory is a function of P34 and is not erased by the library: the residual Spec A section 8 states, as LRI R68 has it stated (the words, S, master_key, isk_root and IRK's private half can survive in freed heap, in Argon2id's working memory and in hash and HMAC states)"},
 	"stretchPhrase|return":                               {carries: []string{"p34"}, why: "S, to derivePhraseKeys, which erases it"},
 	"take|assign self.typedLetters[self.length]":         {carries: []string{"symbol"}, why: "a typed letter into the one buffer a word is gathered in"},
 	"withPhraseKeys|call ceremony":                       {carries: []string{"keys"}, why: "the ceremony's keys, handed to it for the length of this call; erase runs when it returns, whatever it did"},
@@ -221,14 +238,13 @@ var phraseSecretSinks = map[string]phraseSecretSink{
 }
 
 var phraseSecretCountedNotCarriedSites = map[string]string{
-	"ParseRecoveryPhrase|len notInTheList": "whether any word is not on the list",
-	"SignBase|len self.irk":                "whether IRK is still whole, for the same reason",
-	"SignBase|len self.isk":                "whether ISK_g is still whole, for the same reason",
-	"SignIdentityStep|len self.irk":        "whether IRK is still whole, for the same reason",
-	"SignIskCert|len self.irk":             "whether IRK is still whole: a call after the ceremony is refused",
-	"SignIskCert|len self.isk":             "whether ISK_g is still whole, for the same reason",
-	"signIdentityStep|len irk":             "whether the key handed in is a whole Ed25519 private key",
-	"take|len phraseFold":                  "the length of one code point's fold, which the loop runs over",
+	"CheckRecoveryPhraseWord|len notInTheList": "whether the one token read is not on the list",
+	"DeriveIdentityKeyed|len self.irk":         "whether IRK is still whole, for the same reason",
+	"ParseRecoveryPhrase|len notInTheList":     "whether any word is not on the list",
+	"SignIdentityStep|len self.irk":            "whether IRK is still whole, for the same reason",
+	"keyNumberOf|len self.irk":                 "whether IRK is still whole: a call after the ceremony is refused",
+	"signIdentityStep|len irk":                 "whether the key handed in is a whole Ed25519 private key",
+	"take|len phraseFold":                      "the length of one code point's fold, which the loop runs over",
 }
 
 var phraseSecretAccumulatorSites = map[string]string{

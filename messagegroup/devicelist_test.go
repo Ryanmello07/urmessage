@@ -81,6 +81,11 @@ const (
 	// the largest 0xF005 I1 can make: a base of 10 devices, 8 self-removals and 8 additions in
 	// turn, and 4 steps
 	deviceListKnownLargestOctets = 4231
+	// R68's new known answers, from the same script: phrase A's IskCert(2), and D2 IL8's derivation
+	// under "inboxown/v1" over phrase A's IRK, HKDF-Expand(IRK's seed, "inboxown/v1", 32) as an
+	// Ed25519 seed, its public half
+	deviceListKnownCert2Signature = "9d7f5bafb73512ad00913d4be803da62ab67bdc96ef138990c3a877224a7a797a5a7a70e53bef43623505bb832b880e81b8f8717dc195305dfda386a36fd690d"
+	deviceListKnownOwnerKey       = "05bcb14f6ff6cf792dc83a27bb3fa0e20feb8dd7e9d72cdb9231f80de121ea4d"
 	// 2026-01-01T00:00:00Z, the known answers' issued_at_ms
 	deviceListKnownIssuedAtMs uint64 = 1767225600000
 )
@@ -114,6 +119,16 @@ func deviceListRawSignBase(t *testing.T, isk ed25519.PrivateKey, author ed25519.
 	base.Signature = deviceListRawSign(t, isk, deviceListLabel, tbs)
 }
 
+// A base's two signatures through the two signers production has, the author's and ISK_g's, the
+// base's author key set to the author's first.
+func deviceListSignBase(isk ed25519.PrivateKey, author ed25519.PrivateKey, base *DeviceListBase) error {
+	base.AuthorKey = append([]byte(nil), author[ed25519.SeedSize:]...)
+	if err := SignBaseAuthor(base, author); err != nil {
+		return err
+	}
+	return signBaseByPhraseKey(isk, base)
+}
+
 // An identity of one key: IskCert(g), a base of number baseNumber naming devices (the author a
 // phrase device), signed, and no amendment. The chain is given; the identity key is its end.
 func deviceListIdentity(t *testing.T, irk deviceListTestKey, isk deviceListTestKey, g uint32, baseNumber uint64,
@@ -131,7 +146,7 @@ func deviceListIdentity(t *testing.T, irk deviceListTestKey, isk deviceListTestK
 	slices.SortFunc(devices, func(left DeviceEntry, right DeviceEntry) int { return compareKeys(left.DeviceKey, right.DeviceKey) })
 	base := DeviceListBase{IdentityKey: irk.public, KeyNumber: g, BaseNumber: baseNumber,
 		IssuedAtMs: deviceListKnownIssuedAtMs, Devices: devices}
-	if err := signBase(isk.private, author.private, &base); err != nil {
+	if err := deviceListSignBase(isk.private, author.private, &base); err != nil {
 		t.Fatal(err)
 	}
 	return &UrmessageIdentity{IskCert: cert, Base: base, Chain: chain}
@@ -274,7 +289,7 @@ func TestTheLargestIdentityExtensionIsTheKnownSizeAndFitsTheLinkDeposit(t *testi
 	chainKeys := []deviceListTestKey{keys.devices[21], keys.devices[22], keys.devices[23], keys.devices[24], keys.irkA}
 	identity := deviceListIdentity(t, keys.irkA, keys.iskA1, 1, 1, keys.devices[1], others, deviceListChain(t, chainKeys...))
 	identity.Base.PrevHash = make([]byte, 32)
-	if err := signBase(keys.iskA1.private, keys.devices[1].private, &identity.Base); err != nil {
+	if err := deviceListSignBase(keys.iskA1.private, keys.devices[1].private, &identity.Base); err != nil {
 		t.Fatal(err)
 	}
 	for round := 0; round < 8; round++ {
@@ -549,7 +564,7 @@ func TestEqualListVersionsWithDifferentOctetsAreAFork(t *testing.T) {
 	}
 	timed := deviceListIdentity(t, keys.irkA, keys.iskA1, 1, 3, keys.devices[1], []deviceListTestKey{keys.devices[2]}, nil)
 	timed.Base.IssuedAtMs++
-	if err := signBase(keys.iskA1.private, keys.devices[1].private, &timed.Base); err != nil {
+	if err := deviceListSignBase(keys.iskA1.private, keys.devices[1].private, &timed.Base); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := VerifyDeviceList(first, timed); !errors.Is(err, ErrDeviceListFork) {
@@ -586,8 +601,12 @@ func TestTheListHoldsTenDevicesAndSixteenChangesAndNoMore(t *testing.T) {
 	eleven := full.Base
 	eleven.Devices = append(slices.Clone(full.Base.Devices), DeviceEntry{DeviceKey: keys.devices[11].public})
 	slices.SortFunc(eleven.Devices, func(l DeviceEntry, r DeviceEntry) int { return compareKeys(l.DeviceKey, r.DeviceKey) })
-	if err := signBase(keys.iskA1.private, keys.devices[1].private, &eleven); !errors.Is(err, ErrDeviceListShape) {
-		t.Errorf("a base of 11 devices was signed: %v", err)
+	eleven.AuthorKey = append([]byte(nil), keys.devices[1].public...)
+	if err := SignBaseAuthor(&eleven, keys.devices[1].private); !errors.Is(err, ErrDeviceListShape) {
+		t.Errorf("a base of 11 devices was signed by its author: %v", err)
+	}
+	if err := signBaseByPhraseKey(keys.iskA1.private, &eleven); !errors.Is(err, ErrDeviceListShape) {
+		t.Errorf("a base of 11 devices was signed by ISK_g: %v", err)
 	}
 	deviceListRawSignBase(t, keys.iskA1.private, keys.devices[1].private, &eleven)
 	if _, err := VerifyLeafBinding(keys.irkA.public, keys.devices[1].public,
@@ -922,25 +941,119 @@ func mustDecimal(t *testing.T, text string) *big.Int {
 	return value
 }
 
-// The contract R65 asked for, held: IRK and ISK_g sign inside the ceremony -- the certificate, the
-// step and the base -- and nothing after it, when the keys are erased.
+// The contract LRI R68 settled for R65 item 4, held with a known answer for each method:
+// messagegroup signs, and no private half leaves the package. Under the frozen parameters, phrase
+// A's one ceremony over the set {1, 2} answers IRK, ISK_1 and ISK_2 and isk_seed[1], and signs
+// IskCert(1) and IskCert(2), the step to phrase B's IRK, base 1's ISK_1 signature (with its author's
+// beside it through SignBaseAuthor), and D2 IL8's derivation under "inboxown/v1". A key number
+// outside the set, and a base under another key number, are refused; and once the ceremony is over
+// every method answers ErrPhraseKeysErased.
+//
+// The answers were computed with no Go code (Python's hmac for HKDF and the OpenSSL command line for
+// Ed25519, after RFC 8032's and RFC 5869's vectors): IskCert(2) and the derivation are new here, and
+// the rest are this file's known answers for the same octets, which the ceremony must reproduce.
 func TestTheCeremonySignsTheCertificateTheStepAndTheBaseAndNothingAfterIt(t *testing.T) {
+	fixed := deviceListFixedKeys(t)
+	phrase := phraseOfKnownAnswers(t, phraseKnownAnswersFrozen["A"])
+	known := phraseKnownAnswersFrozen["A"]
+	var kept *PhraseKeys
+	err := WithPhraseKeys(phrase, []uint32{2, 1}, func(keys *PhraseKeys) error {
+		kept = keys
+		if got := keys.KeyNumbers(); !slices.Equal(got, []uint32{1, 2}) {
+			t.Errorf("the ceremony's set is %v, want [1 2], ascending", got)
+		}
+		if phraseHexText(keys.IdentityKey()) != known.irk {
+			t.Errorf("IRK is %x, want %s", keys.IdentityKey(), known.irk)
+		}
+		for _, keyNumber := range []uint32{1, 2} {
+			phraseKey, err := keys.PhraseKey(keyNumber)
+			if err != nil || phraseHexText(phraseKey) != known.iskSeeds[keyNumber][1] {
+				t.Errorf("ISK_%d is %x, %v; want %s", keyNumber, phraseKey, err, known.iskSeeds[keyNumber][1])
+			}
+			seed, err := keys.PhraseKeySeed(keyNumber)
+			if err != nil || phraseHexText(seed) != known.iskSeeds[keyNumber][0] {
+				t.Errorf("isk_seed[%d] is %x, %v", keyNumber, seed, err)
+			}
+		}
+		for keyNumber, want := range map[uint32]string{1: deviceListKnownCertSignature, 2: deviceListKnownCert2Signature} {
+			cert, err := keys.SignIskCert(keyNumber)
+			if err != nil || phraseHexText(cert.Signature) != want || cert.KeyNumber != keyNumber {
+				t.Errorf("IskCert(%d) is %+v, %v; want the signature %s", keyNumber, cert, err, want)
+			}
+		}
+		step, err := keys.SignIdentityStep(fixed.irkB.public)
+		if err != nil || phraseHexText(step.Signature) != deviceListKnownStepAB {
+			t.Errorf("the step to phrase B's IRK is %+v, %v; want the signature %s", step, err, deviceListKnownStepAB)
+		}
+		base := DeviceListBase{IdentityKey: keys.IdentityKey(), KeyNumber: 1, BaseNumber: 1, IssuedAtMs: deviceListKnownIssuedAtMs,
+			Devices: []DeviceEntry{{DeviceKey: fixed.devices[1].public, Flags: DeviceFlagPhraseDevice}}, AuthorKey: fixed.devices[1].public}
+		if err := keys.SignBase(1, &base); err != nil || phraseHexText(base.Signature) != deviceListKnownBaseSignature {
+			t.Errorf("base 1's ISK_1 signature is %x, %v; want %s", base.Signature, err, deviceListKnownBaseSignature)
+		}
+		if err := SignBaseAuthor(&base, fixed.devices[1].private); err != nil || phraseHexText(base.AuthorSignature) != deviceListKnownBaseAuthorSig {
+			t.Errorf("base 1's author signature is %x, %v; want %s", base.AuthorSignature, err, deviceListKnownBaseAuthorSig)
+		}
+		owner, err := keys.DeriveIdentityKeyed("inboxown/v1")
+		if err != nil || phraseHexText(owner) != deviceListKnownOwnerKey {
+			t.Errorf("IL8's derivation under inboxown/v1 is %x, %v; want %s", owner, err, deviceListKnownOwnerKey)
+		}
+		// the refusals
+		if _, err := keys.PhraseKey(3); !errors.Is(err, ErrPhraseKeyNumber) {
+			t.Errorf("ISK_3, outside the set: %v", err)
+		}
+		if _, err := keys.SignIskCert(3); !errors.Is(err, ErrPhraseKeyNumber) {
+			t.Errorf("IskCert(3), outside the set: %v", err)
+		}
+		if err := keys.SignBase(2, &base); !errors.Is(err, ErrIdentitySigningKey) {
+			t.Errorf("a base of key number 1 signed under 2: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.IdentityKey() != nil || len(kept.KeyNumbers()) != 0 {
+		t.Errorf("the keys outlived the ceremony")
+	}
+	if _, err := kept.SignIskCert(1); !errors.Is(err, ErrPhraseKeysErased) {
+		t.Errorf("a certificate was signed after the ceremony: %v", err)
+	}
+	if _, err := kept.SignIdentityStep(fixed.irkB.public); !errors.Is(err, ErrPhraseKeysErased) {
+		t.Errorf("a step was signed after the ceremony: %v", err)
+	}
+	if err := kept.SignBase(1, &DeviceListBase{}); !errors.Is(err, ErrPhraseKeysErased) {
+		t.Errorf("a base was signed after the ceremony: %v", err)
+	}
+	if _, err := kept.DeriveIdentityKeyed("inboxown/v1"); !errors.Is(err, ErrPhraseKeysErased) {
+		t.Errorf("a key was derived after the ceremony: %v", err)
+	}
+	if _, err := kept.PhraseKeySeed(1); !errors.Is(err, ErrPhraseKeysErased) {
+		t.Errorf("isk_seed[1] was answered after the ceremony: %v", err)
+	}
+}
+
+// The test this replaced, kept below as the body of the old contract's one assertion that is not a
+// known answer: what the ceremony signs binds and verifies.
+func TestWhatTheCeremonySignsBindsAndVerifies(t *testing.T) {
 	keys := deviceListFixedKeys(t)
 	phrase := phraseOfKnownAnswers(t, phraseKnownAnswersSeam["A"])
-	var kept *PhraseKeys
 	var cert *IskCert
 	var step *IdentityStep
-	base := DeviceListBase{BaseNumber: 1, Devices: []DeviceEntry{{DeviceKey: keys.devices[1].public, Flags: DeviceFlagPhraseDevice}}}
-	err := withPhraseKeys(phrase, 1, phraseStretchForTests, func(ceremony *PhraseKeys) error {
-		kept = ceremony
+	base := DeviceListBase{BaseNumber: 1, Devices: []DeviceEntry{{DeviceKey: keys.devices[1].public, Flags: DeviceFlagPhraseDevice}},
+		AuthorKey: keys.devices[1].public, KeyNumber: 1}
+	err := withPhraseKeys(phrase, []uint32{1}, phraseStretchForTests, func(ceremony *PhraseKeys) error {
 		var err error
-		if cert, err = ceremony.SignIskCert(); err != nil {
+		if cert, err = ceremony.SignIskCert(1); err != nil {
 			return err
 		}
 		if step, err = ceremony.SignIdentityStep(keys.irkB.public); err != nil {
 			return err
 		}
-		return ceremony.SignBase(&base, keys.devices[1].private)
+		base.IdentityKey = ceremony.IdentityKey()
+		if err := ceremony.SignBase(1, &base); err != nil {
+			return err
+		}
+		return SignBaseAuthor(&base, keys.devices[1].private)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -952,14 +1065,5 @@ func TestTheCeremonySignsTheCertificateTheStepAndTheBaseAndNothingAfterIt(t *tes
 	}
 	if err := VerifyIdentityChain(irk, []IdentityStep{*step}, keys.irkB.public); err != nil {
 		t.Errorf("the ceremony's step does not verify: %v", err)
-	}
-	if _, err := kept.SignIskCert(); !errors.Is(err, ErrPhraseKeysErased) {
-		t.Errorf("a certificate was signed after the ceremony: %v", err)
-	}
-	if _, err := kept.SignIdentityStep(keys.irkB.public); !errors.Is(err, ErrPhraseKeysErased) {
-		t.Errorf("a step was signed after the ceremony: %v", err)
-	}
-	if err := kept.SignBase(&DeviceListBase{}, keys.devices[1].private); !errors.Is(err, ErrPhraseKeysErased) {
-		t.Errorf("a base was signed after the ceremony: %v", err)
 	}
 }

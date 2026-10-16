@@ -10,6 +10,7 @@ package messagegroup
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -988,24 +989,51 @@ var recordKeyOneWayProbes = map[string]func(secret []byte) [][]byte{
 	},
 	// The recovery phrase's keys, handed a rung as the phrase: its 32 octets are P34 below two zero
 	// octets, so its five high bits are zero. It stretches through the test seam and not the
-	// exported entry's frozen parameters, as every test of this package but the one known answer
-	// does (TestProductionStretchesWithTheFrozenParametersOnly), and withPhraseKeys is that
-	// entry's whole body. What it answers is everything a ceremony can take out: the identity key,
-	// the phrase key and isk_seed[g], at two key numbers.
+	// exported entry's frozen parameters, as every test of this package but the known answers do
+	// (TestProductionStretchesWithTheFrozenParametersOnly), and withPhraseKeys is that entry's
+	// whole body. What it answers is the public halves and isk_seed[g] a ceremony can take out, for
+	// the set {1, 2}.
+	//
+	// A FORMALITY OF THE CLASS, said so (the review of Tasks 8 to 10, L2-15): WithPhraseKeys is in
+	// it by being exported and reaching the kdf, and its probe embeds the rung in a 34-octet P34, so
+	// "a member that returned its own input" cannot be seen for it here. The phrase's one-way
+	// property is the phrase-secret census's, which is its enforcer.
 	"WithPhraseKeys": func(secret []byte) [][]byte {
 		phrase := &RecoveryPhrase{}
 		copy(phrase.p34[2:], secret)
 		produced := [][]byte{}
-		for _, keyNumber := range []uint32{1, 2} {
-			err := withPhraseKeys(phrase, keyNumber, phraseStretchForTests, func(keys *PhraseKeys) error {
-				produced = append(produced, keys.IdentityKey(), keys.PhraseKey(), keys.PhraseKeySeed())
-				return nil
-			})
-			if err != nil {
-				return nil
+		err := withPhraseKeys(phrase, []uint32{1, 2}, phraseStretchForTests, func(keys *PhraseKeys) error {
+			produced = append(produced, keys.IdentityKey())
+			for _, keyNumber := range keys.KeyNumbers() {
+				phraseKey, err := keys.PhraseKey(keyNumber)
+				if err != nil {
+					return err
+				}
+				seed, err := keys.PhraseKeySeed(keyNumber)
+				if err != nil {
+					return err
+				}
+				produced = append(produced, phraseKey, seed)
 			}
+			return nil
+		})
+		if err != nil {
+			return nil
 		}
 		return produced
+	},
+	// D2 IL8's derivation, handed a rung as IRK's seed: the public half of the key it derives under
+	// a label. Built straight over a PhraseKeys holding that IRK, since what is asked is the
+	// derivation's and not the stretch's. A formality of the class as WithPhraseKeys's row is, with
+	// the phrase-secret census the enforcer of what the derivation keeps.
+	"DeriveIdentityKeyed": func(secret []byte) [][]byte {
+		keys := &PhraseKeys{irk: ed25519.NewKeyFromSeed(secret)}
+		defer keys.erase()
+		derived, err := keys.DeriveIdentityKeyed("inboxown/v1")
+		if err != nil {
+			return nil
+		}
+		return [][]byte{derived}
 	},
 }
 

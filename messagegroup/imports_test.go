@@ -48,6 +48,7 @@ var messagegroupProductionImports = map[string]string{
 	`"errors"`:                               "errors.New, for the sentinels of the two error files and nothing else",
 	`"fmt"`:                                  "fmt.Errorf(\"%w: ...\", sentinel, detail) only: the sentinel stays the matchable identity and the wrap carries the octet counts a caller needs",
 	`"io"`:                                   "the io.Reader an entropy taking function is handed, which entropy_test.go's derived class is keyed on",
+	`"slices"`:                               "Contains and Sorted, over a ceremony's set of key numbers (identity_keys.go): the set is checked for a repeat and derived in ascending order",
 	`"sync"`:                                 "the two ratchets' state locks and the receiver table's, which are what stop two concurrent senders consuming one stream index",
 	`"github.com/urnetwork/message/message"`: "the record types, the two aad builders, the write_auth mac and the size ladder. The edge is ONE WAY: connect/message must never import this package, and connect/layering_test.go holds that",
 	`"github.com/urnetwork/message/mls"`:     "the crypto provider every derivation runs on, the four X25519 wrappers, the group this package's one adapter wraps, and the two window bounds the receiver's defaults are read off",

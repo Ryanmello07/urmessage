@@ -722,6 +722,9 @@ var (
 	// Fires when the phrase's keys are asked for a signature after their ceremony ended and erased
 	// them.
 	ErrPhraseKeysErased = errors.New("messagegroup: the phrase's keys were erased when their ceremony ended")
+	// Fires when a ceremony is asked for no key number, for 0, for one number twice, or for a key
+	// number outside the set it derived.
+	ErrPhraseKeyNumber = errors.New("messagegroup: a key number outside the ceremony's set, or a set that is empty, holds 0 or names one twice")
 	// Fires when an identity object does not encode or decode as version 1: a field, a version, an
 	// alg_id or a trailing octet.
 	ErrIdentityEncoding = errors.New("messagegroup: an identity object does not encode as version 1")
