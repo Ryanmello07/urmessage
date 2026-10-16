@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -169,4 +170,163 @@ func TestAStrayCopyFolderInTheGroupsRootIsNotReportedByRestore(t *testing.T) {
 	if err != nil || len(restored) != 1 || !bytes.Equal(restored[0].Id(), groupId) {
 		t.Errorf("Restore beside a stray copy folder answered %d group(s), %v, want the group back and nothing reported", len(restored), err)
 	}
+}
+
+// upperCaseFolderOf renames one group's folder to upper case, as a sync tool from a case-sensitive
+// source or the shell can rename one, and answers its new path.
+func upperCaseFolderOf(t *testing.T, store *DurableStateStore, groupId []byte) string {
+	t.Helper()
+	upper := filepath.Join(store.dataDir, "group", strings.ToUpper(stateNameOf(groupId)))
+	if err := os.Rename(store.groupDir(groupId), upper); err != nil {
+		t.Fatalf("renaming the group's folder to upper case: %v", err)
+	}
+	return upper
+}
+
+// lstatAnswering makes the store's injected Lstat answer, for one path, the Lstat of another, and
+// the real one for every other path.
+func lstatAnswering(store *DurableStateStore, path string, instead string) {
+	store.lstat = func(name string) (os.FileInfo, error) {
+		if filepath.Clean(name) == filepath.Clean(path) {
+			return os.Lstat(instead)
+		}
+		return os.Lstat(name)
+	}
+}
+
+// AN UPPER-CASE FOLDER THAT IS NOT THE SAME FILE AS THE GROUP'S OWN IS A STRAY TO EVERY LISTING OF THE
+// ROOT (R42, item 1, the other half: portable, through the store's injected Lstat, and with real
+// folders where the filesystem keeps two names that differ only in case apart). The store's own name
+// reaches ONE folder; on a case-sensitive filesystem a name equal to it in another case is a
+// different folder, and two folders must never be read as one group.
+//   - THROUGH THE INJECTED LSTAT, on every platform: a group's folder is renamed to upper case, and the
+//     Lstat of its lowercase name answers ANOTHER folder, as a case-sensitive filesystem holding a
+//     different folder under that name answers. Whatever the renamed folder holds -- a record, a leave
+//     mark, a creation with its state -- it is a stray: the list answers the other group alone and
+//     reports nothing, no leave is finished in it, the sweep decides nothing in it, and its files stay.
+//   - WITH REAL FOLDERS, where the filesystem keeps the two names apart (it is skipped where it folds
+//     them): an upper-case copy of a group's folder beside the real one is a stray, and the group is
+//     listed once.
+//
+// THE CONTROL: with the Lstat of the lowercase name answering the renamed folder itself -- the SAME
+// file -- the rule takes the folder, under its lowercase name.
+//
+// WHAT WOULD GO RED: a name in either case accepted without the same-file check, which reads two
+// folders as one group; and the lowercase-only rule, which the control's own answer refuses.
+func TestAnUpperCaseFolderThatIsNotTheGroupsOwnFileIsAStray(t *testing.T) {
+	record := func(groupId []byte) *GroupRecord {
+		return &GroupRecord{GroupId: groupId, PqSecret: bytes.Repeat([]byte{0x2A}, 32), GroupHandleKey: bytes.Repeat([]byte{0x5C}, 32), Epoch: 1, Opened: true}
+	}
+	kept := bytes.Repeat([]byte{0x91}, GroupIdBytes)
+	renamed := bytes.Repeat([]byte{0x92}, GroupIdBytes)
+	t.Run("the list of records", func(t *testing.T) {
+		store := openTestStore(t, t.TempDir())
+		for _, groupId := range [][]byte{kept, renamed} {
+			if err := store.PutGroupRecord(record(groupId)); err != nil {
+				t.Fatalf("PutGroupRecord: %v", err)
+			}
+		}
+		upper := upperCaseFolderOf(t, store, renamed)
+		lstatAnswering(store, store.groupDir(renamed), store.groupDir(kept))
+		records, err := store.GroupRecords()
+		store.lstat = nil
+		if err != nil || len(records) != 1 || !bytes.Equal(records[0].GroupId, kept) {
+			t.Errorf("beside an upper-case folder that is not the same file the list answered %d record(s), %v, want the other group alone and no report", len(records), err)
+		}
+		if _, err := os.Stat(filepath.Join(upper, stateGroupRecordName)); err != nil {
+			t.Errorf("the stray folder's record went: %v", err)
+		}
+	})
+	t.Run("the list of leaves", func(t *testing.T) {
+		store := openTestStore(t, t.TempDir())
+		if err := store.PutGroupState(renamed, 1, testState); err != nil {
+			t.Fatalf("PutGroupState: %v", err)
+		}
+		if err := store.MarkGroupForgetting(renamed); err != nil {
+			t.Fatalf("MarkGroupForgetting: %v", err)
+		}
+		if err := store.PutGroupRecord(record(kept)); err != nil {
+			t.Fatalf("PutGroupRecord: %v", err)
+		}
+		upper := upperCaseFolderOf(t, store, renamed)
+		lstatAnswering(store, store.groupDir(renamed), store.groupDir(kept))
+		leaving, err := store.GroupsBeingForgotten()
+		store.lstat = nil
+		if err != nil || len(leaving) != 0 {
+			t.Errorf("beside an upper-case folder that is not the same file the list of leaves answered %d group(s), %v, want none and no report", len(leaving), err)
+		}
+		if _, err := os.Stat(filepath.Join(upper, stateGroupForgettingName)); err != nil {
+			t.Errorf("the stray folder's mark went: %v", err)
+		}
+	})
+	t.Run("the sweep", func(t *testing.T) {
+		store := openTestStore(t, t.TempDir())
+		if err := store.PutGroupState(renamed, 1, testState); err != nil {
+			t.Fatalf("PutGroupState: %v", err)
+		}
+		if err := store.PutGroupRecord(record(kept)); err != nil {
+			t.Fatalf("PutGroupRecord: %v", err)
+		}
+		upper := upperCaseFolderOf(t, store, renamed)
+		lstatAnswering(store, store.groupDir(renamed), store.groupDir(kept))
+		erased, err := store.eraseGroupsWithNoRecord(nil)
+		store.lstat = nil
+		if err != nil || len(erased) != 0 {
+			t.Errorf("beside an upper-case folder that is not the same file the sweep answered %v, %v, want nothing erased and no error", erased, err)
+		}
+		if _, err := os.Stat(filepath.Join(upper, stateGroupEpochsName, stateEpochName(1))); err != nil {
+			t.Errorf("the stray folder's state went: %v", err)
+		}
+	})
+	t.Run("the control: the same file", func(t *testing.T) {
+		store := openTestStore(t, t.TempDir())
+		if err := store.PutGroupRecord(record(renamed)); err != nil {
+			t.Fatalf("PutGroupRecord: %v", err)
+		}
+		upper := upperCaseFolderOf(t, store, renamed)
+		lstatAnswering(store, store.groupDir(renamed), upper)
+		defer func() { store.lstat = nil }()
+		root := filepath.Join(store.dataDir, "group")
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, entry := range entries {
+			if entry.Name() != filepath.Base(upper) {
+				continue
+			}
+			found = true
+			if name, named := store.groupFolderNameOf(root, entry); !named || name != stateNameOf(renamed) {
+				t.Errorf("CONTROL FAILED: the upper-case folder that IS the same file answered %q, %v, want its lowercase name", name, named)
+			}
+		}
+		if !found {
+			t.Fatalf("CONTROL FAILED: the root does not list the upper-case folder")
+		}
+	})
+	t.Run("real folders, where the filesystem keeps the two names apart", func(t *testing.T) {
+		store := openTestStore(t, t.TempDir())
+		if err := store.PutGroupRecord(record(renamed)); err != nil {
+			t.Fatalf("PutGroupRecord: %v", err)
+		}
+		upper := filepath.Join(store.dataDir, "group", strings.ToUpper(stateNameOf(renamed)))
+		if err := os.Mkdir(upper, 0o700); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				t.Skipf("this filesystem folds case, so an upper-case copy cannot stand beside the folder; the injected Lstat holds this half here")
+			}
+			t.Fatal(err)
+		}
+		octets, err := os.ReadFile(store.groupRecordPath(renamed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(upper, stateGroupRecordName), octets, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		records, err := store.GroupRecords()
+		if err != nil || len(records) != 1 || !bytes.Equal(records[0].GroupId, renamed) {
+			t.Errorf("beside a real upper-case copy of its folder the group answered %d record(s), %v, want it listed once and no report", len(records), err)
+		}
+	})
 }
