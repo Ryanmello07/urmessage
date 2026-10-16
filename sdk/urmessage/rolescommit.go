@@ -276,7 +276,7 @@ func (self *Group) outgoingAuthorizationLocked(intent *outgoingCommit) (*CommitA
 	for at, encoded := range intent.addKeyPackages {
 		var keyPackage mls.KeyPackage
 		if err := syntax.Unmarshal(encoded, &keyPackage); err != nil {
-			return nil, fmt.Errorf("urmessage: key package %d of %d does not decode: %w", at, len(intent.addKeyPackages), err)
+			return nil, fmt.Errorf("%w: key package %d of %d does not decode: %w", ErrKeyPackageInvalid, at, len(intent.addKeyPackages), err)
 		}
 		for occupied[next] {
 			next += 1
@@ -604,7 +604,7 @@ func (self *Group) RemoveMember(ctx context.Context, identityPub []byte) error {
 	if err != nil {
 		return fmt.Errorf("urmessage: CommitRemoveWithExtensions: %w", err)
 	}
-	return self.publishCommitLocked(ctx, commit)
+	return self.publishCommitLocked(ctx, commit, nil)
 }
 
 // editablePolicyLocked is the live policy as a value the verbs may write into: freshly decoded off
@@ -656,5 +656,5 @@ func (self *Group) commitPolicyAndPublishLocked(ctx context.Context, policy []by
 	if err != nil {
 		return fmt.Errorf("urmessage: CommitPolicy: %w", err)
 	}
-	return self.publishCommitLocked(ctx, commit)
+	return self.publishCommitLocked(ctx, commit, nil)
 }

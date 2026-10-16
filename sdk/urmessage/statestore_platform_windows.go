@@ -44,7 +44,7 @@ func acquireStateStoreExclusion(dir string) (io.Closer, error) {
 	path := stateStoreGuardPath(dir)
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: the guard entry %s is not a path this platform can name: %v",
+		return nil, fmt.Errorf("%w: the guard entry %s is not a path this platform can name: %w",
 			ErrStateStoreState, path, err)
 	}
 	handle, err := syscall.CreateFile(
@@ -62,7 +62,7 @@ func acquireStateStoreExclusion(dir string) (io.Closer, error) {
 				"%w: the state directory %s is held by another DurableStateStore; two stores over one directory are two devices writing one device's mls state, and the later writer's epoch overwrites the earlier's",
 				ErrStateStoreLocked, dir)
 		}
-		return nil, fmt.Errorf("%w: the guard entry %s could not be opened: %v", ErrStateStoreState, path, err)
+		return nil, fmt.Errorf("%w: the guard entry %s could not be opened: %w", ErrStateStoreState, path, err)
 	}
 	return &stateStoreExclusion{handle: handle}, nil
 }

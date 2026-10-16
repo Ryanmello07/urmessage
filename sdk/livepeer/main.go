@@ -22,9 +22,9 @@
 // is what makes "the file is there" mean "the file is fresh".
 //
 // WHAT IS SECRET HERE. The credential is an operator-minted by_client_jwt and is read from a path;
-// it is never printed. The INVITE is key material in full — an invite that reaches a third party is
-// a group that third party is in — so it is written 0600 to a path outside any repository and
-// deleted as soon as it is consumed. Neither is ever formatted into a log line.
+// it is never printed. The INVITE is treated as secret — it carries the Welcome, and it names the
+// group and who is in it — so it is written 0600 to a path outside any repository and deleted as
+// soon as it is consumed. Neither is ever formatted into a log line.
 //
 // NEVER RUN THIS UNDER THE APP'S OWN ACCOUNT. Two clients at one client_id, or two state
 // directories descended from one, is two devices at ONE MLS leaf: one sender_handle, one stream

@@ -87,6 +87,8 @@ var epochKeyProducerSelectors = map[string]bool{
 // carry it. Measured: green, with the census printing `publishCommitLocked|message.WriteKey`, the
 // EpochAttachment.WriteKey literal and the epochKeysFor call, all three unchanged.
 var epochKeyProducerSites = map[string]string{
+	"epochKeysDigestOver|message.ReadKey":  "the read key of the same epoch, for the same digest.",
+	"epochKeysDigestOver|message.WriteKey": "the write key of the epoch a join seal is judged at, derived only to be digested and erased before the function answers.",
 	"Open|keys.WriteKey":                   "epoch 1's write key, off the session the founding commit opens",
 	"Open|keys.ReadKey":                    "epoch 1's read key, the same",
 	"Open|bootstrap.WriteKey":              "write_key[0], §4.3.2's bootstrap key, which certifies the founding commit and is NOT what it opens",
@@ -132,6 +134,22 @@ type epochKeySink struct {
 // measurement that says why they cannot move yet -- and because the map is held BOTH ways, the day
 // they do move this file goes red until somebody deletes the entry and the sentence with it.
 var epochKeySinks = map[string]epochKeySink{
+	"publishCommitLocked|call beforeSubmit": {
+		carries: []string{"commitDigest"},
+		why:     "THE JOIN SEAL'S HOOK. It is handed the digest the commit record below carries, so that a seal and its commit cannot come to name two digests. H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes.",
+	},
+	"epochKeysDigestOver|return": {
+		carries: []string{"digest"},
+		why:     "H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes. It is not a key.",
+	},
+	"epochKeysDigestOver|call zeroizeState": {
+		carries: []string{"readKey", "writeKey"},
+		why:     "the erase of both, before the digest is answered.",
+	},
+	"epochKeysDigestOver|call message.EpochKeysDigest": {
+		carries: []string{"readKey", "writeKey"},
+		why:     "the pair, into the digest. What comes back is the digest and neither key.",
+	},
 	"Open|call epochKeysFor": {
 		carries: []string{"founding", "readKey", "writeKey"},
 		why: "RULING 33's ROAD, and the DECISION that gates it. epochKeysFor " +
@@ -299,6 +317,10 @@ var epochKeySinks = map[string]epochKeySink{
 			"built from a digest built from keys is derived from keys however little of them it " +
 			"holds. See publishCommitLocked|call self.submitLocked for the same correction at the " +
 			"other commit path.",
+	},
+	"Open|call sameDigest": {
+		carries: []string{"foundingDigest"},
+		why:     "THE DIGEST THE INVITE WAS SEALED OVER, held against the one this Open is about to publish. H(epoch_keys) is PUBLIC: it is what the commit that opens an epoch publishes. The comparison answers a bool.",
 	},
 }
 

@@ -5,52 +5,60 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/syntax"
 )
 
-// InviteVersion is the version every [Invite] this build encodes carries. A blob written by another
-// build is refused by [ParseInvite] rather than read as this one.
+// InviteVersion is the version every [Invite] this build encodes carries, and the only one it
+// reads. A blob at any other version is refused by [ParseInvite] with [ErrInviteVersion].
+//
+// 0x0003 SEALS THE JOIN SECRETS. Version two carried pq_secret and group_handle_key as two fields
+// in the clear; version three carries a join seal and its authenticator in their place, and
+// nothing secret in the clear. See joinseal.go. A version two blob is refused BY VERSION and is
+// never read: reading one would be installing two secrets whoever pasted it chose.
 //
 // 0x0002 ADDED THE CHECKSUM, AND AN 0x0001 BLOB IS REFUSED BY VERSION. Version one was framing and
 // nothing else, so a damaged invite PARSED and JOINED and the damage surfaced one call later: a
-// review flipped one bit at each of 3,408 positions of a real invite and 3,386 parsed; one that
-// corrupted group_handle_key joined cleanly as the intended recipient and then never received a
-// message, with the precise error arriving at Receive instead of at the paste. See [ParseInvite].
-const InviteVersion uint16 = 0x0002
+// review flipped one bit at each of 3,408 positions of a real invite and 3,386 parsed. See
+// [ParseInvite].
+const InviteVersion uint16 = 0x0003
 
 // inviteChecksumBytes is the width of the SHA-256 an encoded invite ends with.
 const inviteChecksumBytes = sha256.Size
 
 // Invite is everything a second device needs in order to join a group, and it is a HAND-OFF rather
-// than a message: this package has no channel to carry it and does not invent one, because the
-// rendezvous and the contact card are out of scope for the alpha.
+// than a message: this package has no channel to carry it and does not invent one.
 //
-// IT IS SECRET IN FULL. Two of its four fields are key material -- pq_secret is the IKM of every
-// storage root this group will ever extract, and the Welcome carries the MLS init secret -- so an
-// invite that reaches a third party is a group that third party is in. Move it the way you would
-// move a private key: over a channel that is already authenticated and already confidential, once,
-// and destroy it afterwards.
+// NOTHING IN IT IS A SECRET IN THE CLEAR. The two secrets a joiner needs are inside JoinSeal,
+// sealed under X-Wing to the key the joiner's own leaf publishes, so only the device whose join
+// code was added can open it. What a third party who obtains an invite DOES learn is the group's
+// id, its ratchet tree -- who is in it, by credential -- and that this joiner was added.
 //
-// WHAT EACH FIELD IS AND WHOSE OPEN ITEM ITS DELIVERY IS. Every one is a value a PRODUCTION
-// function of connect produced; what does not exist is a carrier.
+// IT IS STILL NOT AUTHENTICATED, and it must still travel over a channel the two people trust.
+// Whoever controls that channel can substitute a different join code on the way out or a different
+// invite on the way back, and the joiner then joins a group that is real and is not the one it
+// meant (MG-1). The seal does not change that and does not claim to.
 //
-//   - Welcome and RatchetTree: connect/mls's own, from GroupHandle.Commit. Ledger 44a's named,
-//     gated hand-off.
-//   - PqSecret: messagegroup.NewPqSecret. Its delivery is M1-20 and m1 task 14.
-//   - GroupHandleKey: GroupHandleKey(StorageRoot(mls_secret[0], pq_secret)), computed at epoch zero
-//     and never recomputed. Its carrier is M1-2. It is in here because a session opened at any
-//     epoch after zero is REFUSED without it -- a value recomputed from a later root would give
-//     every epoch a different sender_handle and end every member's stream at every commit.
-//   - GroupId: the 32 octets the server keys its rows by.
+// WHAT EACH FIELD IS.
+//
+//   - GroupId: the 32 octets the server keys its rows by, and the group this device's join is
+//     BOUND to: a Welcome describing any other group is refused before anything is written.
+//   - Welcome and RatchetTree: the MLS hand-off, from the commit that added the joiner.
+//   - JoinSeal: join_secrets_v1 -- pq_secret of the epoch joined, group_handle_key, and the digest
+//     of that epoch's published keys -- as a MASTER section 7 wrap body addressed to the joiner's
+//     leaf. Exactly 1,253 octets.
+//   - JoinAuth: the 32 octet MAC over all of the above that only a member of the join epoch can
+//     make.
 type Invite struct {
-	GroupId        []byte
-	Welcome        []byte
-	RatchetTree    []byte
-	PqSecret       []byte
-	GroupHandleKey []byte
+	GroupId     []byte
+	Welcome     []byte
+	RatchetTree []byte
+	JoinSeal    []byte
+	JoinAuth    []byte
 }
 
-// check refuses an invite that is missing a half nothing downstream could recover.
+// check refuses an invite that is not the shape version three fixes. It reads no key and opens
+// nothing, so it runs at the paste, before a join code is touched.
 func (self *Invite) check() error {
 	if len(self.GroupId) != GroupIdBytes {
 		return fmt.Errorf("urmessage: an invite names a %d octet group id, want %d", len(self.GroupId), GroupIdBytes)
@@ -61,21 +69,32 @@ func (self *Invite) check() error {
 	if len(self.RatchetTree) == 0 {
 		return fmt.Errorf("urmessage: an invite carries no ratchet tree")
 	}
-	if len(self.PqSecret) == 0 {
-		return fmt.Errorf("urmessage: an invite carries no pq_secret, which is the ikm of every storage root this group extracts")
+	if len(self.JoinSeal) != joinSealBytes {
+		return fmt.Errorf("%w: it is %d octets and invite version %#04x carries exactly %d",
+			ErrJoinSealShape, len(self.JoinSeal), InviteVersion, joinSealBytes)
 	}
-	if len(self.GroupHandleKey) == 0 {
-		return fmt.Errorf("urmessage: an invite carries no group_handle_key, and a session at any epoch after zero is refused without it")
+	if len(self.JoinAuth) != joinAuthBytes {
+		return fmt.Errorf("%w: its authenticator is %d octets, want %d", ErrJoinSealShape, len(self.JoinAuth), joinAuthBytes)
+	}
+	// THE ENVELOPE IS FOUR CONSTANTS. The content epoch is zero by construction, so that the epoch
+	// a member joined at is not in the clear; a seal carrying any other envelope is some other
+	// wrap, and is refused here rather than at the open.
+	envelope, err := messagegroup.ParseWrapEnvelope(self.JoinSeal[:messagegroup.WrapEnvelopeBytes])
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrJoinSealShape, err)
+	}
+	if envelope.FormatVersion != messagegroup.WrapFormatVersion || envelope.TargetType != wrapTargetTypeJoiner ||
+		envelope.PayloadType != wrapPayloadTypeJoinSecrets || envelope.ContentEpoch != 0 {
+		return fmt.Errorf("%w: its envelope is version %#02x, target %#02x, payload %#02x, content epoch %d",
+			ErrJoinSealShape, envelope.FormatVersion, envelope.TargetType, envelope.PayloadType, envelope.ContentEpoch)
 	}
 	return nil
 }
 
 // Encode is the invite as octets a caller can move.
 //
-// The encoding is connect/mls/syntax's length prefixes, which is the one length prefix this corpus
-// writes, so a field added to [Invite] later is a version bump here rather than a second framing --
-// followed by the SHA-256 of every octet before it. See [ParseInvite] for what the checksum is and
-// is not.
+// The encoding is this corpus's one length prefix, five fields, followed by the SHA-256 of every
+// octet before it. See [ParseInvite] for what the checksum is and is not.
 func (self *Invite) Encode() ([]byte, error) {
 	if err := self.check(); err != nil {
 		return nil, err
@@ -85,8 +104,8 @@ func (self *Invite) Encode() ([]byte, error) {
 	writer.WriteOpaqueLP(self.GroupId)
 	writer.WriteOpaqueLP(self.Welcome)
 	writer.WriteOpaqueLP(self.RatchetTree)
-	writer.WriteOpaqueLP(self.PqSecret)
-	writer.WriteOpaqueLP(self.GroupHandleKey)
+	writer.WriteOpaqueLP(self.JoinSeal)
+	writer.WriteOpaqueLP(self.JoinAuth)
 	encoded, err := writer.Bytes()
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: encoding an invite: %w", err)
@@ -99,16 +118,12 @@ func (self *Invite) Encode() ([]byte, error) {
 //
 // A DAMAGED INVITE IS REFUSED HERE, AT THE PASTE, AND NOT ONE CALL AFTER THE JOIN. The last 32
 // octets are the SHA-256 of everything before them, and a blob whose checksum does not match is
-// [ErrInviteDamaged] before any field is read. That is the whole of what changed at version 0x0002,
-// and the reason is where a user is told: a truncated copy, a mangled paste or a carrier that
-// rewrote one octet used to PARSE, JOIN, and then fail at the first Receive with a sentence about
-// sender handles that no user can act on.
+// [ErrInviteDamaged] before any field is read.
 //
 // THE CHECKSUM IS NOT AN AUTHENTICATION AND MUST NOT BE READ AS ONE. Anybody who can change an
-// invite can recompute it. What stands between a hostile carrier and a group is what always stood
-// there -- the invite is key material and must travel over a channel that is already authenticated
-// and confidential -- and, one layer down, MLS: a Welcome addressed to a key package this device did
-// not publish is refused at the join whatever the checksum says.
+// invite can recompute it. What stands between a hostile carrier and this device is the join's own
+// checks: the Welcome must be addressed to a key package this device published, it must describe
+// the group the invite names, and the seal must carry a MAC made under that group's own epoch.
 func ParseInvite(encoded []byte) (*Invite, error) {
 	reader := syntax.NewReader(encoded)
 	version, err := reader.ReadUint16()
@@ -116,8 +131,8 @@ func ParseInvite(encoded []byte) (*Invite, error) {
 		return nil, fmt.Errorf("%w: it has no version: %w", ErrInviteDamaged, err)
 	}
 	if version != InviteVersion {
-		return nil, fmt.Errorf("urmessage: an invite at version %#04x, and this build reads only %#04x",
-			version, InviteVersion)
+		return nil, fmt.Errorf("%w: it is at version %#04x, and this build reads only %#04x",
+			ErrInviteVersion, version, InviteVersion)
 	}
 	if len(encoded) < 2+inviteChecksumBytes {
 		return nil, fmt.Errorf("%w: %d octets is shorter than a version and a checksum", ErrInviteDamaged, len(encoded))
@@ -140,8 +155,8 @@ func ParseInvite(encoded []byte) (*Invite, error) {
 		{"group_id", &invite.GroupId},
 		{"welcome", &invite.Welcome},
 		{"ratchet_tree", &invite.RatchetTree},
-		{"pq_secret", &invite.PqSecret},
-		{"group_handle_key", &invite.GroupHandleKey},
+		{"join_seal", &invite.JoinSeal},
+		{"join_auth", &invite.JoinAuth},
 	} {
 		value, err := reader.ReadOpaqueLP()
 		if err != nil {

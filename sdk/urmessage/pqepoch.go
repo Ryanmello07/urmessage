@@ -1132,7 +1132,8 @@ func (self *Group) resolvePqSecretLocked(mlsSecret []byte, opensEpoch uint64,
 //  1. THE SUBJECT IS THE RECEIVER'S OWN HISTORY, SO A LATE JOINER REFUSES LESS, AND ITS FALSE
 //     NEGATIVE IS A THEOREM AND NOT A BUG. [Group.pqSecretHeldAtLocked] answers over
 //     [Group.pqSecretWitness], which is every pq_secret THIS DEVICE has filed. [Device.Join] files
-//     exactly ONE row -- `pqSecrets: {handle.Epoch(): invite.PqSecret}` and nothing else -- so a
+//     exactly ONE row -- `pqSecrets: {handle.Epoch(): pqSecret}`, the secret its join seal
+//     opened to, and nothing else -- so a
 //     member admitted at epoch k has a history STRICTLY SMALLER than a founder's and answers *not
 //     held* for octets a founder answers *held* for. Measured for ledger item 254 at
 //     `connect 74abe029` / `sdk 8b59a96`: after two honest rotations a founder holds 3 live rows
@@ -1380,9 +1381,9 @@ func parseLeafWrapKey(leafKeys []byte) ([]byte, error) {
 //     staged commit itself. That exclusion is the whole of item 243 -- the removed member gets no
 //     wrap, so it holds no pq_secret[n+1], so it derives no storage_root[n+1].
 //   - AN ADD: the added leaf is not in the live tree and gets no wrap. It does not need one: a
-//     joiner receives the epoch's secret in [Invite.PqSecret], out of band through the Welcome,
-//     which MASTER section 7 has always been the founding delivery and which
-//     [Group.AddMemberAndPublish] answers AFTER the rotation has filed the new epoch's value. So
+//     joiner receives the epoch's secret in its invite's join seal ([Invite.JoinSeal]), sealed to
+//     the key its own leaf publishes, which [Group.AddMemberAndPublish] makes inside the publish
+//     over the ROTATED value. So
 //     NO EQUALITY BETWEEN THIS LIST'S LENGTH AND pending.MemberCount HOLDS in either direction:
 //     it is false on every Add, which is the shape two separate passes offered as a one-line
 //     invariant for this function and which fires on [Group.AddMemberAndPublish].

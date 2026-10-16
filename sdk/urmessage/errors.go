@@ -48,6 +48,31 @@ var (
 	// told, and never at the join or at the first Receive after it.
 	ErrInviteDamaged = errors.New("urmessage: this invite is damaged: it is not the octets the founder encoded")
 
+	// An invite at a version this build does not read. Version 0x0002 is among them, deliberately:
+	// it carried the join secrets in the clear, and reading one would be installing two secrets
+	// whoever pasted it chose.
+	ErrInviteVersion = errors.New("urmessage: this invite is at a version this build does not read")
+
+	// An invite whose join seal is not the shape version 0x0003 fixes: its length, its
+	// authenticator's length, or the four constants of its envelope. Refused at the paste, before
+	// a join code is touched.
+	ErrJoinSealShape = errors.New("urmessage: this invite's join seal is not the shape an invite carries")
+
+	// THE FOUR REFUSALS OF THE JOIN SEAL INSIDE THE JOIN. Each is made before the joined state
+	// reaches the store, so the store is as it was and the join code is not spent: the honest
+	// invite, pasted again, still joins.
+	//
+	// Unauthenticated: the seal's MAC is not one a member of the epoch this Welcome opened made
+	// for this leaf, this Welcome and this tree. A seal an outsider made to this device's public
+	// key, a seal lifted from another invite, and an invite altered on the way all answer this.
+	ErrJoinSealUnauthenticated = errors.New("urmessage: this invite's join seal was not made by a member of the group it joins, for this invite")
+	// Unreadable: the seal is authenticated and does not open to this device's leaf key, or opens
+	// to something that is not join_secrets_v1.
+	ErrJoinSealUnreadable = errors.New("urmessage: this invite's join seal does not open to this device")
+	// Wrong epoch: the seal opened, and the secret in it does not reproduce the digest of the keys
+	// the epoch this device joined was opened with. The adder sealed some other epoch's secret.
+	ErrJoinSealWrongEpoch = errors.New("urmessage: this invite's join seal carries a secret that is not the one the epoch it joins runs on")
+
 	// A record came back that a key should have opened and did not.
 	ErrRecordOpen = errors.New("urmessage: a record from a member of this group did not open")
 
@@ -529,10 +554,15 @@ var (
 	// rather than about this one.
 	ErrStateStoreLocked = errors.New("urmessage: this state directory is already held by a single-writer exclusion")
 
-	// A file under a name this store computes that is not a record this build wrote: the wrong
-	// magic, the wrong version, the wrong kind, a checksum that does not match, or a record
-	// whose own key octets are not the key that was asked for.
-	ErrStateStoreFormat = errors.New("urmessage: this is not a state record this build wrote")
+	// A file under a name this store computes that does not read as a record this store writes:
+	// the wrong magic, the wrong version, the wrong kind, a checksum that does not match, or a
+	// record whose own key octets are not the key that was asked for. The clause after it says
+	// which.
+	//
+	// IT SAYS WHAT IS TRUE AND NO MORE (Task 57, F9). It used to say "this is not a state record
+	// this build wrote", which is a claim about who wrote the file that a checksum cannot make: a
+	// record this very build wrote and the disk then damaged answers it too.
+	ErrStateStoreFormat = errors.New("urmessage: this does not read as a record this store writes")
 
 	// No such value. It is a sentinel and not a nil: "this device was never in that group" and
 	// "the disk is broken" are two readings a restore has to branch on.
@@ -731,18 +761,55 @@ var (
 	// [Device.ForgetGroup] was asked to leave a group that is on this device's disk and that no
 	// [Device.Restore] has tried to bring back since this process started. Restore first: a group
 	// that comes back is left like any other, the owner's refusal included, and one that does not
-	// come back is left by calling ForgetGroup again.
-	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back, ForgetGroup leaves it")
+	// come back because it is damaged is left by calling ForgetGroup again. A group the last
+	// Restore could not READ is not answered this: it is answered [ErrGroupRecordNotReadNow] or
+	// [ErrGroupReadUnproven], which say what is true of it (R29, the second review's W2).
+	//
+	// ITS REMEDY IS SCOPED TO DAMAGE (R33's X3): a Restore that cannot READ the group answers one
+	// of the two not-read sentinels instead, and the leave of that group is refused until it reads,
+	// so "if it does not come back, ForgetGroup leaves it" was not true of every group it was said of.
+	ErrGroupNotRestored = errors.New("urmessage: this group is on this device's disk and has not been restored; call Restore, and if it does not come back because it is damaged, ForgetGroup leaves it")
 
 	// A group's record is on this device's disk and DOES NOT READ: its checksum does not hold, it
-	// does not decode, it names another group, or the file under its name cannot be had. It is
-	// ONE GROUP'S damage and never the device's. [DeviceStore.GroupRecord] answers it for that one
-	// group; [DeviceStore.GroupRecords] answers it BESIDE the list of every record that does read,
-	// so [Device.Restore] brings the others back and reports this one; and an invite into any
-	// other group joins. A record that does not read can never be restored, so
-	// [Device.ForgetGroup] leaves its group without a Restore having tried, and without the
-	// owner's question, which is asked of a roster this group no longer has.
+	// does not decode, or it names another group. It is ONE GROUP'S damage and never the
+	// device's. [DeviceStore.GroupRecord] answers it for that one group; [DeviceStore.GroupRecords]
+	// answers it BESIDE the list of every record that does read, so [Device.Restore] brings the
+	// others back and reports this one; and an invite into any other group joins. A record that
+	// does not read can never be restored, so [Device.ForgetGroup] leaves its group without a
+	// Restore having tried, and without the owner's question, which is asked of a roster this
+	// group no longer has.
+	//
+	// A FILE THAT COULD NOT BE READ FOR A PROVEN-PERMANENT REASON IS THIS TOO (R26, R29, R30): a
+	// directory or any other non-file standing at the record's name, or a symlink loop -- a fact
+	// about the data. A record that will never read must stay one a device can leave. A read that
+	// failed for any reason [classifyRead] cannot prove permanent is NOT this, a permission refused
+	// and the medium among them: it is [ErrGroupRecordNotReadNow] or [ErrGroupReadUnproven].
 	ErrGroupRecordDamaged = errors.New("urmessage: a group record on this device's disk does not read, so that group cannot be restored; ForgetGroup leaves it, and it can then be joined again")
+
+	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ JUST NOW -- any file a
+	// restore needs (R26, R29): another process holds it open with no read sharing or locked (a
+	// scanner, a backup tool, the search indexer), a sharing or lock violation and nothing else
+	// ([classifyRead]'s transient class). Nothing is known about the group, so it is NOT
+	// [ErrGroupRecordDamaged], and nothing that damage permits is done to it: [Device.Restore]
+	// brings the other groups back and reports this one beside them, and [Device.ForgetGroup] of
+	// that group is refused before anything is written ("so nothing was left"), so an owner is
+	// still asked the owner's question once the file reads again. Restore again later.
+	ErrGroupRecordNotReadNow = errors.New("urmessage: a file of a group on this device's disk could not be read just now, so that group was not restored this time; nothing of it was changed, and the next Restore tries it again")
+
+	// A group is on this device's disk and A FILE OF IT COULD NOT BE READ FOR A REASON THIS BUILD
+	// CANNOT CLASSIFY (R29, R30, R33): [classifyRead]'s unproven class -- a file gone missing, a
+	// permission refused, the medium, a failure of the store's with no errno, an errno in neither
+	// of its lists (too many open files, out of memory, a device not ready), or a failure that is
+	// not the store's. A missing file, a permission and a medium are facts about the environment,
+	// which can change while the data is intact -- an antivirus quarantine, a sync tool or a
+	// backup tool moves a file away and back -- so fixing the folder's access, or putting back what
+	// was moved out of it, is the way through. The erase without the owner's question needs
+	// PROOF that the group can never be read, and this is not proof, so the group is treated as
+	// [ErrGroupRecordNotReadNow] is: not restored, nothing changed, and [Device.ForgetGroup] of it
+	// refused ("so nothing was left"). It is left once a Restore reads it, or finds it damaged.
+	// Open item MG-15 (messagegroup/OPENITEMS.md) is the residual: a group that stays
+	// this way can never be left by this build.
+	ErrGroupReadUnproven = errors.New("urmessage: a file of a group on this device's disk could not be read, and this build cannot tell whether that will pass, so that group was not restored; nothing of it was changed, and it is not left until a Restore reads it or finds it damaged")
 
 	// [Device.ForgetGroup] LEFT the group -- it is closed, its keys are gone from memory, and this
 	// device no longer holds it -- but the erase of its copy on the disk did not finish. The leave
@@ -801,10 +868,17 @@ var (
 	// is no join code for that to be true of, and pasting the same invite again can never work. A
 	// refusal says what it cost; this one says what is missing, and the remedy.
 	//
-	// WHAT IT CANNOT TELL APART is the engine's to tell and the engine says it cannot: its refusal
-	// is the same one for a Welcome addressed to nobody here and for a store that would not read
-	// the join code it holds (messagegroup.ErrEngineNoKeyPackageForWelcome, whose message carries
-	// the store's last refusal verbatim, as this one does behind it).
+	// WHICH OF THE THREE SENTENCES A FAILED TAKE GETS (Task 57, F4; R26, V3; R33's X1). The
+	// engine's refusal (messagegroup.ErrEngineNoKeyPackageForWelcome) is the same one for a
+	// Welcome addressed to nobody here and for a store that would not hand over the join code it
+	// holds, and it carries the store's last refusal WRAPPED. A take the store REFUSED for any
+	// reason [classifyRead] cannot prove permanent -- another process held the file for a moment,
+	// a permission refused, the medium, a failure it cannot classify -- removed nothing, and gets
+	// [ErrJoinRefused]'s, which is then true: the join code is still there, and the same invite
+	// joins once the store reads it. A take that removed the file and then failed gets
+	// [ErrJoinCodeSpent]'s. Everything else gets this one: a store that holds no such join code
+	// (an absence answers "nothing is there", and erases nothing), or a join code whose octets
+	// are damaged or whose path is of the wrong type. None of those will ever join.
 	ErrNoJoinCodeForInvite = errors.New("urmessage: this device holds no join code this invitation was made for; make a new join code")
 
 	// THE ONE REFUSAL OF [Device.Join] THAT COSTS THE JOIN CODE. Every check a join makes runs
@@ -812,4 +886,32 @@ var (
 	// is what is left: the store would not take the join code back, or the joined state was
 	// written and the group's record then could not be. Make a new join code and be added again.
 	ErrJoinCodeSpent = errors.New("urmessage: this join did not complete and its join code is spent; make a new join code and ask to be added again")
+
+	// THE THREE REFUSALS AN ADDER MAKES OF A JOIN CODE, each before a commit is staged, so the group
+	// is exactly where it was.
+	//
+	// Invalid: the join code does not decode, is not a key package this suite admits, has expired,
+	// or its leaf publishes no key a join seal can be made to.
+	ErrKeyPackageInvalid = errors.New("urmessage: this join code is not a valid key package")
+	// The join code is valid and does not list the join seal capability, so the device that made
+	// it could not open the invite this build would answer with.
+	ErrJoinerCannotOpenSealedInvite = errors.New("urmessage: this join code was made by a build that cannot open a sealed invite; ask for a join code from an updated URmessage")
+	// The join code is valid, and its identity already has a leaf in this group: most often an
+	// invitation that was made and never opened. A group holds one leaf per identity it admits
+	// this way, so the leaf that stands is removed first.
+	ErrJoinerAlreadyHasALeaf = errors.New("urmessage: this identity already has an entry in this group, perhaps from an invitation that was never opened; remove that entry, then add the new join code")
+
+	// [Group.Open] found that the digest of the keys it is about to publish epoch one with is not
+	// the digest [Group.AddMember] sealed into the invite. The joiner would refuse that invite, so
+	// the group is not published under it.
+	ErrInviteDigestDrift = errors.New("urmessage: the keys this group would open with are not the keys its invite was sealed over")
+
+	// The group's context does not REQUIRE the join seal capability of its members, so it was
+	// founded by a build that sent its join secrets in the clear: its handle key has crossed a
+	// paste channel as plain octets, and nothing this build does can take that back. This build
+	// neither joins such a group ([Device.Join] refuses inside the join's window, so the join
+	// code is not spent) nor restores one ([Device.Restore] answers this inside [ErrRestore]).
+	// A group Restore refused this way is left with [Device.ForgetGroup], like any group that
+	// does not come back, and is founded again.
+	ErrGroupPredatesJoinSeal = errors.New("urmessage: this group was founded before invitations were sealed, so this build does not open it; leave it and start the group again")
 )
