@@ -6,31 +6,51 @@
 // holding one credential founds a group at epoch 0 that never opens, and every send is refused.
 // THE MISSING HALF IS A SECOND PARTY, and this is it.
 //
-// THE SEAM IS TWO FILES AND IT IS A HANDOFF, not a protocol:
+// THE SEAM IS TWO FILES AND IT IS A HANDOFF, not a protocol. ON THE FOUNDER ROAD this helper
+// founds the group and the app joins it:
 //
 //	the app                                   this helper
 //	───────                                   ───────────
 //	device.KeyPackage() -> -keypackage   →    reads it, deletes it
 //	                                          CreateGroup, AddMember(kp), Open
 //	reads it, deletes it                 ←    invite.Encode() -> -invite
-//	device.Join(invite)                       Send / SendReply / React
+//	device.Join(invite)                       Send / SendReply / React / Delete
 //
-// EACH FILE IS CONSUMED BY ITS READER AND DELETED BY ITS READER, and that is not tidiness. A key
-// package is SINGLE USE — the private halves are taken destructively at the join (device.go:510) —
-// so a stale key package file read by a second run of this helper builds an invite that the app
-// CANNOT join, and the failure arrives at the join rather than at the read. Deleting on consumption
-// is what makes "the file is there" mean "the file is fresh".
+// ON THE JOIN ROAD (-join) the app founds the group and this helper joins it. The two halves are
+// the CODES the app's dialogs show and take, base64 text a person carries between two machines:
+//
+//	the app                                   this helper, -join
+//	───────                                   ──────────────────
+//	                                     ←    device.KeyPackage() -> JOIN CODE, printed or -joincodeout
+//	add dialog: AddMember(code), Open
+//	invite.Encode() -> INVITE CODE       →    -invitecode @FILE: waits for it, reads it, deletes it
+//	                                          ParseInvite, device.Join(invite)
+//	Send / Receive                            Send / SendReply / React / Delete
+//
+// ON THE FOUNDER ROAD EACH FILE IS CONSUMED BY ITS READER AND DELETED BY ITS READER, and that is
+// not tidiness. A key package is SINGLE USE — the private halves are taken destructively at the
+// join (device.go:510) — so a stale key package file read by a second run of this helper builds an
+// invite that the app CANNOT join, and the failure arrives at the join rather than at the read.
+// Deleting on consumption is what makes "the file is there" mean "the file is fresh". ON THE JOIN
+// ROAD the invite code file is this helper's to read, and it is deleted the moment it is read. The
+// join code file is a person's to read and nothing here deletes it: every run with no group writes
+// a fresh one over it, and a stale one that is added anyway makes an invitation this helper refuses
+// at the join (ErrNoJoinCodeForInvite) rather than one it misreads.
 //
 // WHAT IS SECRET HERE. The credential is an operator-minted by_client_jwt and is read from a path;
 // it is never printed. The INVITE is treated as secret — it carries the Welcome, and it names the
 // group and who is in it — so it is written 0600 to a path outside any repository and deleted as
-// soon as it is consumed. Neither is ever formatted into a log line.
+// soon as it is consumed. Neither is ever formatted into a log line. The two CODES are printed for a
+// person to paste only when no file is named for them: -joincodeout and -invitecodeout write them
+// 0600 instead, so that a run whose stdout is a log keeps no code in it. A JOIN CODE is not a secret
+// — it is a public offer to be added — and it is kept out of logs all the same, as the app keeps it.
 //
 // NEVER RUN THIS UNDER THE APP'S OWN ACCOUNT. Two clients at one client_id, or two state
 // directories descended from one, is two devices at ONE MLS leaf: one sender_handle, one stream
 // counter, and therefore a reused (epoch, sender_handle, stream_index) — a reused nonce under a
 // reused record key, which the spec calls a total break of both AEADs. The app is user1; this is
-// user2; each has its own -dir.
+// user2; each has its own -dir. Two of these talking to each other, a founder and a -join, are two
+// accounts and two -dirs in the same way: user2 and user3.
 package main
 
 import (
@@ -89,9 +109,13 @@ func main() {
 	invitePath := flag.String("invite", "", "file this helper writes the invite to; KEY MATERIAL, 0600, outside any repo")
 	joinCode := flag.String("joincode", "", "a base64 JOIN CODE pasted out of the app (or @FILE holding one); replaces -keypackage, and is what works between two machines")
 	printInvite := flag.Bool("printinvite", false, "print the invite as a base64 INVITE CODE on stdout, for pasting back into the app")
-	outbox := flag.String("outbox", "", "a file this peer WATCHES: every line appended to it is sent into the group, so somebody on this side can hold a conversation without restarting and paying the reconnect window again")
+	inviteCodeOut := flag.String("invitecodeout", "", "write the INVITE CODE -printinvite would print to this file instead, 0600, so that no log holds it (implies -printinvite)")
+	join := flag.Bool("join", false, "JOIN a group instead of founding one: make this peer's own JOIN CODE (printed, or written to -joincodeout), wait for the INVITE CODE the founder's app makes from it (-invitecode), join, and talk; a restart over the same -dir restores the group and talks. Takes none of -keypackage, -joincode, -invite, -printinvite, -invitecodeout")
+	joinCodeOut := flag.String("joincodeout", "", "with -join: write the JOIN CODE to this file, 0600, instead of printing it, so that no log holds it; the file holds exactly the text the app's join-code box takes")
+	inviteCode := flag.String("invitecode", "", "with -join: the INVITE CODE the founder's app made from this peer's join code, as base64, or @FILE to wait up to -wait for it to be pasted into FILE; whitespace and line breaks are dropped, and FILE is deleted once read")
+	outbox := flag.String("outbox", "", "a file this peer WATCHES: every line appended to it is sent into the group, so somebody on this side can hold a conversation without restarting and paying the reconnect window again; a line that is exactly /delete instead deletes the line this run last sent from it")
 	quiet := flag.Bool("quiet", false, "skip the three scripted lines, the reply and the two reactions; restore, serve, and send only what -outbox gets")
-	waitFor := flag.Duration("wait", 5*time.Minute, "how long to wait for the key package file to appear")
+	waitFor := flag.Duration("wait", 5*time.Minute, "how long to wait for the key package file, or with -join for the -invitecode file, to appear")
 	serve := flag.Duration("serve", 4*time.Minute, "how long to keep fetching after the sends, so the app's own lines are seen")
 	poll := flag.Duration("poll", 3*time.Second, "how often to fetch while serving")
 	timeout := flag.Duration("timeout", 60*time.Second, "per-request transport timeout")
@@ -107,20 +131,22 @@ func main() {
 	//         -joincode  TEXT    the person road: they copied it out of the app and sent it
 	//   out:  -invite FILE       the developer road: the app polls for it on the same disk
 	//         -printinvite       the person road: paste the printed code back into their app
+	//                            (-invitecodeout writes that code to a file instead)
 	//
 	// The CODE roads are the ones that work when the two people are not at the same machine,
-	// which is every test with a real second person in it.
+	// which is every test with a real second person in it. -join turns both round: this peer's
+	// own join code goes out and the founder's invitation comes in, and it takes none of the
+	// founder's four (see roads).
 	if *jwtPath == "" || *dir == "" {
 		fail("-jwt and -dir are required.\n" +
 			"  -jwt is this PEER's credential (user2). Handing it the app's (user1) is the one\n" +
 			"  mistake this helper cannot detect and the one that breaks both AEADs.")
 	}
-	if *keyPackagePath == "" && *joinCode == "" {
-		fail("one of -keypackage or -joincode is required: this helper cannot mint the app's key\n" +
-			"  package, only consume it.")
-	}
-	if *invitePath == "" && !*printInvite {
-		fail("one of -invite or -printinvite is required: an invite nobody receives joins nobody.")
+	if err := (roads{
+		join: *join, keyPackage: *keyPackagePath, joinCode: *joinCode, invite: *invitePath,
+		printInvite: *printInvite, inviteCodeOut: *inviteCodeOut, inviteCode: *inviteCode, joinCodeOut: *joinCodeOut,
+	}).check(); err != nil {
+		fail("%v", err)
 	}
 
 	server, err := connect.ParseId(*serverId)
@@ -248,8 +274,18 @@ func main() {
 		report(group)
 		return
 	}
-	fmt.Printf("  nothing to restore; this is a first run and the handshake below is how the app\n" +
-		"  gets into a group at all\n")
+	fmt.Printf("  nothing to restore; this is a first run and the handshake below is how the two\n" +
+		"  sides get into one group at all\n")
+
+	// ── 3j. THE JOIN ROAD, instead of 3 to 5 below ─────────────────────────────────────────────
+	// The handshake happens once in the life of a -dir, as the founder's does: a restart over the
+	// same -dir restored the joined group above and never comes here.
+	if *join {
+		group := joinGroup(ctx, p.device, *joinCodeOut, *inviteCode, *waitFor, *poll)
+		converse(ctx, group, *serve, *poll, *outbox, *quiet)
+		report(group)
+		return
+	}
 
 	var keyPackage []byte
 	if *joinCode != "" {
@@ -262,16 +298,15 @@ func main() {
 			}
 			text = string(raw)
 		}
-		// WHITESPACE OUT FIRST. A code that has been through a mail client or a chat window comes
-		// back wrapped, and refusing it would blame the person for their mail client.
-		text = strings.Join(strings.Fields(text), "")
-		decoded, err := base64.StdEncoding.DecodeString(text)
+		// WHITESPACE OUT FIRST, in decodeCode. A code that has been through a mail client or a chat
+		// window comes back wrapped, and refusing it would blame the person for their mail client.
+		decoded, err := decodeCode(text)
 		if err != nil {
-			fail("that join code is not base64: %v\n"+
+			fail("that join code could not be read: %v\n"+
 				"  Copy the WHOLE code out of the app - it is one long line.", err)
 		}
 		keyPackage = decoded
-		fmt.Printf("  %d characters decoded to %d octets\n", len(text), len(keyPackage))
+		fmt.Printf("  decoded to %d octets\n", len(keyPackage))
 		fmt.Printf("  A JOIN CODE IS NOT A SECRET: it is a public offer to be added, and whoever\n" +
 			"  holds it can only add that device to a group. The INVITE below is the secret.\n")
 	} else {
@@ -331,21 +366,37 @@ func main() {
 	// ── 4. hand the invite over ────────────────────────────────────────────────────────────
 	if *invitePath != "" {
 		say("writing the invite to " + *invitePath)
-		fmt.Printf("  THIS FILE IS KEY MATERIAL IN FULL: whoever reads it is in this group. It is written\n" +
-			"  0600 and the app deletes it the moment it has joined.\n")
+		// SINCE INVITE VERSION 3 ONLY THE JOINER'S DEVICE CAN OPEN IT: the join secrets are sealed
+		// to the key its own leaf publishes (urmessage/invite.go). "Whoever reads it is in this
+		// group" stopped being true then, as the app's own label did (message-windows, Task 58).
+		fmt.Printf("  ONLY THE DEVICE WHOSE KEY PACKAGE WAS ADDED CAN OPEN IT, and it still names the group\n" +
+			"  and who is in it. It is written 0600 and the app deletes it the moment it has joined.\n")
 		if err := writeSecret(*invitePath, encoded); err != nil {
 			fail("write invite: %v", err)
 		}
 		fmt.Printf("  %d octets written\n", len(encoded))
 	}
-	if *printInvite {
-		say("the INVITE CODE - paste this back into the app that sent the join code")
-		fmt.Printf("  WHOEVER READS THE NEXT LINE IS IN THIS GROUP. Send it the way you would send a\n" +
-			"  password, give it to ONE person, and do not post it where a copy is kept. It can\n" +
-			"  be used once.\n\n")
+	if *printInvite || *inviteCodeOut != "" {
 		code := base64.StdEncoding.EncodeToString(encoded)
-		fmt.Println(code)
-		fmt.Printf("\n  %d octets as %d characters\n", len(encoded), len(code))
+		if *inviteCodeOut != "" {
+			// THE CODE TO A FILE AND NOT TO STDOUT, so that a run whose stdout is a log keeps no
+			// invitation in it: the text a person carries to the joiner is in the file and only there.
+			say("writing the INVITE CODE to " + *inviteCodeOut)
+			if err := writeSecret(*inviteCodeOut, []byte(code)); err != nil {
+				fail("write invite code: %v", err)
+			}
+			fmt.Printf("  %d octets as %d characters, 0600: exactly the text the joiner pastes where it asks for\n"+
+				"  the invitation. It is NOT printed here, so that no log holds it. Only the device whose join\n"+
+				"  code was added can open it, it works once, and it still names the group and who is in it:\n"+
+				"  hand it over privately, and delete the file once it has been carried.\n", len(encoded), len(code))
+		} else {
+			say("the INVITE CODE - paste this back into the app that sent the join code")
+			fmt.Printf("  ONLY THE DEVICE WHOSE JOIN CODE WAS ADDED CAN OPEN IT, and it can be used once. It still\n" +
+				"  names the group and who is in it, so give it to ONE person and do not post it where a\n" +
+				"  copy is kept.\n\n")
+			fmt.Println(code)
+			fmt.Printf("\n  %d octets as %d characters\n", len(encoded), len(code))
+		}
 	}
 
 	// ── 5. wait for the app to actually be in the group ────────────────────────────────────
@@ -369,7 +420,7 @@ func main() {
 				"  every member of epoch 1, whenever they arrive. Delete it by hand when done.\n")
 		}
 	} else {
-		say("the invite was printed, not written, so nothing here can see it being used")
+		say("the invite was handed over as a code, not as a file the app reads, so nothing here can see it being used")
 		fmt.Printf("  A MEMBER JOINING IS INVISIBLE FROM THIS SIDE: MLS's Welcome is opened by the\n" +
 			"  joiner and the server is told nothing. With a file there is at least a deletion to\n" +
 			"  watch; with a pasted code there is not. What WILL show that they joined is a line\n" +
@@ -446,9 +497,17 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 	ingested := group.Stats().Ingested
 	deadline := time.Now().Add(serve)
 	seen := map[string]bool{}
+	// WHAT EACH LINE OF THE LOG LAST SAID ABOUT BEING DELETED, so that a delete is SHOWN. A
+	// tombstone adds no line of its own: it flips Deleted on a line already in the log, which its
+	// arrival print has already said once and never says again. Seeded from the log as it stands,
+	// so a line deleted before this run started is not reported as a delete made during it.
+	deletedState := map[string]bool{}
+	deletionFlips(deletedState, group.Messages())
 	// How far into the outbox file this run has already sent. Zero at start, so a file left over
 	// from an earlier run IS re-sent -- which is why the caller gives each run a fresh one.
 	var outboxAt int64
+	// The line this run last sent from the outbox: what an outbox line of exactly /delete takes back.
+	var lastSent *urmessage.Message
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -468,6 +527,27 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 					if strings.TrimSpace(line) == "" {
 						continue
 					}
+					// /delete TAKES BACK THE LAST LINE THIS RUN SENT, so that a run with no app in it
+					// can make the delete the far side must show. A tombstone, like a send, is a round
+					// trip, and a refused one is said and the conversation goes on.
+					if isDeleteDirective(line) {
+						if lastSent == nil {
+							fmt.Printf("  -> REFUSED: %s takes back the line this run last sent from the outbox, and there is none\n", deleteDirective)
+							continue
+						}
+						deleteStarted := time.Now()
+						tombstone, err := group.Delete(ctx, lastSent.MessageId)
+						deleteMs := time.Since(deleteStarted).Milliseconds()
+						if err != nil {
+							fmt.Printf("  -> REFUSED: %v\n", err)
+							continue
+						}
+						fmt.Printf("  [%s] -> deleted message %s (record %d) with tombstone record %d in %dms\n",
+							time.Now().Format("15:04:05.000"), short(lastSent.MessageId), lastSent.RecordId,
+							tombstone.RecordId, deleteMs)
+						lastSent = nil
+						continue
+					}
 					sendStarted := time.Now()
 					sent, err := group.Send(ctx, line)
 					submitMs := time.Since(sendStarted).Milliseconds()
@@ -482,6 +562,7 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 					// protocol with a coarse clock, not a slow network.
 					fmt.Printf("  [%s] -> sent record %d in %dms: %q\n",
 						time.Now().Format("15:04:05.000"), sent.RecordId, submitMs, line)
+					lastSent = sent
 				}
 			}
 		}
@@ -501,10 +582,7 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 				continue
 			}
 			seen[key] = true
-			fmt.Printf("  [%s] <- record %d from %s kind=%s deleted=%v reply_to=%s: %q\n",
-				time.Now().Format("15:04:05.000"),
-				one.RecordId, short(one.SenderHandle), one.Kind, one.Deleted,
-				short(one.ReplyToId), clip(one.Text))
+			printArrived(one)
 		}
 		// Reactions land on a message that is ALREADY in the log, so they are never in what
 		// Receive answers. They are read off the log.
@@ -524,7 +602,270 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 			fmt.Printf("  <- REACTIONS now standing on %s: %s\n",
 				short(one.MessageId), strings.Join(emojis, " "))
 		}
+		// DELETES, read off the log for the reason reactions are: a tombstone changes a line that
+		// is already there, and Receive answers no line for it.
+		for _, one := range deletionFlips(deletedState, group.Messages()) {
+			fmt.Println(deletionLine(one))
+		}
 	}
+}
+
+// deleteDirective is the outbox line that deletes instead of sending.
+const deleteDirective = "/delete"
+
+// isDeleteDirective says whether an outbox line is exactly /delete, whitespace aside. Anything
+// else, "/delete" inside a sentence included, is a line to send.
+func isDeleteDirective(line string) bool {
+	return strings.TrimSpace(line) == deleteDirective
+}
+
+// deletionFlips answers the lines of the log whose Deleted differs from what known last recorded
+// for them, and records the new state. A line known has never recorded is recorded and not
+// answered: the print of its arrival already said whether it was deleted.
+func deletionFlips(known map[string]bool, messages []*urmessage.Message) []*urmessage.Message {
+	flipped := []*urmessage.Message{}
+	for _, one := range messages {
+		key := hex.EncodeToString(one.MessageId)
+		was, recorded := known[key]
+		known[key] = one.Deleted
+		if recorded && was != one.Deleted {
+			flipped = append(flipped, one)
+		}
+	}
+	return flipped
+}
+
+// deletionLine is one delete as this peer shows it: the line's short id, who sent it, and its
+// record. mine says whether the line was this peer's own, which is the only kind a tombstone may
+// take back (the library's same-sender rule), so on the far side it is false.
+func deletionLine(one *urmessage.Message) string {
+	return fmt.Sprintf("  [%s] <- DELETED: message %s from %s, record %d, is now deleted=%v (mine=%v)",
+		time.Now().Format("15:04:05.000"), short(one.MessageId), short(one.SenderHandle), one.RecordId,
+		one.Deleted, one.Mine)
+}
+
+// ── the join road ────────────────────────────────────────────────────────────────────────────
+
+// roads is one run's hand-off flags, and check is the one rule over them: a run takes ONE road in
+// and ONE road out. The founder road takes the other side's key package in (-keypackage or
+// -joincode) and hands an invitation out (-invite, -printinvite, or -invitecodeout, which is
+// -printinvite's code written to a file). The join road (-join) hands its own join code out
+// (printed, or -joincodeout) and takes an invitation in (-invitecode), and it takes none of the
+// founder road's flags: a run that carries both cannot say which side of the handshake it is on.
+type roads struct {
+	join          bool
+	keyPackage    string
+	joinCode      string
+	invite        string
+	printInvite   bool
+	inviteCodeOut string
+	inviteCode    string
+	joinCodeOut   string
+}
+
+func (self roads) check() error {
+	if self.join {
+		if self.keyPackage != "" || self.joinCode != "" {
+			return errors.New("-join takes no -keypackage or -joincode: those carry the OTHER side's key package to a\n" +
+				"  founder, and a peer that joins makes its own join code and hands it out.")
+		}
+		if self.invite != "" || self.printInvite || self.inviteCodeOut != "" {
+			return errors.New("-join makes no invitation, it waits for one: -invite, -printinvite and -invitecodeout\n" +
+				"  are the founder road's.")
+		}
+		if self.inviteCode == "" {
+			return errors.New("-join needs -invitecode: the INVITE CODE the founder's app makes from this peer's join\n" +
+				"  code, or @FILE it will be pasted into.")
+		}
+		return nil
+	}
+	if self.inviteCode != "" || self.joinCodeOut != "" {
+		return errors.New("-invitecode and -joincodeout are the join road's: add -join to join a group, or leave\n" +
+			"  them out to found one.")
+	}
+	if self.keyPackage == "" && self.joinCode == "" {
+		return errors.New("one of -keypackage or -joincode is required to found a group (or -join, to join one):\n" +
+			"  this helper cannot mint the app's key package, only consume it.")
+	}
+	if self.invite == "" && !self.printInvite && self.inviteCodeOut == "" {
+		return errors.New("one of -invite or -printinvite (or -invitecodeout) is required: an invite nobody\n" +
+			"  receives joins nobody.")
+	}
+	return nil
+}
+
+// joinGroup is the JOIN road's handshake, which happens once in the life of a -dir: this peer's own
+// join code out, the founder's invitation in, and the join. It answers the joined group, read once
+// and with its roster printed, or ends the run: a refusal with the library's own sentence and the
+// one line that says what to do, anything else with fail.
+func joinGroup(ctx context.Context, device *urmessage.Device, joinCodeOut string, inviteCode string,
+	within time.Duration, poll time.Duration) *urmessage.Group {
+	// THIS DEVICE'S OWN KEY PACKAGE, made here. The device keeps its private halves until a join
+	// takes them, so an invitation made from this code still joins after a restart over this -dir,
+	// which makes a fresh code of its own.
+	keyPackage, err := device.KeyPackage()
+	if err != nil {
+		fail("KeyPackage: %v", err)
+	}
+	code, err := handOverJoinCode(keyPackage, joinCodeOut)
+	if err != nil {
+		fail("write the join code to %s: %v", joinCodeOut, err)
+	}
+	if joinCodeOut != "" {
+		say("this peer's JOIN CODE is in " + joinCodeOut)
+		fmt.Printf("  %d octets as %d characters, 0600: exactly the text the founder's app takes where it\n"+
+			"  asks for a join code. It is NOT printed here, so that no log holds it.\n", len(keyPackage), len(code))
+	} else {
+		say("this peer's JOIN CODE - paste it into the founder's app, where it asks for a join code")
+		fmt.Println()
+		fmt.Println(code)
+		fmt.Printf("\n  %d octets as %d characters\n", len(keyPackage), len(code))
+	}
+	fmt.Printf("  A JOIN CODE IS NOT A SECRET: it is a public offer to be added, and it can be used once.\n" +
+		"  What comes back for it, the INVITE, is the one to keep private.\n")
+
+	if path, isFile := strings.CutPrefix(inviteCode, "@"); isFile {
+		say("waiting for the founder's INVITE CODE at " + path)
+		fmt.Printf("  Paste the code the founder's app shows into that file. This run reads it, deletes it,\n" +
+			"  and joins. Whitespace and line breaks are dropped, as the app drops them.\n")
+	} else {
+		say("reading the INVITE CODE given on the command line")
+	}
+	encoded, err := readInviteCode(ctx, inviteCode, within, poll)
+	if errors.Is(err, errNotACode) {
+		refuse(err, adviceNotAnInvitation)
+	}
+	if err != nil {
+		fail("no invitation: %v\n"+
+			"  Run this again over the same -dir and -invitecode. It makes a new join code, and an\n"+
+			"  invitation made from this run's code still joins then: the -dir keeps every join code\n"+
+			"  it made until a join takes one.", err)
+	}
+	fmt.Printf("  decoded to %d octets\n", len(encoded))
+
+	invite, err := urmessage.ParseInvite(encoded)
+	if err != nil {
+		refuse(err, parseAdvice(err, encoded, keyPackage))
+	}
+	say("joining the group the invitation names")
+	group, err := device.Join(ctx, invite)
+	if err != nil {
+		refuse(err, joinAdvice(err))
+	}
+	fmt.Printf("  joined group %s at epoch %d, open=%v\n", hex.EncodeToString(group.Id()), group.Epoch(), group.IsOpen())
+
+	// THE FIRST RECEIVE, BEFORE ANYTHING IS SENT. A device admitted above epoch one may stand on a
+	// leaf a removed member stood on, and its first send is refused until a walk has held its own
+	// stream floor (ErrStreamFloorUnheld); and whatever the founder has already said in the
+	// joined epoch is read here, printed as converse prints it.
+	got, err := group.Receive(ctx)
+	if err != nil {
+		fmt.Printf("  the joined group's first receive reported: %v (and still answered %d record(s))\n", err, len(got))
+	}
+	for _, one := range got {
+		printArrived(one)
+	}
+	printRoster(group, "after joining")
+	return group
+}
+
+// handOverJoinCode is this peer's JOIN CODE as the app writes one: RFC 4648 base64 with padding and
+// no line breaks, the text the app's own join-code box shows and its add dialog reads back
+// (message-windows, LiveMesh.cpp's EncodeBase64 and DecodeBase64). With a file named, it is written
+// there, 0600 and with nothing around it; with none, the caller prints it.
+func handOverJoinCode(keyPackage []byte, out string) (string, error) {
+	code := base64.StdEncoding.EncodeToString(keyPackage)
+	if out != "" {
+		if err := writeSecret(out, []byte(code)); err != nil {
+			return "", err
+		}
+	}
+	return code, nil
+}
+
+// errNotACode is decodeCode's refusal: there is no text, or it is not base64.
+var errNotACode = errors.New("that is not a code as the app writes one")
+
+// decodeCode reads a JOIN CODE or an INVITE CODE the way the app's own reader does: whitespace and
+// line breaks skipped wherever they are, and the padding optional. A code that has been through a
+// mail client or a chat window comes back wrapped, and refusing it would blame the person for
+// their mail client; any other stray character is refused, because a code that decodes to the
+// wrong octets fails later, at the parse, as damage.
+func decodeCode(text string) ([]byte, error) {
+	text = strings.TrimRight(strings.Join(strings.Fields(text), ""), "=")
+	if text == "" {
+		return nil, fmt.Errorf("%w: there is no text", errNotACode)
+	}
+	octets, err := base64.RawStdEncoding.DecodeString(text)
+	if err != nil {
+		return nil, fmt.Errorf("%w: it is not base64: %w", errNotACode, err)
+	}
+	return octets, nil
+}
+
+// readInviteCode answers the octets of -invitecode: the code itself, or with @FILE the code a person
+// pastes into FILE, waited for up to within as -keypackage's file is, and DELETED the moment it is
+// read -- before it is parsed, because a refused invitation names its group and its members no less
+// than one that joins, and a file left behind is that for whoever reads this disk later.
+func readInviteCode(ctx context.Context, arg string, within time.Duration, poll time.Duration) ([]byte, error) {
+	text := arg
+	if path, isFile := strings.CutPrefix(arg, "@"); isFile {
+		raw, err := awaitFile(ctx, path, within, poll)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Remove(path); err != nil {
+			fmt.Printf("  WARNING: the invite code file could not be removed (%v). Remove it by hand: it\n"+
+				"  names the group and who is in it.\n", err)
+		} else {
+			fmt.Printf("  read %d characters, and the file is deleted\n", len(raw))
+		}
+		text = string(raw)
+	}
+	return decodeCode(text)
+}
+
+// THE ONE LINE A REFUSED JOIN IS TOLD AFTER THE LIBRARY'S OWN SENTENCE, by the library's class of
+// the refusal, each a different instruction.
+const (
+	adviceAnotherJoinCode = "this invitation was made from another join code, not the one this run made. Give the founder THIS run's join code, and paste the invitation they make from it."
+	adviceOlderBuild      = "an invitation at another version was made by an older URmessage: ask the founder to update theirs, add this peer's join code again and send the new invitation. (A code that is not an invitation at all can land here too, by its first two octets.)"
+	adviceOwnJoinCode     = "that is this peer's OWN join code, not an invitation. Give it to the founder, and paste the invitation their app makes from it."
+	adviceNotAnInvitation = "this is not an invitation, or not all of one. Copy the WHOLE invitation the founder's app shows (one long line) and paste it again."
+	adviceOtherRefusal    = "the line above is the library's own reason, and says what the refusal cost. To start again, run this over the same -dir: it makes a new join code for the founder to add."
+)
+
+// parseAdvice is the line for a refusal of urmessage.ParseInvite. Whatever it refuses that is not a
+// version is not an invitation, or not all of one, sentinel or none. A version it does not read is
+// an older build's invitation -- or this peer's own join code pasted where the invitation goes,
+// which is refused by version too, because a key package begins with MLS's own version, 0x0001;
+// that one is told apart by its octets, which this run made.
+func parseAdvice(err error, code []byte, ownJoinCode []byte) string {
+	switch {
+	case 0 < len(ownJoinCode) && bytes.Equal(code, ownJoinCode):
+		return adviceOwnJoinCode
+	case errors.Is(err, urmessage.ErrInviteVersion):
+		return adviceOlderBuild
+	}
+	return adviceNotAnInvitation
+}
+
+// joinAdvice is the line for a refusal of Device.Join.
+func joinAdvice(err error) string {
+	switch {
+	case errors.Is(err, urmessage.ErrNoJoinCodeForInvite):
+		return adviceAnotherJoinCode
+	case errors.Is(err, urmessage.ErrInviteDamaged), errors.Is(err, urmessage.ErrJoinSealShape):
+		return adviceNotAnInvitation
+	}
+	return adviceOtherRefusal
+}
+
+// refuse ends a join this peer cannot make: the library's own sentence verbatim, the one line that
+// says what to do, and a non-zero exit.
+func refuse(err error, todo string) {
+	fmt.Fprintf(os.Stderr, "\nREFUSED: %v\n  WHAT TO DO: %s\n", err, todo)
+	os.Exit(1)
 }
 
 // ── the party ────────────────────────────────────────────────────────────────────────────────
@@ -706,6 +1047,14 @@ func writeSecret(path string, content []byte) error {
 
 func say(s string) { fmt.Printf("\n=== %s ===\n", s) }
 
+// printArrived is one line of what a fetch handed over.
+func printArrived(one *urmessage.Message) {
+	fmt.Printf("  [%s] <- record %d from %s kind=%s deleted=%v reply_to=%s: %q\n",
+		time.Now().Format("15:04:05.000"),
+		one.RecordId, short(one.SenderHandle), one.Kind, one.Deleted,
+		short(one.ReplyToId), clip(one.Text))
+}
+
 // printRoster is this peer's Members() -- every leaf, its role, its identity's first octets and
 // whether it is this device -- with the epoch it was read at, and this peer's own role beside it.
 func printRoster(group *urmessage.Group, when string) {
@@ -757,7 +1106,25 @@ func report(group *urmessage.Group) {
 	fmt.Printf("  fetched=%d opened=%d ceremony=%d own=%d otherClasses=%d FAILED=%d submitted=%d rebound=%d pages=%d unattested=%d\n",
 		stats.Fetched, stats.Opened, stats.SkippedCeremony, stats.SkippedOwn,
 		stats.SkippedClass, stats.FailedOpen, stats.Submitted, stats.Rebound, stats.Pages, stats.Unattested)
-	fmt.Printf("  the group's whole log holds %d message(s)\n", len(group.Messages()))
+	// THE WHOLE LOG, A ROW A LINE, and every row says whether its line is deleted: a delete that
+	// came in while nobody was watching the serve loop is still on the record at the end.
+	messages := group.Messages()
+	fmt.Printf("  the group's whole log holds %d message(s):\n", len(messages))
+	for _, row := range logRows(messages) {
+		fmt.Printf("    %s\n", row)
+	}
+}
+
+// logRows is the whole log as report prints it, one row per line: its record, its short id, who
+// sent it, its kind, whether it is deleted, and whether it is this peer's own. Not its text: each
+// line's text was printed when it arrived.
+func logRows(messages []*urmessage.Message) []string {
+	rows := []string{}
+	for _, one := range messages {
+		rows = append(rows, fmt.Sprintf("record %d message %s from %s kind=%s deleted=%v mine=%v",
+			one.RecordId, short(one.MessageId), short(one.SenderHandle), one.Kind, one.Deleted, one.Mine))
+	}
+	return rows
 }
 
 func fail(format string, args ...any) {

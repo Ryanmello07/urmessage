@@ -199,6 +199,7 @@ var eraseGateAllowList = map[string]eraseGateEntry{
 	"sdk/message_stream_store.go|StreamStore.repairRow|Truncate(truncateTo)#1":                                                                              {eraseNotGroup, "the stream store's torn-tail repair of one fixed-width row: a reserver's file, not a group's."},
 	"sdk/livepeer/main.go|main|os.Remove(*keyPackagePath)#1":                                                                                                {eraseNotGroup, "the live-peer probe binary's own key-package hand-off file, consumed: not a store's file."},
 	"sdk/livepeer/main.go|writeSecret|os.Remove(temp)#1":                                                                                                    {eraseNotGroup, "the live-peer probe binary's own partial write, after a failed rename: not a store's file."},
+	"sdk/livepeer/main.go|readInviteCode|os.Remove(path)#1":                                                                                                 {eraseNotGroup, "the live-peer probe binary's own invite code hand-off file, deleted the moment it is read: not a store's file."},
 }
 
 // eraseGateSources is every production .go file of this repository, whatever GOOS it is
