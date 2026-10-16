@@ -60,6 +60,7 @@ package message
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1375,7 +1376,8 @@ func authAssertVerifiersCovered(t testing.TB, covered ...string) {
 // The lengths are walked rather than listed, out to twice the width. "Not thirty two octets" is
 // the class; five examples of it are five examples.
 func TestNoTagVerifiesUnderAKeyThatIsNotThirtyTwoOctets(t *testing.T) {
-	authAssertVerifiersCovered(t, "VerifyRequestAuth", "VerifyWriteAuth")
+	authAssertVerifiersCovered(t, "VerifyRequestAuth", "VerifyWriteAuth", "VerifyRendezvousRegister",
+		"VerifyRendezvousOpen", "VerifyRendezvousDeposit", "VerifyRendezvousCollect", "VerifyRendezvousRetire")
 	root := writeAuthKatStorageRoot()
 	writeKey := WriteKey(root)
 	readKey := ReadKey(root)
@@ -1438,6 +1440,37 @@ func TestNoTagVerifiesUnderAKeyThatIsNotThirtyTwoOctets(t *testing.T) {
 			}
 		}
 	}
+
+	// THE RENDEZVOUS'S FIVE (spec A section 5.14; identity phase 1's Task 7b, LRI R70), whose keys
+	// are Ed25519 public keys, thirty two octets for the same reason in another shape:
+	// ed25519.Verify panics on a key of any other width, so a verifier that let one through would
+	// be a request that stops the server, and one that answered on one would be answering about a
+	// key that is not a key. The signatures chosen are the same three shapes and the real one,
+	// and beside the walked widths are the real key with an octet more and an octet less, which a
+	// verifier that cut or padded a key to its width would accept.
+	box := rendezvousTheKnownBox(t)
+	for _, arm := range rendezvousArms() {
+		key := arm.key(box)
+		pub := key.Public().(ed25519.PublicKey)
+		real := ed25519.Sign(key, arm.build(box, box.nonce, box.id))
+		if !arm.verify(box, pub, box.nonce, box.id, real) {
+			t.Fatalf("the %s verifier refuses its own signature under its own key, so every refusal below observes nothing", arm.name)
+		}
+		widths := [][]byte{nil, append(append([]byte(nil), pub...), 0x00), pub[:ed25519.PublicKeySize-1]}
+		for length := range 2*ed25519.PublicKeySize + 1 {
+			if length != ed25519.PublicKeySize {
+				widths = append(widths, aadRamp(0x01, length))
+			}
+		}
+		for _, wrong := range widths {
+			for _, chosen := range [][]byte{make([]byte, ed25519.SignatureSize), bytes.Repeat([]byte{0xFF}, ed25519.SignatureSize),
+				aadRamp(0x00, ed25519.SignatureSize), real} {
+				if arm.verify(box, wrong, box.nonce, box.id, chosen) {
+					t.Errorf("the %s verifier accepts a signature under a %d octet key", arm.name, len(wrong))
+				}
+			}
+		}
+	}
 }
 
 // The mac of the empty preimage under each of the two keys the pinned storage root derives.
@@ -1479,7 +1512,8 @@ const (
 // luck. What observes it is the empty preimage's own tag, which is why that one is built here
 // out of crypto/hmac and pinned above.
 func TestNoTagVerifiesOnAnInputThatHasNoPreimage(t *testing.T) {
-	authAssertVerifiersCovered(t, "VerifyRequestAuth", "VerifyWriteAuth")
+	authAssertVerifiersCovered(t, "VerifyRequestAuth", "VerifyWriteAuth", "VerifyRendezvousRegister",
+		"VerifyRendezvousOpen", "VerifyRendezvousDeposit", "VerifyRendezvousCollect", "VerifyRendezvousRetire")
 	root := writeAuthKatStorageRoot()
 	writeKey := WriteKey(root)
 	readKey := ReadKey(root)
@@ -1559,6 +1593,50 @@ func TestNoTagVerifiesOnAnInputThatHasNoPreimage(t *testing.T) {
 						other, len(body), len(empty))
 				}
 			}
+		}
+	}
+
+	// THE RENDEZVOUS'S SHAPE OF IT (Task 7b, LRI R70): a signature over no bytes at all, by the
+	// box's own key, which is what a verifier that dropped its builder's refusal would be checking.
+	// The key's holder makes it once, offline, and it would verify on every connection that has
+	// issued no nonce, for every box the key opens. The inputs with no preimage are a nonce of no
+	// octets, no registration and no collect parameters, and a registration of any kind but the
+	// link box's.
+	box := rendezvousTheKnownBox(t)
+	collectPub := box.collectKey.Public().(ed25519.PublicKey)
+	depositPub := box.depositKey.Public().(ed25519.PublicKey)
+	byCollect := ed25519.Sign(box.collectKey, nil)
+	byDeposit := ed25519.Sign(box.depositKey, nil)
+	if !ed25519.Verify(collectPub, nil, byCollect) || !ed25519.Verify(depositPub, nil, byDeposit) {
+		t.Fatal("the empty preimage's signatures do not verify over the empty preimage, so the refusals below observe nothing")
+	}
+	for _, empty := range [][]byte{nil, {}} {
+		for _, one := range []struct {
+			name  string
+			holds bool
+		}{
+			{"VerifyRendezvousRegister", VerifyRendezvousRegister(box.registration(), empty, byCollect)},
+			{"VerifyRendezvousOpen", VerifyRendezvousOpen(depositPub, empty, box.id, byDeposit)},
+			{"VerifyRendezvousDeposit", VerifyRendezvousDeposit(depositPub, empty, box.id, box.depositCt, byDeposit)},
+			{"VerifyRendezvousCollect", VerifyRendezvousCollect(collectPub, empty, &box.collect, byCollect)},
+			{"VerifyRendezvousRetire", VerifyRendezvousRetire(collectPub, empty, box.id, byCollect)},
+		} {
+			if one.holds {
+				t.Errorf("%s accepts the empty preimage's signature under a %d octet nonce", one.name, len(empty))
+			}
+		}
+	}
+	if VerifyRendezvousRegister(nil, box.nonce, byCollect) || VerifyRendezvousCollect(collectPub, box.nonce, nil, byCollect) {
+		t.Error("a rendezvous verifier accepts the empty preimage's signature over no registration or no collect parameters")
+	}
+	for _, kind := range []uint32{0, 1, 2, 3, 5} {
+		r := box.registration()
+		r.Kind = kind
+		if _, err := rendezvousRegisterPreimage(box.nonce, r); err == nil {
+			t.Errorf("the register builder accepts kind %d, so the refusal below observes nothing", kind)
+		}
+		if VerifyRendezvousRegister(r, box.nonce, byCollect) {
+			t.Errorf("VerifyRendezvousRegister accepts the empty preimage's signature for kind %d", kind)
 		}
 	}
 }
@@ -2691,14 +2769,20 @@ func TestNoProductionFunctionComparesDataOutsideConstantTime(t *testing.T) {
 // its parameters are byte strings of one type; mls/constant_time_test.go reads it as outside its
 // class, since its first parameter is a KEY, and says why: what it answers is not whether two
 // strings are equal but whether a signature holds under a key. The identity layer verifies every
-// signature of its objects through one function, and that function is this row. Every other call
-// of ed25519.Verify in either root is still refused.
+// signature of its objects through one function, and that function is this row; the rendezvous
+// of spec A section 5.14 verifies its five signatures through one function of this root's, and
+// that function is the row after it. Every other call of ed25519.Verify in either root is still
+// refused.
 var authComparatorCallsOfNoData = map[[3]string]string{
 	{"../messagegroup", "identityVerify", "ed25519.Verify"}: "the identity layer's one verifier of " +
 		"Ed25519 signatures over public keys and public signatures (identity phase 1, Task 11): a " +
 		"signature check, which crypto/ed25519 decides, and no equality of two strings",
 	{"../messagegroup", "withPhraseKeys", "slices.Contains"}: "a ceremony's set of key numbers checked " +
 		"for a repeat (LRI R68): uint32s, public, and no octet string of anybody's",
+	{".", "rendezvousSignatureHolds", "ed25519.Verify"}: "the rendezvous's one verifier of Ed25519 " +
+		"signatures (spec A section 5.14; identity phase 1's Task 7b, LRI R70), over a preimage of " +
+		"public values under a key a request carries or a box pinned: a signature check, which " +
+		"crypto/ed25519 decides, and no equality of two strings",
 }
 
 // THE VERIFIERS THAT VERIFY NO TAG, scoped to their root. This file's verifier class is every
@@ -2724,6 +2808,39 @@ var authVerifiersOfNoTag = map[[2]string]string{
 func authVerifierOfNoTag(scan authScan, name string) bool {
 	_, exempt := authVerifiersOfNoTag[[2]string{scan.dir, name}]
 	return exempt
+}
+
+// THE VERIFIERS OF A SIGNATURE, scoped to their root (spec A section 5.14; identity phase 1's Task
+// 7b, LRI R70). The rendezvous's five answer whether an Ed25519 signature holds under a key the
+// request carries or the box pinned, over a preimage of public values. They compare nothing, so
+// the third rule's demand -- reach the constant time comparison -- is not theirs: a comparison
+// written in to satisfy it would be a comparison of nothing. These rows take them out of that
+// demand only, and put the same rule over their own subject in its place, which is the
+// exemption's control: each must reach ed25519.Verify, through rendezvousSignatureHolds, the
+// root's one call of it. The first two rules hold them unchanged -- their bodies compare no two
+// values and call nothing out of the package -- and so does the fourth half below, which holds
+// each row to a verifier its root declares.
+var authVerifiersOfASignature = map[[2]string]string{
+	{".", "VerifyRendezvousRegister"}: "register_auth, under the collect key the registration itself carries",
+	{".", "VerifyRendezvousOpen"}:     "open_auth, under the deposit key the box pinned",
+	{".", "VerifyRendezvousDeposit"}:  "deposit_auth, under the deposit key the box pinned",
+	{".", "VerifyRendezvousCollect"}:  "collect_auth, under the collect key the box pinned",
+	{".", "VerifyRendezvousRetire"}:   "retire_auth, under the collect key the box pinned",
+}
+
+// The call a verifier of a signature must reach, as the constant time comparison is the call a
+// verifier of a tag must.
+const authSignatureCheck = "ed25519.Verify"
+
+// Whether one function reaches a call of the named callee, transitively.
+func authReachesCall(t testing.TB, scan authScan, name string, callee string) bool {
+	t.Helper()
+	for reached := range authReachableFrom(t, scan, name) {
+		if authCalls(scan, reached, callee) {
+			return true
+		}
+	}
+	return false
 }
 
 // Guardrail G8, the ban half over the verifiers: no verifier decides equality in variable time.
@@ -2786,8 +2903,20 @@ func TestEveryVerifierReachesAConstantTimeComparison(t *testing.T) {
 			t.Errorf("authVerifiersOfNoTag names %s in %s, which declares no such verifier; a row that excuses nothing reads as coverage", key[1], key[0])
 		}
 	}
+	for key := range authVerifiersOfASignature {
+		if !slices.Contains(verifiers[key[0]], key[1]) {
+			t.Errorf("authVerifiersOfASignature names %s in %s, which declares no such verifier; a row that excuses nothing reads as coverage", key[1], key[0])
+		}
+	}
 	for _, scan := range scans {
 		for _, name := range verifiers[scan.dir] {
+			if _, ofASignature := authVerifiersOfASignature[[2]string{scan.dir, name}]; ofASignature {
+				if !authReachesCall(t, scan, name, authSignatureCheck) {
+					t.Errorf("%s in %s is a verifier of a signature and reaches no %s; a verifier that checks nothing is not a verifier",
+						name, scan.dir, authSignatureCheck)
+				}
+				continue
+			}
 			if !authReachesConstantTimeCompare(t, scan, name) {
 				t.Errorf("%s in %s reaches no %s; a verifier that compares nothing in constant time is not a verifier",
 					name, scan.dir, authConstantTimeComparator)

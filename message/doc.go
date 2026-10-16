@@ -1,6 +1,7 @@
 // The storage layer of the messaging work, in the half a message server is allowed to link:
 // the record, its wire form, the four preimages it is authenticated by, and the one
-// structured field of it the server may read.
+// structured field of it the server may read; and beside the record, the contact rendezvous a
+// new device is linked through.
 //
 // The X-Wing hybrid key encapsulation this sentence used to open with is no longer here. It
 // moved to connect/messagegroup on the commit that split this package in two, because
@@ -45,7 +46,12 @@
 // than re-derives. Beside those four is a fifth body, the epoch digest attachment of ruling
 // 27, which is the epoch attachment with its two keys replaced by one digest over both of
 // them; it has a door of its own and that file's comment argues which server refuses it and
-// why that refusal is the rollout. The key schedule does NOT land beside them and no longer lands at all:
+// why that refusal is the rollout. Beside them again, in rendezvous.go, is the contact rendezvous
+// of spec A section 5.14 in the link box's form, kind 4 (identity phase 1's Task 7b): the box's id
+// and its deposit key from the link code, the five signature preimages a box is registered,
+// opened, deposited into, collected and retired under, and the five verifiers the server checks
+// them with, so that the server builds no preimage of its own and the client signs over the
+// bytes the server verifies. The key schedule does NOT land beside them and no longer lands at all:
 // it IS in connect/messagegroup, which no message server links, and it takes these types
 // from here. As of m1 wave 1 that package holds the storage root and the three retention
 // class keys, the record key ladder, both ratchets, the group engine and its connect/mls
@@ -55,7 +61,8 @@
 // connect/messagegroup, and connect/layering_test.go holds that from the other side.
 // Nothing in this package logs a failure and carries on: every error here is one of the
 // sentinels in errors.go, and the only bare bools are the three constant time verifiers
-// of spec A section 5.7 and that class predicate, none of which reports a failure. The
+// of spec A section 5.7, the five signature verifiers of section 5.14 and that class
+// predicate, none of which reports a failure. The
 // one exception to reporting rather than stopping is the computing half of writeauth.go,
 // which panics on an input its own published signature has no error to refuse through —
 // that file's comment argues it at length — while the verifying half, which is the half a

@@ -1356,6 +1356,14 @@ var typesTheEraseClassReachesThatOweNoErase = map[string]string{
 		"check of Spec A A-36 section 3.4 holds -- the identity root, the identity key, the key number, the " +
 		"list's version, its devices and the parsed 0xF005 they were read out of. Every octet is a public " +
 		"key or a number of a published leaf, and no production declaration holds one in a field",
+	"RendezvousRegistration": "what a link box's registration carries (spec A section 5.14; identity phase 1's " +
+		"Task 7b, LRI R70): the box's id, the PUBLIC halves of its deposit and collect keys, an empty " +
+		"card_xwing_pub, alg_id, the kind, and the card, which is ciphertext under a key the code derives. The " +
+		"message server is handed every field of it on purpose, in RendezvousRegisterRequest, and keeps them. " +
+		"The private halves and the code are the link session's, which no type in these roots holds",
+	"RendezvousCollectParams": "what a collect asks of a link box: its id, two deposit ids, a limit and a flag, " +
+		"every one of them in the RendezvousCollectRequest the server is handed beside the signature over them, " +
+		"and RendezvousRegistration's row covers the id in the same words",
 	"GroupPurpose": "0xF006's body: one purpose octet and the identity root, an Ed25519 PUBLIC key. It is a " +
 		"group-context extension of a system group, which framing signs and MACs over and every Welcome " +
 		"carries; ExtensionBytes is excused in the same words",

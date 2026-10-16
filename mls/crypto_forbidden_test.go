@@ -782,7 +782,7 @@ func TestForbiddenPrimitivesAreAbsent(t *testing.T) {
 // hkdfExtraCallSites is the reviewed call site of one entry point OUTSIDE the crypto's two
 // KDF files, by the path the scan collects a file under.
 //
-// One entry today. connect/message derives the group's write and read keys as
+// Two files today. connect/message derives the group's write and read keys as
 // HKDF-Expand(storage_root, "write/v1"|"read/v1", 32) of master section 9.2, which is that
 // package's own derivation and not one of mls's labelled expansions -- there is no KDFLabel
 // to have a second implementation of. It is exempt from the confinement and it is NOT exempt
@@ -790,7 +790,18 @@ func TestForbiddenPrimitivesAreAbsent(t *testing.T) {
 // path that stops calling it stops being excused.
 //
 // Expand is the entry point with no salt argument, so it does not carry the transposition
-// this guardrail is named for. Extract and Key do, and neither has an entry here.
+// this guardrail is named for. Extract and Key do. Key has no entry here.
+//
+// EXTRACT HAS ONE, AND THE KNOWN ANSWER IS WHAT HOLDS IT (identity phase 1's Task 7b, LRI R70).
+// connect/message derives a link box's deposit key from its code as spec A section 5.14
+// writes it, HKDF-Expand(HKDF-Extract(salt = "URmessage/v1/link", ikm = code_octets),
+// "depsig/v1", 32): the record layer's own derivation again, with no KDFLabel to have a second
+// implementation of, and the server's surface publishes it (A-1's DepositVerifyKey). The
+// transposition this guardrail confines Extract to keep reviewable is held there by a number
+// rather than by a place: message/rendezvous_test.go's
+// TestTheRendezvousValuesAreTheKnownAnswers pins DepositVerifyKey to a key computed from RFC
+// 5869's two equations outside Go, so a call with the salt and the code swapped fails it. The
+// same file's Expand is the second half of that one derivation, excused beside writeauth.go's.
 //
 // A needle the derived class holds and this map does not name is allowed in the crypto's two
 // KDF files and NOWHERE else, which is the safe default: a fourth entry point added by a
@@ -799,7 +810,8 @@ func TestForbiddenPrimitivesAreAbsent(t *testing.T) {
 // transpose, because the whole schedule it produces is internally consistent and wrong -- is
 // in exactly that position.
 var hkdfExtraCallSites = map[string][]string{
-	"hkdf.Expand(": {"../message/writeauth.go"},
+	"hkdf.Expand(":  {"../message/writeauth.go", "../message/rendezvous.go"},
+	"hkdf.Extract(": {"../message/rendezvous.go"},
 }
 
 // The paths one entry point may be called from: the crypto's two reviewed KDF files, plus

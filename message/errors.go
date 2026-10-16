@@ -7,7 +7,8 @@
 // verifiers of spec A section 5.7 — VerifyWriteAuth, VerifyRequestAuth and
 // VerifyRecoveryProof — return a bare bool because it is the answer to a constant time
 // comparison rather than a report of something having gone wrong, and each of their
-// callers is asserted to return on false. A predicate that answers a question about a
+// callers is asserted to return on false. The five rendezvous verifiers of section 5.14 are
+// of the same kind, and their bool is the answer to an Ed25519 signature check. A predicate that answers a question about a
 // legal value is in the same category and not an exception to anything: ClassIsPrunable
 // says what a class is, and there is no failure in it to report. Everything that can
 // actually fail hands back one of these values, so a caller that wants to continue past
@@ -58,6 +59,11 @@
 // putting them on the allowlist would name something no server can match. If any of the
 // four ever becomes the return of a published function it stops being of that kind, and the
 // amendment that publishes it lands with the change that made it reachable.
+//
+// The two after them, ErrRendezvousNil and ErrRendezvousKindNotServed, are of that kind for
+// write_auth's reason (identity phase 1's Task 7b, LRI R70): they are what the rendezvous's
+// computing half panics with and why its verifying half answers false, and no function
+// returns either.
 package message
 
 import "errors"
@@ -235,4 +241,15 @@ var (
 	// key would authenticate. Master section 8.3 puts both keys on the wire at exactly this
 	// width, so any other length is a bug rather than a shorter key.
 	ErrAuthKeyLength = errors.New("message: a mac key is not the thirty two octets both derivations produce")
+	// Fires when a rendezvous preimage is asked for over no registration, or over no collect
+	// parameters: a caller bug, refused rather than dereferenced. The computing half panics with
+	// it wrapped and the verifying half answers false on it, as for ErrServerNonceEmpty.
+	ErrRendezvousNil = errors.New("message: no rendezvous registration or collect parameters to build a preimage over")
+	// Fires when a register preimage is asked for under a kind this build does not serve.
+	// Identity phase 1 serves the link box, kind 4, alone (spec A section 5.14, spec B section
+	// 4.3.11): kind 0, the contact card, has a preimage of another form, which ends at
+	// u16(alg_id), and kinds 1 to 3 are a later phase's. The computing half panics with it and
+	// VerifyRendezvousRegister answers false on it, so a registration of another kind never
+	// verifies as a link box's.
+	ErrRendezvousKindNotServed = errors.New("message: a rendezvous kind this build does not serve; it serves the link box, kind 4")
 )
