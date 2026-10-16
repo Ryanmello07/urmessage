@@ -307,6 +307,20 @@ var handleLeafIndexReadings = map[string]string{
 	"WithPhraseKeys":   "raw -- the exported entry, binding the key number only through withPhraseKeys",
 }
 
+// THE DECLARATIONS THAT TURN A uint32 INTO OCTETS FOR A NUMBER THAT IS NOT A LEAF INDEX, AND REACH
+// NO KEY. The half of the gate below reads its class off the callee's SHAPE -- anything ending in
+// Uint32 -- so every uint32 a structure carries is in it, and until identity phase 1 the only uint32
+// any encoding here carried was a leaf index. The identity extensions carry the key number g as a
+// u32 field (MASTER section 5.2 at Revision 10; Spec A A-36 section 3.4), so their codecs are in
+// the shape and not in the subject. Each row is scoped to one declaration and says which number it
+// carries; the hold below the loop requires each still to encode a uint32 and none to reach the
+// key schedule, where a number is a derivation's and owes a reading in handleLeafIndexReadings.
+var handleUint32EncodingsThatAreNotLeafIndices = map[string]string{
+	"encodeIskCertTbs":       "IskCert(g)'s key_number, u32: the phrase key's number g, in the certificate's tbs",
+	"encodeBaseTbs":          "a base's key_number, u32: the phrase key's number g, in the base's tbs",
+	"ParseUrmessageIdentity": "0xF005's decoder, reading the certificate's and the base's key_number back",
+}
+
 func TestEveryLeafIndexDerivationDeclaresItsReadingAndSharesOneHelper(t *testing.T) {
 	_, sources := messagegroupProductionSources(t)
 	reachesTheKdf := recordKeyKdfReachingFunctions(sources)
@@ -400,11 +414,42 @@ func TestEveryLeafIndexDerivationDeclaresItsReadingAndSharesOneHelper(t *testing
 		if name == "leafIndexLP" {
 			continue
 		}
+		if _, exempt := handleUint32EncodingsThatAreNotLeafIndices[name]; exempt {
+			continue
+		}
 		reading, hasRow := handleLeafIndexReadings[name]
 		if !hasRow || !strings.HasPrefix(reading, "raw") {
 			t.Errorf("%s turns a uint32 into octets itself and is not the one helper that reads LP(leaf_index); only a member declared to write its index RAW may spell its own encoding",
 				name)
 		}
+	}
+	// THE EXEMPTION'S OWN HOLD, both ways. Every exempted declaration still turns a uint32 into
+	// octets by this half's own predicate -- so it is the exemption that lets it pass and not a
+	// matcher gone blind -- and none of them reaches the key schedule, which is the class whose
+	// subject IS a number in a derivation: an exemption can never stand for a derivation that
+	// binds a leaf index, whatever it is called.
+	for name := range handleUint32EncodingsThatAreNotLeafIndices {
+		if !slices.Contains(encoding, name) {
+			t.Errorf("handleUint32EncodingsThatAreNotLeafIndices exempts %s, which turns no uint32 into octets; an exemption that covers nothing reads as coverage", name)
+		}
+		if reachesTheKdf[name] {
+			t.Errorf("handleUint32EncodingsThatAreNotLeafIndices exempts %s, which reaches the key schedule; a number that goes into a key owes a reading in handleLeafIndexReadings", name)
+		}
+	}
+	// THE CONTROL, and the complement printed: the half still judges the encoders the exemption
+	// does not name, so a matcher that had gone blind to all of them would fail here rather than
+	// pass on the rows alone.
+	judged, exempted := []string{}, []string{}
+	for _, name := range encoding {
+		if _, exempt := handleUint32EncodingsThatAreNotLeafIndices[name]; exempt {
+			exempted = append(exempted, name)
+		} else if name != "leafIndexLP" {
+			judged = append(judged, name)
+		}
+	}
+	t.Logf("uint32 encoders judged against handleLeafIndexReadings: %v; exempted as no leaf index: %v", judged, exempted)
+	if len(judged) == 0 {
+		t.Errorf("every uint32 encoder of this package but leafIndexLP is exempted, so this half judges nothing; the exemption is scoped to the identity encodings and the raw readings must still be read")
 	}
 	// the reading itself: eight octets, the length 00 00 00 04 then the index
 	for _, leaf := range []uint32{0, 1, 7, 0xFFFFFFFF} {

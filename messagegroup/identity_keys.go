@@ -139,6 +139,43 @@ func phrasePublicHalf(expanded ed25519.PrivateKey) ed25519.PublicKey {
 	return append(ed25519.PublicKey(nil), expanded[ed25519.SeedSize:]...)
 }
 
+// SignIskCert answers IskCert(g): the identity key's signature over this key number's phrase key.
+// IRK's private half exists only inside the ceremony, so this is where every certificate is signed:
+// AD1's first, a lock-out's next, and a phrase change's first under the new key (MASTER sections
+// 5.3 and 5.5).
+func (self *PhraseKeys) SignIskCert() (*IskCert, error) {
+	if len(self.irk) != ed25519.PrivateKeySize || len(self.isk) != ed25519.PrivateKeySize {
+		return nil, ErrPhraseKeysErased
+	}
+	cert := &IskCert{IdentityKey: self.IdentityKey(), IskPub: self.PhraseKey(), KeyNumber: self.keyNumber}
+	if err := signIskCert(self.irk, cert); err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// SignIdentityStep answers the form-1 step from this ceremony's identity key to next: the step a
+// phrase change signs with the old words, before the new key takes over (MASTER section 5.5; V4
+// F.0 (1)). It is signed here for the reason SignIskCert is.
+func (self *PhraseKeys) SignIdentityStep(next ed25519.PublicKey) (*IdentityStep, error) {
+	if len(self.irk) != ed25519.PrivateKeySize {
+		return nil, ErrPhraseKeysErased
+	}
+	return signIdentityStep(self.irk, next)
+}
+
+// SignBase names this ceremony's identity key and key number in base, and signs it with ISK_g and
+// with author's device key. A base that is not well formed, or that does not name its author as a
+// phrase device, is refused before anything is signed.
+func (self *PhraseKeys) SignBase(base *DeviceListBase, author ed25519.PrivateKey) error {
+	if len(self.irk) != ed25519.PrivateKeySize || len(self.isk) != ed25519.PrivateKeySize {
+		return ErrPhraseKeysErased
+	}
+	base.IdentityKey = self.IdentityKey()
+	base.KeyNumber = self.keyNumber
+	return signBase(self.isk, author, base)
+}
+
 // The erase at the end of a ceremony: every secret a PhraseKeys holds, in place.
 //
 //go:noinline

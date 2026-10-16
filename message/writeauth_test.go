@@ -2661,11 +2661,67 @@ func TestNoProductionFunctionComparesDataOutsideConstantTime(t *testing.T) {
 		// packages ship, and a gate that fired on all of them would be a gate with exemptions.
 		for _, name := range slices.Sorted(maps.Keys(scan.decls)) {
 			for _, comparison := range authComparatorCalls(scan, name, comparators) {
+				callee, _, _ := strings.Cut(comparison, " at ")
+				if _, exempt := authComparatorCallsOfNoData[[3]string{scan.dir, name, callee}]; exempt {
+					continue
+				}
 				t.Errorf("%s in %s compares data outside constant time: %s; every comparison of data in these packages goes through %s",
 					name, scan.dir, comparison, authConstantTimeComparator)
 			}
 		}
+		// THE EXEMPTION'S HOLD, both ways. Each row's callee is still in this root's derived
+		// class, so it is the row that passes the call and not a class that stopped holding it;
+		// and each row's function still makes the call, so no row outlives what it excused.
+		for key := range authComparatorCallsOfNoData {
+			if key[0] != scan.dir {
+				continue
+			}
+			if !slices.Contains(comparators, key[2]) {
+				t.Errorf("authComparatorCallsOfNoData excuses %s in %s, which this root's class does not hold; the row is not what passes it", key[2], key[1])
+			}
+			if len(authComparatorCalls(scan, key[1], []string{key[2]})) == 0 {
+				t.Errorf("authComparatorCallsOfNoData excuses %s in %s, which no longer calls it; a row that excuses nothing reads as coverage", key[2], key[1])
+			}
+		}
 	}
+}
+
+// THE ONE CALL OF THE COMPARATOR CLASS THAT IS NO COMPARISON OF DATA, scoped to its root, its
+// function and its callee. This file's class reads ed25519.Verify as a comparator, since two of
+// its parameters are byte strings of one type; mls/constant_time_test.go reads it as outside its
+// class, since its first parameter is a KEY, and says why: what it answers is not whether two
+// strings are equal but whether a signature holds under a key. The identity layer verifies every
+// signature of its objects through one function, and that function is this row. Every other call
+// of ed25519.Verify in either root is still refused.
+var authComparatorCallsOfNoData = map[[3]string]string{
+	{"../messagegroup", "identityVerify", "ed25519.Verify"}: "the identity layer's one verifier of " +
+		"Ed25519 signatures over public keys and public signatures (identity phase 1, Task 11): a " +
+		"signature check, which crypto/ed25519 decides, and no equality of two strings",
+}
+
+// THE VERIFIERS THAT VERIFY NO TAG, scoped to their root. This file's verifier class is every
+// function whose name begins with Verify, and until identity phase 1 those were connect/message's
+// two tag verifiers. Spec A A-36 names three in connect/messagegroup -- VerifyLeafBinding,
+// VerifyIdentityChain and VerifyDeviceList -- which check Ed25519 signatures and a list's shape
+// and versions: what they compare with == is a key number, a base number, a version or an
+// extension type, all public; every octet string they compare goes through crypto/subtle; and
+// they build errors and encodings with fmt and syntax. So the two rules about a TAG verifier's
+// body -- no equality of two values, no call out of the package but the constant time comparison
+// -- are not theirs, and these rows take them out of those two rules only. The third rule holds
+// them still, as its control: each of them must reach subtle.ConstantTimeCompare.
+var authVerifiersOfNoTag = map[[2]string]string{
+	{"../messagegroup", "VerifyLeafBinding"}: "the binding check of a leaf to its identity: " +
+		"Spec A A-36 section 3.4's seven steps, over signatures and the list's shape",
+	{"../messagegroup", "VerifyIdentityChain"}: "the pure check of a chain of form-1 steps, " +
+		"each an Ed25519 signature by the key before it",
+	{"../messagegroup", "VerifyDeviceList"}: "the order of two lists of one identity: their " +
+		"versions, which are public integers, and their encodings, compared in constant time",
+}
+
+// Whether one verifier of one root is a verifier of no tag, and so outside the two tag rules.
+func authVerifierOfNoTag(scan authScan, name string) bool {
+	_, exempt := authVerifiersOfNoTag[[2]string{scan.dir, name}]
+	return exempt
 }
 
 // Guardrail G8, the ban half over the verifiers: no verifier decides equality in variable time.
@@ -2677,6 +2733,9 @@ func TestNoVerifierDecidesEqualityInVariableTime(t *testing.T) {
 		t.Logf("%s: %d verifiers under the gate: %v", scan.dir, len(verifiers[scan.dir]), verifiers[scan.dir])
 		authReportAnEmptyVerifierSet(t, scan, verifiers[scan.dir])
 		for _, name := range verifiers[scan.dir] {
+			if authVerifierOfNoTag(scan, name) {
+				continue
+			}
 			for _, comparison := range authVariableTimeComparisons(scan, name, comparators) {
 				t.Errorf("%s in %s decides equality in variable time: %s; every tag comparison goes through %s",
 					name, scan.dir, comparison, authConstantTimeComparator)
@@ -2700,6 +2759,9 @@ func TestAVerifierReachesOutOfItsPackageOnlyForTheConstantTimeComparison(t *test
 	verifiers := authVerifiersUnderGate(t, scans)
 	for _, scan := range scans {
 		for _, name := range verifiers[scan.dir] {
+			if authVerifierOfNoTag(scan, name) {
+				continue
+			}
 			for _, foreign := range authForeignCalls(scan, name) {
 				t.Errorf("%s in %s calls %s; a verifier's answer is decided by %s and by nothing else, and what it needs from elsewhere belongs behind a function of its own package",
 					name, scan.dir, foreign, authConstantTimeComparator)
@@ -2715,6 +2777,13 @@ func TestAVerifierReachesOutOfItsPackageOnlyForTheConstantTimeComparison(t *test
 func TestEveryVerifierReachesAConstantTimeComparison(t *testing.T) {
 	scans := mustScanAuthRoots(t)
 	verifiers := authVerifiersUnderGate(t, scans)
+	// the rows of authVerifiersOfNoTag, held: each names a verifier its root declares, so none
+	// outlives its function, and each stays judged here, which is the control on the exemption
+	for key := range authVerifiersOfNoTag {
+		if !slices.Contains(verifiers[key[0]], key[1]) {
+			t.Errorf("authVerifiersOfNoTag names %s in %s, which declares no such verifier; a row that excuses nothing reads as coverage", key[1], key[0])
+		}
+	}
 	for _, scan := range scans {
 		for _, name := range verifiers[scan.dir] {
 			if !authReachesConstantTimeCompare(t, scan, name) {

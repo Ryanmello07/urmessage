@@ -713,3 +713,53 @@ var (
 	// is to use them.
 	ErrPhraseKeysCeremony = errors.New("messagegroup: the phrase's keys are derived for a phrase and a ceremony, and one was not given")
 )
+
+// ---------------------------------------------------------------------------
+// the identity extensions and the checks over them, MASTER section 5.3 and 11 at Revision 10
+// ---------------------------------------------------------------------------
+
+var (
+	// Fires when the phrase's keys are asked for a signature after their ceremony ended and erased
+	// them.
+	ErrPhraseKeysErased = errors.New("messagegroup: the phrase's keys were erased when their ceremony ended")
+	// Fires when an identity object does not encode or decode as version 1: a field, a version, an
+	// alg_id or a trailing octet.
+	ErrIdentityEncoding = errors.New("messagegroup: an identity object does not encode as version 1")
+	// Fires when a 0xF005 body is over 6,144 octets, the bound VerifyLeafBinding enforces and mls
+	// does not.
+	ErrIdentityExtensionSize = errors.New("messagegroup: an identity extension is over 6,144 octets")
+	// Fires when a 0xF006 body does not encode or decode as version 1 with a known purpose.
+	ErrGroupPurposeEncoding = errors.New("messagegroup: a group purpose is not version 1 with a known purpose")
+	// Fires when a step is of a form other than 1. Form 2, the 7-day change's, ships in a later
+	// release and is refused (D2 VID2).
+	ErrIdentityStepForm = errors.New("messagegroup: an identity step is not of form 1")
+	// Fires when a signer is handed a key that is not a whole Ed25519 private key.
+	ErrIdentitySigningKey = errors.New("messagegroup: an identity object's signer is not an Ed25519 private key")
+	// Fires when a chain does not lead from its root to its key by form-1 steps, each signed by
+	// the key before it.
+	ErrIdentityChain = errors.New("messagegroup: the identity chain does not verify")
+	// Fires when a list is not well formed: its devices out of order, repeated, more than 10 or
+	// none, an unknown flag, more than 16 amendments, or an amendment that does not fit.
+	ErrDeviceListShape = errors.New("messagegroup: the device list is not well formed")
+	// Fires when an addition finds no place: the list names 10 devices, or 16 changes wait on its
+	// base. A self-removal never fires it.
+	ErrDeviceListFull = errors.New("messagegroup: the device list has no place for an addition")
+	// The binding check's seven refusals, one for each step of Spec A A-36's order.
+	ErrBindingExtension    = errors.New("messagegroup: binding step 1: the leaf's identity extension")
+	ErrBindingCertificate  = errors.New("messagegroup: binding step 2: the certificate")
+	ErrBindingChain        = errors.New("messagegroup: binding step 3: the chain")
+	ErrBindingList         = errors.New("messagegroup: binding step 4: the list's signatures")
+	ErrBindingWellFormed   = errors.New("messagegroup: binding step 5: the list's form")
+	ErrBindingSignatureKey = errors.New("messagegroup: binding step 6: the leaf's signature key")
+	ErrBindingKeyReuse     = errors.New("messagegroup: binding step 7: an identity key reused")
+	// Fires when VerifyDeviceList is handed a list that does not verify.
+	ErrDeviceListInvalid = errors.New("messagegroup: a device list to compare does not verify")
+	// Fires when two lists to compare are of two roots.
+	ErrDeviceListRoot = errors.New("messagegroup: two device lists of two identities")
+	// Fires when two lists of one identity fork: two chains that part, two bases of one number,
+	// two certificates of one key number, or one version with two encodings.
+	ErrDeviceListFork = errors.New("messagegroup: two device lists of one identity fork")
+	// Fires when the emoji are asked of inputs that cannot make them: no exporter, no group id or
+	// key package ref, or a nonce that is not 32 octets.
+	ErrLinkSasInput = errors.New("messagegroup: the link emoji's inputs are not whole")
+)

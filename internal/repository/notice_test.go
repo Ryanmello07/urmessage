@@ -16,10 +16,11 @@ import (
 // not vendored, so NOTICE owes them no row. Asserted both ways like everything else in this
 // file: each must exist, and each must match no third-party row.
 var firstPartyVectorFiles = map[string]string{
-	"mls/testdata/vectors/.gitattributes":              "the checkout rule (* -text) that keeps git's text conversion off the vendored bytes",
-	"mls/testdata/vectors/VECTORS.sha256":              "this repository's digest list of the sixteen vendored files",
-	"mls/testdata/vectors/rfc/.gitattributes":          "the same checkout rule for the RFC 9180 corpus",
-	"messagegroup/testdata/vectors/rfc/.gitattributes": "the same checkout rule for the X-Wing corpus",
+	"mls/testdata/vectors/.gitattributes":                 "the checkout rule (* -text) that keeps git's text conversion off the vendored bytes",
+	"mls/testdata/vectors/VECTORS.sha256":                 "this repository's digest list of the sixteen vendored files",
+	"mls/testdata/vectors/rfc/.gitattributes":             "the same checkout rule for the RFC 9180 corpus",
+	"messagegroup/testdata/vectors/rfc/.gitattributes":    "the same checkout rule for the X-Wing corpus",
+	"messagegroup/testdata/vectors/matrix/.gitattributes": "the same checkout rule for the m.sas.v1 emoji list and its license",
 }
 
 // The repository root, found from this package's directory and checked by its module line.

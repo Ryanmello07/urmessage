@@ -1322,6 +1322,43 @@ var typesTheEraseClassReachesThatOweNoErase = map[string]string{
 		"NOT a field of it: PendingExport is a call that answers a fresh derivation the caller erases, exactly " +
 		"as Export's is. It is an ANSWER built by (*connectMlsHandle).PendingEpoch per call and no production " +
 		"declaration holds one in a field, so there is no drop site an erase could be reachable from",
+	// THE IDENTITY LAYER'S PUBLIC OBJECTS (identity phase 1, Task 11; Spec A A-36 section 3.4). This
+	// reading tells a wire type by a codec method of its own, MarshalMLS or UnmarshalMLS, and
+	// devicelist.go encodes its objects through free functions handed a syntax.Writer, which is the
+	// spelling the package's other extension bodies use. So the eight types below are members by
+	// their storage and not by any key material: every octet they hold is a public key, a
+	// signature, a hash or a number of a leaf's urmessage_identity extension (0xF005) or a system
+	// group's urmessage_group_purpose (0xF006). The identity's PRIVATE halves are PhraseKeys', which
+	// is a member of this class that no row excuses and which erases them, and the control after
+	// the tables below holds exactly that.
+	"IskCert": "IskCert(g), the certificate a leaf's 0xF005 carries first: IRK's PUBLIC half, ISK_g's " +
+		"PUBLIC half, the key number g and IRK's signature over the three. The extension is published in " +
+		"the leaf node of every device of the identity, which every member of each of their groups holds " +
+		"and every joiner is handed in its Welcome; ProcessedMember's identity public key is excused in " +
+		"the same words. The private halves that made the signature are PhraseKeys', which erases them",
+	"DeviceEntry": "one device of an identity's device list: the device's PUBLIC signature key, which is " +
+		"also the signature key of that device's own leaf node, and one octet of flags. It is published in " +
+		"the device list of 0xF005, so IskCert's row covers it in the same words",
+	"DeviceListBase": "a device list's base: the identity key, the key number, the base number, the time " +
+		"it was issued, the hash of the list it replaced, the device entries, its author's PUBLIC key, and " +
+		"the author's and ISK_g's signatures over all of that. Every octet of it is in 0xF005, published " +
+		"as IskCert's row says; the private keys that signed it are a device's own and PhraseKeys'",
+	"Amendment": "one signed change to a base: the base's hash, its index, the previous change's hash, its " +
+		"author's PUBLIC key, the time, the operation, one device entry and the author's signature. Every " +
+		"octet of it is in 0xF005, published as IskCert's row says",
+	"IdentityStep": "one step of an identity chain: the replaced identity key's PUBLIC half, the form, and " +
+		"that key's signature over the next. Every octet of it is in 0xF005, published as IskCert's row says",
+	"UrmessageIdentity": "0xF005's body as the seam reads it: the certificate, the base, the amendments and " +
+		"the chain, the four rows above, every octet published as IskCert's row says. It is an ANSWER of " +
+		"ParseUrmessageIdentity and an argument to the encoder and the verifiers; the one production " +
+		"declaration holding one in a field is VerifiedIdentity, excused directly below on the same terms",
+	"VerifiedIdentity": "an ANSWER and not storage: what VerifyLeafBinding hands its caller once the binding " +
+		"check of Spec A A-36 section 3.4 holds -- the identity root, the identity key, the key number, the " +
+		"list's version, its devices and the parsed 0xF005 they were read out of. Every octet is a public " +
+		"key or a number of a published leaf, and no production declaration holds one in a field",
+	"GroupPurpose": "0xF006's body: one purpose octet and the identity root, an Ed25519 PUBLIC key. It is a " +
+		"group-context extension of a system group, which framing signs and MACs over and every Welcome " +
+		"carries; ExtensionBytes is excused in the same words",
 	"PathDecryptResult": "it is an ANSWER and not storage. DecryptUpdatePath builds one per call and hands " +
 		"it to a caller that installs both halves into the epoch it is entering, and no production " +
 		"declaration holds one in a field, so there is no drop site an erase could be reachable from. " +
@@ -1520,6 +1557,17 @@ func TestEveryTypeHoldingErasableKeyMaterialErasesAllOfIt(t *testing.T) {
 			t.Errorf("(*%s).%s erases %v and leaves %v; a field this erase does not reach is key material the drop sites below cannot erase however carefully they call it",
 				member, best, slices.Sorted(maps.Keys(covered)), missing)
 		}
+	}
+
+	// THE CONTROL ON THE IDENTITY ROWS. The rows from IskCert to GroupPurpose excuse the identity
+	// layer's public objects and say that the identity's private halves are PhraseKeys'. This holds
+	// that sentence against the same reading the rows are checked against: PhraseKeys is a member of
+	// the class, by the private keys it holds; no row excuses it; and it declares an erase. A reading
+	// that stopped seeing the identity's private keys would fail here, with the eight rows still in.
+	if !slices.Contains(reading.members, "PhraseKeys") || excused["PhraseKeys"] ||
+		len(reading.erasers["PhraseKeys"]) == 0 {
+		t.Errorf("PhraseKeys, which holds IRK's and ISK_g's private halves, is a member: %v, excused: %v, erasers: %v; the identity rows excuse public objects only while it is a member owing an erase",
+			slices.Contains(reading.members, "PhraseKeys"), excused["PhraseKeys"], reading.erasers["PhraseKeys"])
 	}
 
 	// and the tables in the other direction, so no row outlives what it excuses.
