@@ -2812,10 +2812,12 @@ func authVerifierOfNoTag(scan authScan, name string) bool {
 
 // THE VERIFIERS OF A SIGNATURE, scoped to their root (spec A section 5.14; identity phase 1's Task
 // 7b, LRI R70). The rendezvous's five answer whether an Ed25519 signature holds under a key the
-// request carries or the box pinned, over a preimage of public values. They compare nothing, so
-// the third rule's demand -- reach the constant time comparison -- is not theirs: a comparison
-// written in to satisfy it would be a comparison of nothing. These rows take them out of that
-// demand only, and put the same rule over their own subject in its place, which is the
+// request carries or the box pinned, over a preimage of public values. The one comparison they
+// make is the key against the seven small-order encodings (LRI R72), in constant time, and it is
+// not what makes them verifiers: the signature is. A verifier that reached that comparison and
+// checked no signature would meet the third rule's demand -- reach the constant time comparison
+// -- while verifying nothing. These rows take them out of that demand only, and put the same
+// rule over their own subject in its place, which is the
 // exemption's control: each must reach ed25519.Verify, through rendezvousSignatureHolds, the
 // root's one call of it. The first two rules hold them unchanged -- their bodies compare no two
 // values and call nothing out of the package -- and so does the fourth half below, which holds

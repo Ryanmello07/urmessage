@@ -61,8 +61,8 @@
 // connect/messagegroup, and connect/layering_test.go holds that from the other side.
 // Nothing in this package logs a failure and carries on: every error here is one of the
 // sentinels in errors.go, and the only bare bools are the three constant time verifiers
-// of spec A section 5.7, the five signature verifiers of section 5.14 and that class
-// predicate, none of which reports a failure. The
+// of spec A section 5.7, the five signature verifiers of section 5.14, that class
+// predicate and the rendezvous's key predicate, none of which reports a failure. The
 // one exception to reporting rather than stopping is the computing half of writeauth.go,
 // which panics on an input its own published signature has no error to refuse through —
 // that file's comment argues it at length — while the verifying half, which is the half a

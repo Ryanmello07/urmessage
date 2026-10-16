@@ -29,6 +29,12 @@
 // own box, so a refusal there is a bug in the caller; the server verifies a request a client
 // sent, so a refusal there is an answer, and a panic would be a client that can stop the server.
 //
+// A KEY OF SMALL ORDER VERIFIES NOTHING HERE (LRI R72). crypto/ed25519 accepts the signature
+// R = the neutral point, S = 0 under the neutral point's encoding, for every message, so a box
+// pinned under such a key would be a box anyone could open, deposit into, collect or retire, with
+// no secret at all. Every verifier refuses the seven small-order encodings first, as
+// messagegroup's identityVerify does for the identity layer.
+//
 // WHAT THESE VERIFIERS DO NOT CHECK, because the server does (spec B section 4.3.11): the card's
 // and the deposit's lengths as equalities, LinkCardBytes and LinkDepositBytes; card_xwing_pub
 // absent and alg_id 0x0014 on a registration; and every rule about a box's state. A verifier
@@ -41,6 +47,7 @@ import (
 	"crypto/ed25519"
 	"crypto/hkdf"
 	"crypto/sha256"
+	"crypto/subtle"
 	"fmt"
 
 	"github.com/urnetwork/message/syntax"
@@ -356,10 +363,54 @@ func rendezvousSubscribeOctet(subscribe bool) uint8 {
 
 // The rendezvous's one Ed25519 check, which every verifier above ends in. A key or a signature of
 // the wrong width answers false here rather than reaching ed25519.Verify, which panics on a key
-// that is not 32 octets: a server handed a short key by a client must not stop.
+// that is not 32 octets: a server handed a short key by a client must not stop. So does a key of
+// small order, under which crypto/ed25519 accepts a signature nobody needed a secret to make.
 func rendezvousSignatureHolds(verifyPub []byte, preimage []byte, sig []byte) bool {
-	if len(verifyPub) != ed25519.PublicKeySize || len(sig) != ed25519.SignatureSize {
+	if !RendezvousKeyIsAcceptable(verifyPub) || len(sig) != ed25519.SignatureSize {
 		return false
 	}
 	return ed25519.Verify(ed25519.PublicKey(verifyPub), preimage, sig)
+}
+
+// The encodings of the points of small order on edwards25519, with the sign bit cleared: y = 0, 1
+// and p-1, the two y of the points of order 8, and y = p and p+1, the non-canonical encodings of 0
+// and 1 that a 255-bit field admits. They are libsodium's ge25519_has_small_order list, and they are
+// the seven messagegroup's identityVerify refuses (identity phase 1's Task 11). This package may
+// not import that one, so the rule is restated here rather than shared, and each copy is held to
+// the curve by its own test: TestTheRendezvousSmallOrderKeysAreTheCurvesOwn derives this one.
+var rendezvousSmallOrderKeys = [7][ed25519.PublicKeySize]byte{
+	{0x00},
+	{0x01},
+	{0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+		0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05},
+	{0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+		0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a},
+	{0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+}
+
+// RendezvousKeyIsAcceptable answers whether pub is a key a link box may be pinned under: 32 octets,
+// and not of small order -- its encoding, sign bit cleared, is none of the seven above, each
+// compared in constant time. It is the rule the five verifiers apply before any signature, and
+// it is published so that the server's Register can refuse a small-order collect key or deposit
+// key up front rather than store a box that can never be used (LRI R72). The server cannot
+// compute it itself: its gate against a second implementation bars cryptography from its api.
+// A key of any other width answers false, and nothing here panics.
+func RendezvousKeyIsAcceptable(pub []byte) bool {
+	if len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	var masked [ed25519.PublicKeySize]byte
+	copy(masked[:], pub)
+	masked[ed25519.PublicKeySize-1] &= 0x7f
+	for _, small := range rendezvousSmallOrderKeys {
+		if subtle.ConstantTimeCompare(masked[:], small[:]) == 1 {
+			return false
+		}
+	}
+	return true
 }

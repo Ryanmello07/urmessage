@@ -11,7 +11,9 @@
 #
 # EVERY MODULE FILE HAS A ROW SAYING HOW IT IS LOADED, and the rows are held both ways against the
 # files git tracks, as scripts/module-census.sh holds its own: a module file with no row fails, and
-# so does a row whose file is gone. The wirings are the census's. They are written out here because
+# so does a row whose file is gone. This script runs only when asked, so the same hold is made in
+# every run of test.sh by internal/repository's TestEveryModuleFileHasARowInTheVulnerabilityScan,
+# which reads the table below (LRI R72). The wirings are the census's. They are written out here because
 # a scan that loads a module some other way than test.sh builds it reads some other program:
 #
 #   plain       go.mod, sdk, sdk/livepeer, sdk/liveprobe, and messagegroup/testdata/nfkdgen, the

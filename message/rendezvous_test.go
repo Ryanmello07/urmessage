@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
+	"slices"
 	"testing"
 )
 
@@ -524,4 +526,140 @@ func rendezvousRefusal(build func()) (refusal error) {
 	}()
 	build()
 	return nil
+}
+
+// THE PUBLISHED PREDICATE (LRI R72): the server's Register asks it of a box's two keys. A key of
+// small order is refused with either sign bit, an ordinary key is accepted, and every other width
+// -- nil, empty, one octet short or long, and every length to twice the width -- answers false
+// without a panic.
+func TestRendezvousKeyIsAcceptableRefusesSmallOrderAndEveryOtherWidth(t *testing.T) {
+	box := rendezvousTheKnownBox(t)
+	for _, key := range []ed25519.PrivateKey{box.depositKey, box.collectKey, box.strangerKey} {
+		pub := key.Public().(ed25519.PublicKey)
+		if !RendezvousKeyIsAcceptable(pub) {
+			t.Fatalf("the ordinary key %x is refused, so the refusals below observe nothing", pub)
+		}
+		for _, wrong := range [][]byte{pub[:ed25519.PublicKeySize-1], append(append([]byte(nil), pub...), 0x00)} {
+			if RendezvousKeyIsAcceptable(wrong) {
+				t.Errorf("a %d octet key cut or padded from %x is acceptable", len(wrong), pub)
+			}
+		}
+	}
+	for _, small := range rendezvousSmallOrderKeys {
+		for _, signBit := range []byte{0x00, 0x80} {
+			key := small
+			key[31] |= signBit
+			if RendezvousKeyIsAcceptable(key[:]) {
+				t.Errorf("the small-order key %x is acceptable", key)
+			}
+		}
+	}
+	if RendezvousKeyIsAcceptable(nil) || RendezvousKeyIsAcceptable([]byte{}) {
+		t.Error("no key at all is acceptable")
+	}
+	for length := range 2*ed25519.PublicKeySize + 1 {
+		if length != ed25519.PublicKeySize && RendezvousKeyIsAcceptable(aadRamp(0x01, length)) {
+			t.Errorf("a %d octet key is acceptable", length)
+		}
+	}
+}
+
+// A KEY OF SMALL ORDER VERIFIES NOTHING (LRI R72). Under the neutral point's encoding
+// crypto/ed25519 accepts R = the neutral point, S = 0 over every message, and the control below
+// holds that it still does, over each arm's own preimage; so a box pinned under that key would be a
+// box anyone could open, deposit into, collect or retire, holding no secret at all. Each verifier
+// refuses that forgery, and refuses every one of the seven small-order encodings, with either sign
+// bit, whatever the signature.
+func TestNoRendezvousVerifierAcceptsAKeyOfSmallOrder(t *testing.T) {
+	box := rendezvousTheKnownBox(t)
+	neutral := rendezvousSmallOrderKeys[1]
+	forged := append(append([]byte(nil), neutral[:]...), make([]byte, 32)...)
+	for _, arm := range rendezvousArms() {
+		key := arm.key(box)
+		real := ed25519.Sign(key, arm.build(box, box.nonce, box.id))
+		// the positive control: the arm verifies its own signature under its own key
+		if !arm.verify(box, key.Public().(ed25519.PublicKey), box.nonce, box.id, real) {
+			t.Fatalf("the %s verifier refuses its own signature, so the refusals below observe nothing", arm.name)
+		}
+		// the control on the forgery: crypto/ed25519 accepts it, so the refusal is this package's
+		if !ed25519.Verify(ed25519.PublicKey(neutral[:]), arm.build(box, box.nonce, box.id), forged) {
+			t.Fatalf("crypto/ed25519 refuses R = identity, S = 0 under the identity key over the %s preimage: the refusal may have stopped being needed", arm.name)
+		}
+		if arm.verify(box, neutral[:], box.nonce, box.id, forged) {
+			t.Errorf("the %s verifier accepts R = identity, S = 0 under the identity-point key", arm.name)
+		}
+		for _, small := range rendezvousSmallOrderKeys {
+			for _, signBit := range []byte{0x00, 0x80} {
+				smallKey := small
+				smallKey[31] |= signBit
+				for _, chosen := range [][]byte{forged, real, make([]byte, ed25519.SignatureSize)} {
+					if arm.verify(box, smallKey[:], box.nonce, box.id, chosen) {
+						t.Errorf("the %s verifier accepts a signature under the small-order key %x", arm.name, smallKey)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The seven small-order encodings this package refuses are the curve's own: derived here from
+// edwards25519 with math/big -- y = 0, 1 and p-1, the two y of the points of order 8, and the
+// non-canonical p and p+1 -- and held to the table both ways, as messagegroup's
+// TestTheEdgeVectorsOfEd25519AreRefused holds identityVerify's copy. A key that is usable stays
+// usable: the control.
+func TestTheRendezvousSmallOrderKeysAreTheCurvesOwn(t *testing.T) {
+	p := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(19))
+	d := new(big.Int).Mod(new(big.Int).Mul(big.NewInt(-121665), new(big.Int).ModInverse(big.NewInt(121666), p)), p)
+	sqrt := func(value *big.Int) *big.Int {
+		root := new(big.Int).Exp(value, new(big.Int).Div(new(big.Int).Add(p, big.NewInt(3)), big.NewInt(8)), p)
+		if new(big.Int).Mod(new(big.Int).Mul(root, root), p).Cmp(new(big.Int).Mod(value, p)) != 0 {
+			i := new(big.Int).Exp(big.NewInt(2), new(big.Int).Div(new(big.Int).Sub(p, big.NewInt(1)), big.NewInt(4)), p)
+			root.Mod(root.Mul(root, i), p)
+		}
+		if new(big.Int).Mod(new(big.Int).Mul(root, root), p).Cmp(new(big.Int).Mod(value, p)) != 0 {
+			return nil
+		}
+		return root
+	}
+	// the points of order 8: y^2 = (-1 +- sqrt(1 + d)) / d, at the sign whose value is a square
+	s := sqrt(new(big.Int).Add(d, big.NewInt(1)))
+	if s == nil {
+		t.Fatal("1 + d has no square root")
+	}
+	ys := []*big.Int{big.NewInt(0), big.NewInt(1), new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Set(p), new(big.Int).Add(p, big.NewInt(1))}
+	inverseD := new(big.Int).ModInverse(d, p)
+	for _, sign := range []int64{1, -1} {
+		ySquared := new(big.Int).Mod(new(big.Int).Mul(new(big.Int).Add(big.NewInt(-1), new(big.Int).Mul(big.NewInt(sign), s)), inverseD), p)
+		if y := sqrt(ySquared); y != nil {
+			ys = append(ys, y, new(big.Int).Sub(p, y))
+		}
+	}
+	derived := map[string]bool{}
+	for _, y := range ys {
+		encoded := make([]byte, 32)
+		y.FillBytes(encoded)
+		slices.Reverse(encoded)
+		derived[string(encoded)] = true
+	}
+	listed := map[string]bool{}
+	for _, small := range rendezvousSmallOrderKeys {
+		listed[string(small[:])] = true
+	}
+	if len(derived) != 7 || len(listed) != 7 {
+		t.Fatalf("%d small-order encodings derived and %d listed, want 7 and 7", len(derived), len(listed))
+	}
+	for encoding := range derived {
+		if !listed[encoding] {
+			t.Errorf("the small-order encoding %x is derived and not listed", encoding)
+		}
+		if RendezvousKeyIsAcceptable([]byte(encoding)) {
+			t.Errorf("the small-order encoding %x is usable", encoding)
+		}
+	}
+	box := rendezvousTheKnownBox(t)
+	for _, key := range []ed25519.PrivateKey{box.depositKey, box.collectKey, box.strangerKey} {
+		if !RendezvousKeyIsAcceptable(key.Public().(ed25519.PublicKey)) {
+			t.Errorf("the key %x is refused as of small order", key.Public())
+		}
+	}
 }
