@@ -28,6 +28,7 @@ package messagegroup
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/urnetwork/message/syntax"
@@ -259,27 +260,23 @@ func AccountIdOf(root ed25519.PublicKey, salt [AccountIdSaltSize]byte) (AccountI
 	return accountIdOfHash(sha256.Sum256(preimage)), nil
 }
 
-// The ID's sixteen octets out of its hash, with UUIDv8's version and variant set. Octet 6's low
-// nibble is written idHash[6] % 16, which is ID1's (id_hash[6] & 0x0F) for an octet:
-// message/record_test.go reserves the & 0x0F spelling for the record header's class and bucket.
+// The ID's sixteen octets out of its hash, with UUIDv8's version and variant set, as D2's ID1
+// writes them. message/record_test.go's class-and-bucket gate reads `& 0x0F` as its own shape, and
+// holds this declaration, whole, as a reviewed context of this repository's code
+// (joinReviewedRepositoryContexts): what it masks is a UUID's version nibble over an octet of a
+// hash, and no retention byte. A changed body is under every rule of that gate again.
 func accountIdOfHash(idHash [sha256.Size]byte) AccountId {
 	var id AccountId
 	copy(id[:], idHash[:accountIdOctets])
-	id[6] = idHash[6]%16 | 0x80
+	id[6] = (idHash[6] & 0x0F) | 0x80
 	id[8] = (idHash[8] & 0x3F) | 0x80
 	return id
 }
 
 // String is the ID as the app shows it: 8-4-4-4-12 lowercase hex, 36 characters.
 func (self AccountId) String() string {
-	text := make([]byte, 0, 36)
-	for at, octet := range self {
-		if at == 4 || at == 6 || at == 8 || at == 10 {
-			text = append(text, '-')
-		}
-		text = append(text, phraseHexDigits[octet/16], phraseHexDigits[octet%16])
-	}
-	return string(text)
+	text := hex.EncodeToString(self[:])
+	return text[0:8] + "-" + text[8:12] + "-" + text[12:16] + "-" + text[16:20] + "-" + text[20:32]
 }
 
 // DeviceId is a device ID, D2's DID1: eight octets of a hash over the identity's root and the
@@ -318,17 +315,6 @@ func deviceIdOfHash(idHash [sha256.Size]byte) DeviceId {
 // String is the ID as the app shows it: four groups of four lowercase hex characters, 19 in all,
 // so that nobody takes it for an account ID.
 func (self DeviceId) String() string {
-	text := make([]byte, 0, 19)
-	for at, octet := range self {
-		if at == 2 || at == 4 || at == 6 {
-			text = append(text, '-')
-		}
-		text = append(text, phraseHexDigits[octet/16], phraseHexDigits[octet%16])
-	}
-	return string(text)
+	text := hex.EncodeToString(self[:])
+	return text[0:4] + "-" + text[4:8] + "-" + text[8:12] + "-" + text[12:16]
 }
-
-// The lowercase hex digits both IDs are written in, one for each half of an octet: octet/16 and
-// octet%16, which are the nibble shift and mask message/record_test.go reserves for the record
-// header, spelled as the arithmetic they are.
-const phraseHexDigits = "0123456789abcdef"

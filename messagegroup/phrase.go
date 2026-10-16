@@ -79,7 +79,7 @@ var phraseList, phraseListIndex = mustReadPhraseList(bip39EnglishFile)
 // its line endings is the likely cause -- would make phrases nobody else can read, so it stops
 // the process at initialisation rather than write a word from it.
 func mustReadPhraseList(file string) ([phraseListSize]string, map[string]uint16) {
-	if subtle.ConstantTimeCompare(phraseListDigest(file), bip39EnglishSha256[:]) != 1 {
+	if sha256.Sum256([]byte(file)) != bip39EnglishSha256 {
 		panic(fmt.Errorf("messagegroup: bip39_english.txt is not the BIP-39 English list its SHA-256 pins: %w", ErrRecoveryPhraseList))
 	}
 	var list [phraseListSize]string
@@ -87,7 +87,7 @@ func mustReadPhraseList(file string) ([phraseListSize]string, map[string]uint16)
 	count := 0
 	start := 0
 	for at := 0; at < len(file); at++ {
-		if phraseSymbols[file[at]] != phraseSymbolSpace {
+		if file[at] != '\n' {
 			continue
 		}
 		if count == phraseListSize {
@@ -103,12 +103,6 @@ func mustReadPhraseList(file string) ([phraseListSize]string, map[string]uint16)
 			count, len(index), phraseListSize, ErrRecoveryPhraseList))
 	}
 	return list, index
-}
-
-// The list file's SHA-256, for the pin.
-func phraseListDigest(file string) []byte {
-	sum := sha256.Sum256([]byte(file))
-	return sum[:]
 }
 
 // RecoveryPhrase is a recovery phrase, version 1: its 267 bits, held as P34.
@@ -299,10 +293,10 @@ type phraseReading struct {
 func (self *phraseReading) take(phraseFold string) {
 	for at := 0; at < len(phraseFold); at++ {
 		symbol := phraseFold[at]
-		switch phraseSymbols[symbol] {
-		case phraseSymbolSpace:
+		switch {
+		case symbol == ' ':
 			self.end()
-		case phraseSymbolLetter:
+		case 'a' <= symbol && symbol <= 'z':
 			if self.length < phraseLongestWord {
 				self.typedLetters[self.length] = symbol
 			}
@@ -347,35 +341,12 @@ const phraseLetters = "abcdefghijklmnopqrstuvwxyz"
 // A fold that is one mark outside a to z: what every code point the spans do not list folds to.
 const phraseFoldJunk = "#"
 
-// The three symbols a fold is written in, as the class an octet of a fold, or of the list file, is
-// looked up to. A class is an int and not an octet, so deciding on one is not a comparison of
-// octets: mls/framing_guard_test.go holds that every comparison of octets this package makes goes
-// through crypto/subtle, and the tokenizer obeys it by reading each octet's class out of a table
-// rather than comparing the octet with anything.
-type phraseSymbol int
-
-const (
-	// anything that is neither a to z nor white space, which a fold writes as '#'
-	phraseSymbolMark phraseSymbol = iota
-	phraseSymbolLetter
-	phraseSymbolSpace
-)
-
-// Each octet's class: A to Z and a to z are letters, the six ASCII white space characters are
-// space, and every other octet is a mark.
-var phraseSymbols = phraseSymbolTable()
-
-func phraseSymbolTable() [256]phraseSymbol {
-	var table [256]phraseSymbol
-	for letter := range len(phraseLetters) {
-		table['a'+letter] = phraseSymbolLetter
-		table['A'+letter] = phraseSymbolLetter
-	}
-	for _, space := range phraseAsciiSpaces {
-		table[space] = phraseSymbolSpace
-	}
-	return table
-}
+// A fold is written in three symbols: a to z, a space for any white space, and '#' for anything
+// else. take reads them, and mustReadPhraseList reads the list file's line feeds, as the decoders
+// they are, octet by octet with go's comparisons: neither compares a secret with anything, and a
+// table of classes would buy no constant time, since the word a fold spells is looked up in a map
+// in any case. mls/framing_guard_test.go's octet comparison gate holds the two as a decoder's, in
+// rows scoped to these two declarations (LRI R65 item 7).
 
 // The ASCII white space characters, which are unicode.IsSpace's below U+0080.
 const phraseAsciiSpaces = "\t\n\v\f\r "

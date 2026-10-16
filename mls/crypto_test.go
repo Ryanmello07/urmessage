@@ -8227,6 +8227,12 @@ var cryptoImportPaths = []string{
 	// true. It arrived with identity phase 1's Task 10, on the same terms as fmt.
 	`"embed"`,
 	`"encoding/binary"`,
+	// encoding/hex is ../messagegroup's lowercase hex for the account ID and the device ID, the
+	// two public IDs the app shows (identity_keys.go's String methods; D2 ID1 and DID1). It is
+	// pure go over the octets it is handed and consults no environment. It arrived with the fix
+	// round after the review of identity phase 1's Tasks 8 to 10 (LRI R68), when the IDs' hand
+	// written nibble arithmetic, spelled around message/record_test.go's gate, was retired.
+	`"encoding/hex"`,
 	`"errors"`,
 	`"fmt"`,
 	// mls itself, reached from ../messagegroup and in that direction only. It is what keeps the one

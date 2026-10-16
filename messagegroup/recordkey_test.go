@@ -278,9 +278,18 @@ func TestTheAeadMaterialSplitsFiftySixIntoAKeyAndAnExtendedNonce(t *testing.T) {
 // another by concatenation.
 //
 // The CLASS is derived off the syntax tree and is not the four names this task added: every
-// package level string constant of this package's production source whose value this package
-// hands to keyScheduleExpand as an info. A fifth label arriving with a shared stem is judged by
-// this gate without anybody extending it.
+// package level string constant of this package's production source NAMED DIRECTLY in an argument
+// of a call that reaches the kdf -- an expansion's info, and an extraction's salt too. A fifth
+// label arriving with a shared stem, and named that way, is judged by this gate without anybody
+// extending it.
+//
+// WHAT IS OUTSIDE IT, measured by the review of identity phase 1's Tasks 8 to 10 (L2-04) and said
+// here rather than claimed away. A label written into an info through syntax.Writer.WriteRaw is
+// not named in the call's arguments, so "iskgen/v1", "wt/v1", "mid/v1" and the wrap's info are
+// outside the class; and so are most of the prefix relations among this package's string
+// constants, 16 of 18 when this was written -- "URmessage/v1" is the whole of most labels here,
+// the identity layer's signature labels among them, and the wrap's info the whole of its salt.
+// Those labels are held by their own known answers, not by this gate.
 //
 // The pair this exists for is rec/v1/head and rec/v1/body, which agree over eleven of their
 // fifteen characters. A single constant with the tail substituted is one edit from handing a
@@ -349,8 +358,9 @@ func TestTheLadderLabelsAreSeparateConstantsAndNoneIsBuiltFromAnother(t *testing
 	// two constants, is untouched and is what would catch "rec/v1/head" + "-bind".
 	//
 	// AND THE EXEMPTION IS EXACTLY TWO PAIRS, each a normative string. A third prefix relation
-	// fails here whatever it is, including one built out of either label -- so each carve-out is a
-	// fact about a spec string rather than a hole in the rule. WHAT WOULD REMOVE THIS ONE: a spec
+	// between two labels of the class fails here -- so each carve-out is a fact about a spec string
+	// rather than a hole in the rule; a relation with a label outside the class is not judged here
+	// at all (see the class above). WHAT WOULD REMOVE THIS ONE: a spec
 	// label that is not an extension of an existing one ("rec/v1/hbind" would do), which is
 	// msgrepo's to choose and is reported as such rather than taken here.
 	//
@@ -362,9 +372,11 @@ func TestTheLadderLabelsAreSeparateConstantsAndNoneIsBuiltFromAnother(t *testing
 	// octets, each padded with zeros to SHA-256's sixty four octet block, so they differ at octet
 	// twelve, '/' against zero -- two keys, two functions, and no input to either that the other
 	// answers. HMAC's one key equivalence is a key and the same key with zeros appended, and
-	// "/wrap-salt" is not zeros. Reaching one salt from the other takes a deliberate slice, which
-	// the concatenation half below would see. The two extractions are checked below to answer
-	// different roots from one input.
+	// "/wrap-salt" is not zeros. Reaching one salt from the other takes a deliberate slice AT THE
+	// USE SITE, and this gate does not see one: the concatenation half below reads expansions'
+	// infos only. The known answers catch it -- the review's mutant M6, the wrap's salt sliced to
+	// the phrase salt's length, is killed by TestTheWrapDoorMatchesItsKnownAnswers and passes this
+	// gate. The two extractions are checked below to answer different roots from one input.
 	exempt := map[string]bool{
 		"recordAeadHeadInfo|recordHeadBindInfo": true,
 		"phraseMasterKeySalt|wrapSaltLabel":     true,

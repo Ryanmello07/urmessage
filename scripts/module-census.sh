@@ -29,6 +29,7 @@ declare -A wiring=(
   [sdk/liveprobe/go.mod]="command"
   [sdk/cp3b/go.mod]="go"
   [protocol/testdata/wiregolden/go.mod]="wiregolden"
+  [messagegroup/testdata/nfkdgen/go.mod]="nfkdgen"
   [sdk/cgo/go.mod]="composed"
   [sdk/cgo/loopback.go.mod]="loopback"
 )
@@ -46,6 +47,7 @@ declare -A steps=(
   [root]="verify tidy build vet mains test protobuf platforms fuzz"
   [sdk]="verify tidy build vet mains test protobuf platforms"
   [wiregolden]="verify test:orig test:new base-pinned cmp-connect-golden cross-decode:new cross-decode:orig"
+  [nfkdgen]="verify regenerated"
   [composed]="compose verify tidy def-current library toolchain exports vet test protobuf"
   [loopback]="tidy loopback-library"
 )

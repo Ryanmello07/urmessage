@@ -11,6 +11,7 @@ package messagegroup
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -43,24 +44,15 @@ const bip39EnglishSha256Hex = "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8e
 
 func phraseHexOctets(t *testing.T, text string) []byte {
 	t.Helper()
-	octets := make([]byte, len(text)/2)
-	for at := range octets {
-		high := strings.IndexByte(phraseHexDigits, text[2*at])
-		low := strings.IndexByte(phraseHexDigits, text[2*at+1])
-		if high < 0 || low < 0 || len(text)%2 != 0 {
-			t.Fatalf("%q is not lowercase hex", text)
-		}
-		octets[at] = byte(high*16 + low)
+	octets, err := hex.DecodeString(text)
+	if err != nil || hex.EncodeToString(octets) != text {
+		t.Fatalf("%q is not lowercase hex: %v", text, err)
 	}
 	return octets
 }
 
 func phraseHexText(octets []byte) string {
-	text := make([]byte, 0, 2*len(octets))
-	for _, octet := range octets {
-		text = append(text, phraseHexDigits[octet/16], phraseHexDigits[octet%16])
-	}
-	return string(text)
+	return hex.EncodeToString(octets)
 }
 
 // The test's own decoding of 25 indices: P34, the checksum the words carry, and whether it is

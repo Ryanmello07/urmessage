@@ -1049,6 +1049,7 @@ func TestFramingUsesConstantTimeComparison(t *testing.T) {
 		t.Fatal("the scan reads no root at all, so this gate cleared every comparison having read nothing")
 	}
 	judged, read := 0, 0
+	excused := map[[3]string][]string{}
 	for _, root := range roots {
 		checked := typeCheckedBodiesOf(t, root)
 		onDisk := rootSourcePaths(t, root)
@@ -1061,7 +1062,12 @@ func TestFramingUsesConstantTimeComparison(t *testing.T) {
 		read += len(declarations)
 		reported := 0
 		for _, declaration := range declarations {
+			row, isDecoder := framingDecoderRowOf(root, declaration)
 			for _, one := range declaration.comparisons {
+				if isDecoder {
+					excused[row] = append(excused[row], one.rendered)
+					continue
+				}
 				reported++
 				t.Errorf("%s at %s decides %q, which is a %s comparison of octets in variable time; every comparison of octets in this tree goes through %s, reached by CryptoProvider.MacVerify where a tag is what is being compared",
 					declaration.name, one.where, one.rendered, one.shape, theSanctionedComparison())
@@ -1070,11 +1076,99 @@ func TestFramingUsesConstantTimeComparison(t *testing.T) {
 		t.Logf("%s: %d production files read with their bodies type checked, %d top level declarations judged, %d comparisons of octets spelled as ordinary go equality",
 			root, len(checked.paths), len(declarations), reported)
 	}
+	// THE DECODER ROWS, HELD BOTH WAYS, and what they excused printed: each row names a declaration
+	// that still decides at least one comparison here, so no row outlives what it excused
+	for row := range framingDecoderComparisons {
+		t.Logf("decoder row %v excused %q", row, excused[row])
+		if len(excused[row]) == 0 {
+			t.Errorf("framingDecoderComparisons names %v, which decides no comparison of octets in the roots read; a row that excuses nothing reads as coverage", row)
+		}
+	}
 	if judged == 0 {
 		t.Fatal("no production file was judged, so this gate reported clean having read nothing")
 	}
 	if read == 0 {
 		t.Fatal("no top level declaration was judged, so this gate reported clean having opened every file and read nothing inside one")
+	}
+}
+
+// THE DECLARATIONS WHOSE COMPARISONS OF OCTETS ARE A DECODER'S, scoped by root, file and
+// declaration, under LRI R65 item 7: no code is spelled around a gate. Where a gate's subject is not
+// the code's subject, the code keeps its natural spelling, and the gate gains a row with its reason
+// and a control.
+//
+// THE REASON IS THIS FILE'S OWN, given for mls/syntax below: a decoder's job IS to read octets at
+// offsets. The two rows are the recovery phrase's tokenizer and the word list's loader in
+// ../messagegroup's phrase.go. The review of identity phase 1's Tasks 8 to 10 found both spelled
+// around this gate (L2-08): the tokenizer read each octet's class out of a table, and the loader
+// compared the list's digest with crypto/subtle, and neither bought constant time -- the word a
+// fold spells is looked up in a go map, and the switch on the class branches. Neither compares a
+// secret with anything: a fold is one of a to z, a space or '#', and the list and its pin are
+// public. Everything else in phrase.go, P34's equality and the checksum's included, is under the
+// rule, and TestTheDecoderRowsExcuseTheirOwnDeclarationsAndNothingBeside is the control.
+var framingDecoderComparisons = map[[3]string]string{
+	{"../messagegroup", "phrase.go", "take"}: "the tokenizer, reading one code point's fold a symbol at a time " +
+		"and ending a word at a space; the word it gathers is looked up in the list's map",
+	{"../messagegroup", "phrase.go", "mustReadPhraseList"}: "the vendored BIP-39 list read once at " +
+		"initialisation: its line feeds, and its SHA-256 against the pin F3 X1 publishes, both public",
+}
+
+// framingDecoderRowOf answers the decoder row one declaration of one root falls under, if any:
+// keyed by the root, the BASE name of the declaration's file, and the declaration's name, so that a
+// row covers one body in one file and nothing that merely shares a name.
+func framingDecoderRowOf(root string, declaration octetDeclaration) ([3]string, bool) {
+	file := declaration.where
+	for range 2 {
+		if at := strings.LastIndex(file, ":"); 0 <= at {
+			file = file[:at]
+		}
+	}
+	row := [3]string{root, filepath.Base(file), declaration.name}
+	_, isDecoder := framingDecoderComparisons[row]
+	return row, isDecoder
+}
+
+// The decoder rows' control: a package written in a file of the name a row scopes, with one
+// declaration the row names and one beside it that it does not, each deciding a comparison of
+// octets. The row must excuse the first and report the second, and the same declaration under
+// another file name, or another root, must be reported.
+const framingDecoderRowControl = `package control
+
+func take(fold string) int {
+	ended := 0
+	for at := 0; at < len(fold); at++ {
+		if fold[at] == ' ' {
+			ended++
+		}
+	}
+	return ended
+}
+
+func beside(fold string) bool {
+	return fold[0] == '#'
+}
+`
+
+func TestTheDecoderRowsExcuseTheirOwnDeclarationsAndNothingBeside(t *testing.T) {
+	checked := typeCheckedBodiesOfText(t, "phrase.go", framingDecoderRowControl)
+	verdicts := map[string]bool{}
+	for _, declaration := range octetComparisonsByDeclaration(checked) {
+		if len(declaration.comparisons) == 0 {
+			t.Fatalf("the control's %s decides no comparison of octets, so it controls nothing", declaration.name)
+		}
+		_, excused := framingDecoderRowOf("../messagegroup", declaration)
+		verdicts[declaration.name] = excused
+		if _, elsewhere := framingDecoderRowOf("../mls", declaration); elsewhere {
+			t.Errorf("the control's %s is excused under ../mls, which no row names", declaration.name)
+		}
+		renamed := declaration
+		renamed.where = strings.Replace(declaration.where, "phrase.go", "phrase_other.go", 1)
+		if _, moved := framingDecoderRowOf("../messagegroup", renamed); moved {
+			t.Errorf("the control's %s is excused in another file of the same root, %s", declaration.name, renamed.where)
+		}
+	}
+	if !verdicts["take"] || verdicts["beside"] || len(verdicts) != 2 {
+		t.Errorf("the decoder rows answered %v over the control; want take excused and beside reported", verdicts)
 	}
 }
 
