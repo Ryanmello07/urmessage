@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -86,6 +87,16 @@ func testSignerIdentity(t testing.TB, signer mls.SignaturePrivateKey, signerPub 
 		t.Fatalf("a recovery phrase: %v", err)
 	}
 	defer phrase.Erase()
+	return testListIdentity(t, phrase, 1, signer, signerPub)
+}
+
+// testListIdentity is testSignerIdentity over words and a base number of the caller's: the list a
+// phrase's key number 1 signs under that base number, naming the signer alone, a phrase device, as
+// its author. Two signers handed one phrase and two base numbers carry two lists of one root.
+func testListIdentity(t testing.TB, phrase *messagegroup.RecoveryPhrase, baseNumber uint64, signer mls.SignaturePrivateKey,
+	signerPub []byte) ([]byte, messagegroup.ExtensionBytes) {
+
+	t.Helper()
 	author := ed25519.NewKeyFromSeed(signer)
 	defer zeroizeState(author)
 	var identityKey []byte
@@ -98,7 +109,7 @@ func testSignerIdentity(t testing.TB, signer mls.SignaturePrivateKey, signerPub 
 		base := &messagegroup.DeviceListBase{
 			IdentityKey: keys.IdentityKey(),
 			KeyNumber:   1,
-			BaseNumber:  1,
+			BaseNumber:  baseNumber,
 			IssuedAtMs:  uint64(time.Now().UnixMilli()),
 			Devices:     []messagegroup.DeviceEntry{{DeviceKey: signerPub, Flags: messagegroup.DeviceFlagPhraseDevice}},
 			AuthorKey:   signerPub,
@@ -113,7 +124,7 @@ func testSignerIdentity(t testing.TB, signer mls.SignaturePrivateKey, signerPub 
 		own = &messagegroup.UrmessageIdentity{IskCert: *cert, Base: *base}
 		return nil
 	}); err != nil {
-		t.Fatalf("a signer's identity: %v", err)
+		t.Fatalf("a signer's identity under base %d: %v", baseNumber, err)
 	}
 	extension, err := own.Encode()
 	if err != nil {
@@ -635,5 +646,120 @@ func TestARestartOffersNewWords(t *testing.T) {
 		if slices.Contains(held, name) {
 			t.Errorf("an offer that was never typed back left %s on the disk", name)
 		}
+	}
+}
+
+// THE RESTORE RAISES THE HEADS, AND A HEAD ONLY RISES (identity phase 1's Task 12: Restore "loads the
+// identity, re-verifies every leaf, raises the heads"). A group holds two members of one other
+// identity, the first carrying that identity's base 2 and the second its base 1, in that order, so
+// the older list is the last one read. After the restore the store's heads hold that root at base 2
+// -- the newest list, not the last one -- beside this device's own root, at its own list.
+//
+// THE CONTROL: before the restore the store holds this device's own root alone.
+func TestARestoreRaisesTheHeadsToTheNewestListOfEachRoot(t *testing.T) {
+	dir := t.TempDir()
+	groupId := bytes.Repeat([]byte{0x48}, GroupIdBytes)
+	alice := openRestoreDevice(t, filepath.Join(dir, "alice"))
+	own, err := alice.device.requireIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// two members of one other identity: base 2 at the first leaf added, base 1 at the second
+	phrase, err := messagegroup.NewRecoveryPhrase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer phrase.Erase()
+	member := func(name string, baseNumber uint64) ([]byte, messagegroup.ExtensionBytes) {
+		store := openTestStore(t, filepath.Join(dir, name))
+		crypto, err := mls.NewCryptoProvider(deviceCipherSuite)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signer, signerPub, leafKeys, _, err := deviceIdentity(crypto, store, rand.Reader)
+		if err != nil {
+			t.Fatalf("%s's device identity: %v", name, err)
+		}
+		identityKey, list := testListIdentity(t, phrase, baseNumber, signer, signerPub)
+		engine, err := messagegroup.NewConnectMlsEngine(crypto, store, signer, mls.BasicCredential(identityKey), leafKeys)
+		if err != nil {
+			t.Fatalf("%s's engine: %v", name, err)
+		}
+		keyPackage, err := engine.NewBoundKeyPackage([]messagegroup.ExtensionBytes{list})
+		if err != nil {
+			t.Fatalf("%s's key package: %v", name, err)
+		}
+		return keyPackage, list
+	}
+	newer, newerList := member("bob-phone", 2)
+	older, olderList := member("bob-laptop", 1)
+	if bytes.Equal(newerList.Data, olderList.Data) {
+		t.Fatal("the two lists are one list")
+	}
+
+	handle, err := alice.device.createMlsGroup(groupId, false)
+	if err != nil {
+		t.Fatalf("createMlsGroup: %v", err)
+	}
+	pqSecret, err := messagegroup.NewPqSecret(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mlsSecret, err := handle.Export(storageExporterLabel, nil, storageExporterBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := handle.CommitAdd([][]byte{newer, older}); err != nil {
+		t.Fatalf("CommitAdd: %v", err)
+	}
+	if err := handle.MergePendingCommit(); err != nil {
+		t.Fatalf("MergePendingCommit: %v", err)
+	}
+	if err := alice.store.PutGroupRecord(&GroupRecord{
+		GroupId:        groupId,
+		PqSecret:       pqSecret,
+		GroupHandleKey: messagegroup.GroupHandleKey(messagegroup.StorageRoot(mlsSecret, pqSecret)),
+		Epoch:          1,
+		Opened:         true,
+	}); err != nil {
+		t.Fatalf("PutGroupRecord: %v", err)
+	}
+	handle.Close()
+	alice.close()
+
+	revived := openRestoreDevice(t, filepath.Join(dir, "alice"))
+	defer revived.close()
+	headsOf := func() map[string][]byte {
+		t.Helper()
+		rows, err := revived.store.IdentityHeads()
+		if err != nil {
+			t.Fatalf("IdentityHeads: %v", err)
+		}
+		heads := map[string][]byte{}
+		for _, row := range rows {
+			heads[string(row.Root)] = row.Identity
+		}
+		return heads
+	}
+	before := headsOf()
+	if len(before) != 1 || !bytes.Equal(before[string(own.record.Root)], own.extension.Data) {
+		t.Fatalf("CONTROL FAILED: before the restore the store holds %d head(s), and it holds this device's own root alone", len(before))
+	}
+	record := epochPersistTheOneRecord(t, revived.store, groupId)
+	if _, err := revived.device.restoreOne(revived.store, record, restoreTestNonce(), 1); err != nil {
+		t.Fatalf("restoreOne: %v", err)
+	}
+	after := headsOf()
+	if len(after) != 2 || !bytes.Equal(after[string(own.record.Root)], own.extension.Data) {
+		t.Errorf("after the restore the store holds %d head(s), and this device's own root's is not its own list", len(after))
+	}
+	other, err := messagegroup.ParseUrmessageIdentity(newerList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held := after[string(other.Base.IdentityKey)]; !bytes.Equal(held, newerList.Data) {
+		t.Errorf("after the restore the other root's head is the list of %d octets, want base 2's: the newest list, and not the last one read",
+			len(held))
 	}
 }
