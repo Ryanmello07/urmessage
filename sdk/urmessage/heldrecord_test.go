@@ -188,8 +188,10 @@ func TestAStoreThatCannotAnswerRefusesTheJoinAndTheFoundingOfThatGroupAndOfNoOth
 	durable := openTestStore(t, t.TempDir())
 	store := &deafStore{DurableStateStore: durable}
 	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	testIdentify(t, device)
 	inviteInto := func(groupId []byte) *Invite {
 		founder, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("a founder's nonce"))
+		testIdentify(t, founder)
 		if err := founder.Connect(ctx); err != nil {
 			t.Fatalf("a founder's Connect: %v", err)
 		}

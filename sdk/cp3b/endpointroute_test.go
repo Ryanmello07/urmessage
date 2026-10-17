@@ -198,6 +198,7 @@ func (self *endpointWorld) deviceAndRoute(t *testing.T, name string) (*urmessage
 		t.Fatalf("%s: urmessage.NewDevice: %v", name, err)
 	}
 	t.Cleanup(func() { device.Close() })
+	identifyDevice(t, name, device)
 	return device, route, transport
 }
 

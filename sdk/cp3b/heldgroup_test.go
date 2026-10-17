@@ -77,6 +77,8 @@ func watchedDevice(t *testing.T, world *world, name string) (*urmessage.Device, 
 		transport.Close()
 		client.Close()
 	})
+	// before the gate is armed, so the self group's founding never meets it
+	world.identify(t, name, device)
 	return device, watch
 }
 
@@ -150,13 +152,20 @@ func TestTwoJoinsIntoOneGroupIdThatOverlapAdmitExactlyOne(t *testing.T) {
 	if held := dave.Groups(); len(held) != 1 || held[0] != honestAnswer.group {
 		t.Fatalf("dave holds %d group(s) and the one the honest invite joined is not the one he holds", len(held))
 	}
-	// THE DISK, which is where the second join's damage would be: one record, at the honest epoch
+	// THE DISK, which is where the second join's damage would be: one record of the group, at the
+	// honest epoch, beside the record of dave's own self group (identity phase 1's Task 12)
 	records, err := watch.DurableStateStore.GroupRecords()
-	if err != nil || len(records) != 1 {
-		t.Fatalf("dave's store holds %d record(s): %v", len(records), err)
+	if err != nil || len(records) != 2 {
+		t.Fatalf("dave's store holds %d record(s), and it holds the group's and its self group's: %v", len(records), err)
 	}
-	if !bytes.Equal(records[0].GroupId, scene.groupId) || records[0].Epoch != 2 {
-		t.Fatalf("dave's record names epoch %d, and the honest invite joined epoch 2: the second join wrote its record over the first's", records[0].Epoch)
+	var joined *urmessage.GroupRecord
+	for _, record := range records {
+		if bytes.Equal(record.GroupId, scene.groupId) {
+			joined = record
+		}
+	}
+	if joined == nil || joined.Epoch != 2 {
+		t.Fatalf("dave's record of the group is %+v, and the honest invite joined epoch 2: the second join wrote its record over the first's", joined)
 	}
 	// and the group he holds is the real one: it reads what the real founder seals next
 	canary := scene.say(t, "alice", scene.aliceGroup)

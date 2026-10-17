@@ -517,7 +517,7 @@ func TestTheRemovalPartRefusesEveryShapeThisBuildDidNotWrite(t *testing.T) {
 // this door does not model is the store write, which [rotWorld.enrollAt] makes for its own reasons.
 func (self *rotWorld) readmit(committer *rotMember, removed *rotMember, receivers ...*rotMember) *rotMember {
 	self.t.Helper()
-	keyPackage, err := removed.dev.engine.NewKeyPackage()
+	keyPackage, err := removed.dev.keyPackage()
 	if err != nil {
 		self.t.Fatalf("%s's key package for the re-add: %v", removed.name, err)
 	}

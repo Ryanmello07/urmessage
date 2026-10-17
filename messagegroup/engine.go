@@ -123,6 +123,21 @@ type GroupEngine interface {
 	// Welcome naming the id its target expects passes the match. What the match buys is that the
 	// id a caller judged -- is this a group I already hold? -- is the id that gets written.
 	JoinFromWelcomeInto(welcome []byte, ratchetTree []byte, groupId []byte) (GroupHandle, error)
+
+	// NewBoundKeyPackage and CreateBoundGroup are two of the four methods Spec A A-36 designs for
+	// the identity layer (section 6, its amendment of 2026-10-16), transcribed as section 6 has them
+	// (identity phase 1's Task 12; LRI R64).
+	//
+	// NewBoundKeyPackage is a key package whose leaf carries urmessage_leaf_keys and then exactly
+	// leafExtensions, in order; the identity layer passes 0xF005. NewKeyPackage stays, for the one
+	// profile-1 key package that a device with no identity makes for a link (section 5.14).
+	NewBoundKeyPackage(leafExtensions []ExtensionBytes) (keyPackage []byte, err error)
+	// CreateBoundGroup is a founding whose founder's leaf carries leafExtensions after
+	// urmessage_leaf_keys, and whose context carries contextExtensions beside 0x0003 and 0xF001.
+	// The engine requires 0xF004 and 0xF005 of every group it founds by this door, and 0xF006 as
+	// well when the context carries it, as a system group's does (section 3.4). CreateGroup stays,
+	// and founds no group of I1.
+	CreateBoundGroup(groupId []byte, policy []byte, leafKeys []byte, leafExtensions []ExtensionBytes, contextExtensions []ExtensionBytes) (GroupHandle, error)
 }
 
 // GroupHandle is the entire MLS surface the storage layer is allowed to see.
@@ -168,6 +183,11 @@ type GroupHandle interface {
 	// every absence on this interface is an error and never a zero value, and a nil identity
 	// beside an empty role would read downstream as an unnamed member rather than as nobody.
 	RoleAt(leaf uint32) (identityPub []byte, role string, err error)
+	// LeafAt is a leaf's credential, signature key and extensions, as the current tree holds them,
+	// which the binding rules read: the fourth of Spec A A-36's methods this commit transcribes
+	// (section 6; identity phase 1's Task 12). A leaf no member stands at is an error. Every array
+	// of the answer is the caller's.
+	LeafAt(leaf uint32) (*LeafView, error)
 
 	// the two named secrets of MASTER section 8.2, and the exporter. Nothing else: EpochSecret
 	// is deliberately absent, which is guardrail G6 seen from this side -- an accessor taking a
@@ -415,6 +435,15 @@ type ProcessedMember struct {
 type ExtensionBytes struct {
 	Type uint16
 	Data []byte
+}
+
+// LeafView is one leaf as LeafAt answers it (Spec A A-36, section 6): the credential's identity,
+// the signature key and the extensions, in the leaf's order, which is what
+// VerifyLeafBinding reads.
+type LeafView struct {
+	Credential   []byte
+	SignatureKey []byte
+	Extensions   []ExtensionBytes
 }
 
 // PendingEpoch is the epoch a handle's OWN staged commit would open, as the committer is allowed
@@ -679,6 +708,20 @@ func (self *connectMlsEngine) Suite() uint16 {
 // put for exactly that reason: erased first, the store would hold zeros where the init private
 // belongs and every Welcome addressed here would be unopenable.
 func (self *connectMlsEngine) NewKeyPackage() ([]byte, error) {
+	return self.newKeyPackage(nil)
+}
+
+// NewBoundKeyPackage is NewKeyPackage with the leaf carrying urmessage_leaf_keys and then exactly
+// leafExtensions, in order: the identity layer's key package, whose leaf carries 0xF005 (Spec A
+// A-36, section 6). Every body is cloned on the way in, and everything NewKeyPackage's header
+// says of what is persisted and what is erased holds of this door too, since it is that body.
+func (self *connectMlsEngine) NewBoundKeyPackage(leafExtensions []ExtensionBytes) ([]byte, error) {
+	return self.newKeyPackage(mlsExtensionsOf(leafExtensions))
+}
+
+// newKeyPackage is both doors' one body: the leaf carries urmessage_leaf_keys and then exactly
+// the extensions it is handed.
+func (self *connectMlsEngine) newKeyPackage(leafExtensions []mls.Extension) ([]byte, error) {
 	leafKeys, err := mls.ParseLeafKeysExtension(self.leafKeys)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrEngineLeafKeys, err)
@@ -689,7 +732,7 @@ func (self *connectMlsEngine) NewKeyPackage() ([]byte, error) {
 	}
 	keyPackage, initPrivate, encryptPrivate, err := mls.NewKeyPackageWithSigner(self.crypto,
 		self.crypto.Suite(), self.signer, self.cred, engineCapabilities(),
-		[]mls.Extension{leafKeysExtension})
+		append([]mls.Extension{leafKeysExtension}, leafExtensions...))
 	if err != nil {
 		return nil, err
 	}
@@ -719,21 +762,49 @@ func (self *connectMlsEngine) NewKeyPackage() ([]byte, error) {
 // names an mls extension type, and the tagging is done here where the tag and the body are put
 // together in one statement.
 func (self *connectMlsEngine) CreateGroup(groupId []byte, policy []byte, leafKeys []byte) (GroupHandle, error) {
+	return self.createGroup(groupId, policy, leafKeys, nil, nil)
+}
+
+// CreateBoundGroup is CreateGroup with the founder's leaf carrying leafExtensions after
+// urmessage_leaf_keys, and the context carrying contextExtensions beside 0x0003 and 0xF001 (Spec A
+// A-36, section 6). The group requires 0xF004 and 0xF005 of every member, as every group this
+// engine founds does, and 0xF006 as well when the context carries it: a system group's
+// requirement (section 3.4). Whether it does is asked of mls.FindExtensionEntry, the one door
+// for picking an entry out of a list by its type.
+func (self *connectMlsEngine) CreateBoundGroup(groupId []byte, policy []byte, leafKeys []byte,
+	leafExtensions []ExtensionBytes, contextExtensions []ExtensionBytes) (GroupHandle, error) {
+
+	return self.createGroup(groupId, policy, leafKeys, mlsExtensionsOf(leafExtensions), mlsExtensionsOf(contextExtensions))
+}
+
+// createGroup is both doors' one body.
+func (self *connectMlsEngine) createGroup(groupId []byte, policy []byte, leafKeys []byte,
+	leafExtensions []mls.Extension, contextExtensions []mls.Extension) (GroupHandle, error) {
+
 	parsedLeafKeys, err := mls.ParseLeafKeysExtension(leafKeys)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrEngineLeafKeys, err)
 	}
+	required := engineRequiredCapabilities()
+	_, isSystemGroup, err := mls.FindExtensionEntry(contextExtensions, mls.ExtensionTypeUrmessageGroupPurpose)
+	if err != nil {
+		return nil, err
+	}
+	if isSystemGroup {
+		required = engineSystemRequiredCapabilities()
+	}
 	group, err := mls.NewGroup(&mls.GroupConfig{
 		Suite:   self.crypto.Suite(),
 		GroupId: groupId,
-		Extensions: []mls.Extension{{
+		Extensions: append([]mls.Extension{{
 			ExtensionType: mls.ExtensionTypeUrmessageGroupPolicy,
 			ExtensionData: policy,
-		}},
-		RequiredCaps: engineRequiredCapabilities(),
-		Crypto:       self.crypto,
-		Store:        self.store,
-		LeafKeys:     *parsedLeafKeys,
+		}}, contextExtensions...),
+		RequiredCaps:   required,
+		Crypto:         self.crypto,
+		Store:          self.store,
+		LeafKeys:       *parsedLeafKeys,
+		LeafExtensions: leafExtensions,
 	}, self.signer, self.cred)
 	if err != nil {
 		return nil, err
@@ -991,20 +1062,40 @@ func engineCapabilities() mls.Capabilities {
 			mls.ExtensionTypeUrmessageGroupPolicy,
 			mls.ExtensionTypeUrmessageLeafKeys,
 			mls.ExtensionTypeUrmessageJoinSeal,
+			mls.ExtensionTypeUrmessageIdentity,
+			mls.ExtensionTypeUrmessageGroupPurpose,
 		},
 		Proposals:   []mls.ProposalType{},
 		Credentials: []mls.CredentialType{mls.CredentialTypeBasic},
 	}
 }
 
-// engineRequiredCapabilities is what every group this engine founds requires of a joiner: the two
-// private use extension types the profile puts on every leaf and every group context.
+// engineRequiredCapabilities is what every group this engine founds requires of a joiner, as Spec
+// A section 3.4 fixes it for a conversation at A-36: the policy and the leaf keys the profile puts
+// on every group context and every leaf, the join seal every leaf lists, and urmessage_identity,
+// which every leaf but a link group's profile-1 leaf carries (identity phase 1's Task 12; LRI R68,
+// the review's L3-8). A key package is made only after engineCapabilities lists the last.
 func engineRequiredCapabilities() mls.RequiredCapabilities {
 	return mls.RequiredCapabilities{
 		ExtensionTypes: []mls.ExtensionType{
 			mls.ExtensionTypeUrmessageGroupPolicy,
 			mls.ExtensionTypeUrmessageLeafKeys,
 			mls.ExtensionTypeUrmessageJoinSeal,
+			mls.ExtensionTypeUrmessageIdentity,
+		},
+	}
+}
+
+// engineSystemRequiredCapabilities is a system group's requirement, section 3.4's second list:
+// a conversation's, and urmessage_group_purpose, which a system group's context carries.
+func engineSystemRequiredCapabilities() mls.RequiredCapabilities {
+	return mls.RequiredCapabilities{
+		ExtensionTypes: []mls.ExtensionType{
+			mls.ExtensionTypeUrmessageGroupPolicy,
+			mls.ExtensionTypeUrmessageLeafKeys,
+			mls.ExtensionTypeUrmessageJoinSeal,
+			mls.ExtensionTypeUrmessageIdentity,
+			mls.ExtensionTypeUrmessageGroupPurpose,
 		},
 	}
 }
@@ -1093,6 +1184,21 @@ func (self *connectMlsHandle) RoleAt(leaf uint32) ([]byte, string, error) {
 		return member.IdentityPub, member.Role.String(), nil
 	}
 	return nil, "", fmt.Errorf("%w: leaf %d at epoch %d", ErrEngineMemberLeaf, leaf, self.group.Epoch())
+}
+
+// LeafAt reads one leaf off the current tree, through (*mls.Group).LeafNodeCopy, whose answer is a
+// deep copy: every array of the view is the caller's. A leaf no member stands at answers
+// ErrEngineMemberLeaf, as RoleAt's does.
+func (self *connectMlsHandle) LeafAt(leaf uint32) (*LeafView, error) {
+	node := self.group.LeafNodeCopy(mls.LeafIndex(leaf))
+	if node == nil {
+		return nil, fmt.Errorf("%w: leaf %d at epoch %d", ErrEngineMemberLeaf, leaf, self.group.Epoch())
+	}
+	return &LeafView{
+		Credential:   node.Credential.Identity,
+		SignatureKey: node.SignatureKey,
+		Extensions:   extensionBytesOf(node.Extensions),
+	}, nil
 }
 
 // Export is RFC 9420 section 8.5's exporter, which MASTER section 7 derives mls_secret from.

@@ -914,4 +914,24 @@ var (
 	// A group Restore refused this way is left with [Device.ForgetGroup], like any group that
 	// does not come back, and is founded again.
 	ErrGroupPredatesJoinSeal = errors.New("urmessage: this group was founded before invitations were sealed, so this build does not open it; leave it and start the group again")
+
+	// THE IDENTITY LAYER'S (identity phase 1's Task 12; Spec A A-36 section 7.2). Until an identity
+	// exists every call that needs one answers ErrNoIdentity, Device.KeyPackage and Device.CreateGroup
+	// among them; CreateIdentity and ConfirmWords do not need one.
+	ErrNoIdentity = errors.New("urmessage: this device has no identity yet: CreateIdentity, then ConfirmWords")
+	// CreateIdentity or ConfirmWords on a device that already has an identity.
+	ErrIdentityExists = errors.New("urmessage: this device already has an identity")
+	// ConfirmWords with no words offered: CreateIdentity first. A restart offers new words.
+	ErrNoWordsOffered = errors.New("urmessage: no recovery phrase has been offered on this device; CreateIdentity first")
+	// The words typed back are not the words shown: each wrong word is named by its position, and
+	// nothing is corrected.
+	ErrWordsDoNotMatch = errors.New("urmessage: the words typed back are not the words this device showed")
+	// The group's context does not REQUIRE urmessage_identity of its members, so it was founded by a
+	// build with no identity layer, whose leaves no member can bind. This build does not restore it
+	// (Device.Restore answers this inside ErrRestore); it is left with Device.ForgetGroup and
+	// founded again, as a group refused for ErrGroupPredatesJoinSeal is.
+	ErrGroupPredatesIdentity = errors.New("urmessage: this group was founded before the identity layer, so this build does not open it; leave it and start the group again")
+	// A leaf of the group does not bind to the identity it claims (messagegroup.VerifyLeafBinding),
+	// read off the tree the restore loaded. The group is not restored.
+	ErrGroupLeafUnbound = errors.New("urmessage: a leaf of this group does not bind to the identity it claims")
 )

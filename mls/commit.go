@@ -438,6 +438,31 @@ func (self *StagedCommit) LeafHasKeysAfter(leaf LeafIndex) bool {
 	return err == nil
 }
 
+// LeafNodeAfter is the POST-commit tree's leaf node at one leaf, as a deep copy the caller owns,
+// and nil for a leaf that is blank or outside the tree. See OccupiedLeavesAfter for which tree
+// this reads and why.
+//
+// IT IS THE ACCESSOR THE IDENTITY LAYER READS A STAGED LEAF THROUGH (identity phase 1's Task 12;
+// LRI R68, the review of Tasks 8 to 10, its L3-5). The binding rules read a leaf's credential, its
+// signature key and its extensions, and the receiving side reads them off the tree the group is
+// about to enter, before ApplyCommit -- Spec A section 6's ProcessedMember.SignatureKey and
+// .Extensions are this leaf's. LeafIdentityAfter and LeafHasKeysAfter answer one fact each; this
+// answers the leaf.
+//
+// THE COPY IS DEEP, for LeafIdentityAfter's reason: every array of the answer is the caller's,
+// and the staged tree, which MergePendingCommit installs and the new epoch's tree hash was taken
+// over, shares none of them.
+func (self *StagedCommit) LeafNodeAfter(leaf LeafIndex) *LeafNode {
+	if self.tree == nil {
+		return nil
+	}
+	node := self.tree.Leaf(leaf)
+	if node == nil {
+		return nil
+	}
+	return node.Clone()
+}
+
 // EpochAuthenticator is the new epoch's fork-detection value, as storage the caller owns.
 //
 // An ERASED staged commit answers nothing rather than the KDF.Nh zero bytes its erased schedule

@@ -572,3 +572,122 @@ func TestACommitterRefusesAnOwnLeafPatchThatEveryReceiverRefuses(t *testing.T) {
 		})
 	}
 }
+
+// THE THREE LEAF-NODE ACCESSORS ANSWER THE LEAF THEIR TREE HOLDS, AS A COPY (identity phase 1's Task
+// 12; LRI R68, the review of Tasks 8 to 10, its L3-5). The binding rules read a leaf's signature key
+// and its extensions, and each side reads them off a different tree:
+//   - the committer, off its own PENDING commit, whose own leaf is the post-commit one, the update
+//     path's key and the OwnLeafPatch's extensions, while OwnLeafNodeCopy still answers the live one;
+//   - a receiver, off the commit it has STAGED, before ApplyCommit, for any leaf of it;
+//   - anyone, off the CURRENT tree, which is LeafAt's tree one package over.
+//
+// Each answer is the caller's: writing into it moves nothing a second read answers.
+func TestTheLeafNodeAccessorsAnswerThePendingTheStagedAndTheCurrentLeafAsCopies(t *testing.T) {
+	crypto := testCrypto(t)
+	caps := testCapabilitiesListing(ExtensionTypeUrmessageIdentity)
+	withIdentity := func(m *testMember) []Extension {
+		return []Extension{testLeafKeys(t, m), {ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: testIdentityBody(m.Name)}}
+	}
+	group, joined, bob := testJoinedPair(t, crypto, "the-leaf-node-accessors", caps, withIdentity)
+	bobLeaf := joined.OwnLeafIndex()
+
+	// no pending commit yet: the pending accessor refuses by name
+	if _, err := joined.PendingLeafNode(bobLeaf); !errors.Is(err, ErrNoPendingCommit) {
+		t.Errorf("PendingLeafNode with nothing staged answered %v, want ErrNoPendingCommit", err)
+	}
+	before := group.LeafNodeCopy(bobLeaf)
+	if before == nil {
+		t.Fatal("LeafNodeCopy answers no leaf at bob's index")
+	}
+	oldBody := testIdentityBody(bob.Name)
+
+	newBody := []byte("the identity extension body bob's patch writes into his own leaf")
+	result, err := joined.CreateCommit(nil, nil, &CommitOptions{Force: true, OwnLeafPatch: &OwnLeafPatch{
+		Extensions: []Extension{{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: bytes.Clone(newBody)}},
+	}})
+	if err != nil {
+		t.Fatalf("bob's commit with an own-leaf patch: %v", err)
+	}
+	identityBodyOf := func(node *LeafNode) []byte {
+		t.Helper()
+		entry, found, findErr := FindExtensionEntry(node.Extensions, ExtensionTypeUrmessageIdentity)
+		if findErr != nil || !found {
+			t.Fatalf("the leaf carries no single identity extension: %v", findErr)
+		}
+		return entry.ExtensionData
+	}
+
+	// THE COMMITTER'S PENDING OWN LEAF: the patched body, the same signature key, a new encryption key
+	pending, err := joined.PendingLeafNode(bobLeaf)
+	if err != nil {
+		t.Fatalf("PendingLeafNode(bob): %v", err)
+	}
+	if !bytes.Equal(identityBodyOf(pending), newBody) {
+		t.Errorf("bob's pending own leaf carries %q, want the patch's body", identityBodyOf(pending))
+	}
+	if !bytes.Equal(pending.SignatureKey, before.SignatureKey) {
+		t.Error("bob's pending own leaf names another signature key; a patch sets extensions and keeps the key")
+	}
+	if bytes.Equal(pending.EncryptionKey, before.EncryptionKey) {
+		t.Error("bob's pending own leaf keeps the old encryption key, so it is not the path's leaf")
+	}
+	if live := joined.OwnLeafNodeCopy(); !bytes.Equal(identityBodyOf(live), oldBody) {
+		t.Error("OwnLeafNodeCopy answers the patch before the merge; the control on which tree the pending accessor reads")
+	}
+	if _, err := joined.PendingLeafNode(LeafIndex(7)); !errors.Is(err, ErrBlankLeaf) {
+		t.Errorf("PendingLeafNode at a leaf the staged tree does not hold answered %v, want ErrBlankLeaf", err)
+	}
+	// a copy: writing into the answer moves nothing a second read answers
+	pending.SignatureKey[0] ^= 0xFF
+	identityBodyOf(pending)[0] ^= 0xFF
+	again, err := joined.PendingLeafNode(bobLeaf)
+	if err != nil || !bytes.Equal(again.SignatureKey, before.SignatureKey) || !bytes.Equal(identityBodyOf(again), newBody) {
+		t.Errorf("writing into PendingLeafNode's answer moved the staged leaf (%v)", err)
+	}
+
+	// THE RECEIVER'S STAGED LEAF, before ApplyCommit
+	if err := joined.MergePendingCommit(); err != nil {
+		t.Fatalf("bob's merge: %v", err)
+	}
+	processed, err := group.ProcessMessage(result.Commit)
+	if err != nil {
+		t.Fatalf("the owner processes bob's commit: %v", err)
+	}
+	staged := processed.Commit
+	if staged == nil {
+		t.Fatal("the owner's processed commit carries no staged commit")
+	}
+	afterNode := staged.LeafNodeAfter(bobLeaf)
+	if afterNode == nil {
+		t.Fatal("LeafNodeAfter answers no leaf at bob's index of the staged tree")
+	}
+	if !bytes.Equal(identityBodyOf(afterNode), newBody) || !bytes.Equal(afterNode.SignatureKey, before.SignatureKey) {
+		t.Error("the owner's staged tree holds bob's leaf without the patch, or under another key")
+	}
+	if current := group.LeafNodeCopy(bobLeaf); !bytes.Equal(identityBodyOf(current), oldBody) {
+		t.Error("LeafNodeCopy answers the staged leaf before ApplyCommit; it reads the current tree")
+	}
+	if staged.LeafNodeAfter(LeafIndex(7)) != nil {
+		t.Error("LeafNodeAfter answers a leaf the staged tree does not hold")
+	}
+	identityBodyOf(afterNode)[0] ^= 0xFF
+	if !bytes.Equal(identityBodyOf(staged.LeafNodeAfter(bobLeaf)), newBody) {
+		t.Error("writing into LeafNodeAfter's answer moved the staged tree")
+	}
+	if err := group.ApplyCommit(processed); err != nil {
+		t.Fatalf("the owner applies bob's commit: %v", err)
+	}
+
+	// THE CURRENT TREE, after the merge, and a copy too
+	current := group.LeafNodeCopy(bobLeaf)
+	if !bytes.Equal(identityBodyOf(current), newBody) {
+		t.Errorf("after the commit the owner's tree holds %q at bob's leaf, want the patch's body", identityBodyOf(current))
+	}
+	current.Credential.Identity[0] ^= 0xFF
+	if bytes.Equal(group.LeafNodeCopy(bobLeaf).Credential.Identity, current.Credential.Identity) {
+		t.Error("writing into LeafNodeCopy's answer moved the live tree")
+	}
+	if group.LeafNodeCopy(LeafIndex(7)) != nil {
+		t.Error("LeafNodeCopy answers a leaf the tree does not hold")
+	}
+}

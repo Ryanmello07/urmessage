@@ -209,7 +209,7 @@ func crossProcessSeal(t *testing.T, root string) {
 	groupHandleKey := messagegroup.GroupHandleKey(messagegroup.StorageRoot(mlsSecret, pqSecret))
 
 	// the commit that opens epoch one, which is the alpha's only epoch.
-	keyPackage, err := bob.engine.NewKeyPackage()
+	keyPackage, err := bob.keyPackage()
 	if err != nil {
 		t.Fatalf("bob's key package: %v", err)
 	}
@@ -438,7 +438,10 @@ type crossProcessDevice struct {
 	crypto      mls.CryptoProvider
 	engine      messagegroup.GroupEngine
 	signer      mls.SignaturePrivateKey
+	// the credential identity every leaf of this fixture names: the identity key, since every group
+	// this build founds is bound (identity phase 1's Task 12), and extension is its own 0xF005
 	identityPub mls.SignaturePublicKey
+	extension   messagegroup.ExtensionBytes
 	leafKeys    []byte
 
 	// the fourth value deviceIdentity answers: the X-Wing seed under the public half inside
@@ -468,8 +471,10 @@ func openCrossProcessDevice(t *testing.T, root string) *crossProcessDevice {
 	if err != nil {
 		t.Fatalf("deviceIdentity: %v", err)
 	}
+	// AND THE IDENTITY, made in phase A as a Device makes it and read back in phase B
+	credential, extension := testFixtureIdentity(t, crypto, store, signer, signerPub, leafKeys)
 	engine, err := messagegroup.NewConnectMlsEngine(crypto, store, signer,
-		mls.BasicCredential(signerPub), leafKeys)
+		mls.BasicCredential(credential), leafKeys)
 	if err != nil {
 		t.Fatalf("the mls engine: %v", err)
 	}
@@ -480,7 +485,8 @@ func openCrossProcessDevice(t *testing.T, root string) *crossProcessDevice {
 		crypto:      crypto,
 		engine:      engine,
 		signer:      append(mls.SignaturePrivateKey(nil), signer...),
-		identityPub: append(mls.SignaturePublicKey(nil), signerPub...),
+		identityPub: append(mls.SignaturePublicKey(nil), credential...),
+		extension:   extension,
 		leafKeys:    leafKeys,
 		wrapSeed:    wrapSeed,
 	}
@@ -506,11 +512,17 @@ func (self *crossProcessDevice) createGroup(t *testing.T, groupId []byte) messag
 	if err != nil {
 		t.Fatalf("the group policy: %v", err)
 	}
-	handle, err := self.engine.CreateGroup(groupId, encoded.ExtensionData, self.leafKeys)
+	handle, err := self.engine.CreateBoundGroup(groupId, encoded.ExtensionData, self.leafKeys,
+		[]messagegroup.ExtensionBytes{self.extension}, nil)
 	if err != nil {
-		t.Fatalf("CreateGroup: %v", err)
+		t.Fatalf("CreateBoundGroup: %v", err)
 	}
 	return handle
+}
+
+// keyPackage is [Device.KeyPackage]'s body: a key package whose leaf carries this fixture's 0xF005.
+func (self *crossProcessDevice) keyPackage() ([]byte, error) {
+	return self.engine.NewBoundKeyPackage([]messagegroup.ExtensionBytes{self.extension})
 }
 
 func newCrossProcessSession(t *testing.T, handle messagegroup.GroupHandle, pqSecret []byte,

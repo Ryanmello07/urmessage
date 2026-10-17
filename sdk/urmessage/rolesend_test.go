@@ -73,7 +73,7 @@ func (self *roleWorld) say(sender *roleMember, text string) *sealed {
 func (self *roleWorld) addAndEnroll(committer *roleMember, name string) (*roleMember, *sealed) {
 	self.t.Helper()
 	dev := self.device(name)
-	keyPackage, err := dev.engine.NewKeyPackage()
+	keyPackage, err := dev.keyPackage()
 	if err != nil {
 		self.t.Fatalf("%s's key package: %v", name, err)
 	}

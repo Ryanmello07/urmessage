@@ -2,6 +2,7 @@ package urmessage
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -223,6 +224,16 @@ type DeviceStore interface {
 	// restart needs it.
 	PutPeerHeads(groupId []byte, heads []PeerHead) error
 	PeerHeads(groupId []byte) ([]PeerHead, error)
+
+	// the identity layer's three records (identity phase 1's Task 12; Spec A A-36 section 8.1):
+	// the identity record, the heads and the phrase key. Each read answers ErrStateNotFound for a
+	// store that holds none.
+	PutIdentity(record *IdentityRecord) error
+	Identity() (*IdentityRecord, error)
+	PutIdentityHeads(heads []IdentityHead) error
+	IdentityHeads() ([]IdentityHead, error)
+	PutPhraseKey(record *PhraseKeyRecord) error
+	PhraseKey() (*PhraseKeyRecord, error)
 }
 
 // PeerHead is the highest 5.6 stream index this device has AUTHENTICATED on one peer's receiver
@@ -863,6 +874,11 @@ const (
 	stateKindForgetting     byte = 8
 	stateKindPending        byte = 9
 	stateKindRecorded       byte = 10
+	// identity phase 1's three (Spec A A-36 section 8.1; LRI R62): the identity record, the heads,
+	// and the phrase key, which a phrase device alone keeps.
+	stateKindIdentity      byte = 11
+	stateKindIdentityHeads byte = 12
+	stateKindPhraseKey     byte = 13
 )
 
 // encodeStateRecord frames one record: magic, version, kind, the parts each length-prefixed, and
@@ -1180,16 +1196,73 @@ func (self *DurableStateStore) groupFolderNameOf(root string, entry os.DirEntry)
 	return canonical, true
 }
 
+// THE STORE ROOT'S OWN NAMES (identity phase 1's Task 12; Spec A A-36 section 8.1): every name this
+// store writes into its data directory, defined here and nowhere else, as the group folder's are
+// below. Every path helper builds its path from one of them, and
+// TestEveryRootPathIsOneOfTheStoresOwnNames holds the two together both ways and holds that no other
+// spelling of them stands in this file. The last three are the identity layer's: the identity
+// record, the heads and the phrase key, under the names section 8.1's table gives them.
+const (
+	stateRootDeviceName     = "device"
+	stateRootPrivateName    = "priv"
+	stateRootKeyPackageName = "kp"
+	stateRootGroupsName     = "group"
+	stateRootIdentityName   = "identity"
+	stateRootHeadsName      = "identity-heads"
+	stateRootPhraseKeyName  = "phrase-key"
+)
+
+// stateRootNames is the set above, as one list.
+var stateRootNames = []string{
+	stateRootDeviceName, stateRootPrivateName, stateRootKeyPackageName, stateRootGroupsName,
+	stateRootIdentityName, stateRootHeadsName, stateRootPhraseKeyName,
+}
+
+// stateRootNamesHeld answers which of the store's own root names a data directory holds, each
+// matched whole and without regard to case, as the group folder's reader matches its own. A STRAY
+// IS NEVER READ AS ONE (Property 5): a file another program left, a name that only begins like one
+// of the store's, and an unfinished write (`.writing-*`) are not among them. A directory that
+// cannot be listed is an error rather than an empty answer: what cannot be asked about is never
+// "nothing is here".
+func stateRootNamesHeld(dataDir string) ([]string, error) {
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s could not be listed: %w", ErrStateStoreState, dataDir, err)
+	}
+	held := []string{}
+	for _, entry := range entries {
+		for _, own := range stateRootNames {
+			if strings.EqualFold(entry.Name(), own) {
+				held = append(held, own)
+			}
+		}
+	}
+	return held, nil
+}
+
 func (self *DurableStateStore) privatePath(pub []byte) string {
-	return filepath.Join(self.dataDir, "priv", stateNameOf(pub))
+	return filepath.Join(self.dataDir, stateRootPrivateName, stateNameOf(pub))
 }
 
 func (self *DurableStateStore) keyPackagePath(ref []byte) string {
-	return filepath.Join(self.dataDir, "kp", stateNameOf(ref))
+	return filepath.Join(self.dataDir, stateRootKeyPackageName, stateNameOf(ref))
 }
 
 func (self *DurableStateStore) identityPath() string {
-	return filepath.Join(self.dataDir, "device")
+	return filepath.Join(self.dataDir, stateRootDeviceName)
+}
+
+// The identity layer's three records: store kinds 11, 12 and 13 (Spec A A-36 section 8.1).
+func (self *DurableStateStore) identityRecordPath() string {
+	return filepath.Join(self.dataDir, stateRootIdentityName)
+}
+
+func (self *DurableStateStore) identityHeadsPath() string {
+	return filepath.Join(self.dataDir, stateRootHeadsName)
+}
+
+func (self *DurableStateStore) phraseKeyPath() string {
+	return filepath.Join(self.dataDir, stateRootPhraseKeyName)
 }
 
 // THE STORE'S OWN NAMES IN A GROUP'S FOLDER (R34, item 9): every name this store writes into one
@@ -1216,7 +1289,7 @@ var stateGroupNames = []string{
 }
 
 func (self *DurableStateStore) groupDir(groupId []byte) string {
-	return filepath.Join(self.dataDir, "group", stateNameOf(groupId))
+	return filepath.Join(self.dataDir, stateRootGroupsName, stateNameOf(groupId))
 }
 
 func (self *DurableStateStore) groupRecordPath(groupId []byte) string {
@@ -1772,7 +1845,7 @@ func (self *DurableStateStore) eraseGroupsWithNoRecord(held [][]byte) ([]string,
 	if err := self.refuseIfClosed(); err != nil {
 		return nil, err
 	}
-	root := filepath.Join(self.dataDir, "group")
+	root := filepath.Join(self.dataDir, stateRootGroupsName)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -2037,6 +2110,18 @@ func (self *DurableStateStore) PutDeviceIdentity(signerPub []byte, signerPriv []
 	defer self.lock.Unlock()
 	if err := self.refuseIfClosed(); err != nil {
 		return err
+	}
+	// A DEVICE KEY IS NOT MINTED BESIDE AN IDENTITY THAT WOULD NOT NAME IT (identity phase 1's Task 12).
+	// The identity layer's records name this device's key in their list, so a store that holds them
+	// and has lost its device record is a store whose new key no list names: every leaf it made would
+	// fail its own binding. It is refused, on the store's own reading of its root, which reads only its
+	// own names.
+	if held, err := stateRootNamesHeld(self.dataDir); err != nil {
+		return err
+	} else if !slices.Contains(held, stateRootDeviceName) && (slices.Contains(held, stateRootIdentityName) ||
+		slices.Contains(held, stateRootHeadsName) || slices.Contains(held, stateRootPhraseKeyName)) {
+		return fmt.Errorf("%w: this store holds an identity and no device key, and a key minted here would be named by no list of it",
+			ErrStateStoreState)
 	}
 	if len(signerPub) == 0 || len(signerPriv) == 0 || len(leafKeys) == 0 {
 		return fmt.Errorf("%w: a device identity is a signature key pair and a leaf keys body, and one of the three is empty",
@@ -2349,7 +2434,7 @@ func (self *DurableStateStore) GroupRecords() ([]*GroupRecord, error) {
 	if err := self.refuseIfClosed(); err != nil {
 		return nil, err
 	}
-	root := filepath.Join(self.dataDir, "group")
+	root := filepath.Join(self.dataDir, stateRootGroupsName)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -2466,7 +2551,7 @@ func (self *DurableStateStore) GroupRecord(groupId []byte) (*GroupRecord, error)
 // by the id, so a record that named another group would be held by the list under an id the
 // one-id read answers "not held" for.
 func (self *DurableStateStore) groupRecordInLocked(name string) (*GroupRecord, error) {
-	dir := filepath.Join(self.dataDir, "group", name)
+	dir := filepath.Join(self.dataDir, stateRootGroupsName, name)
 	// A GROUP BEING LEFT IS NOT A GROUP TO RESTORE: its epoch states may already be gone, and a
 	// restore of it would fail at every launch. [Device.Restore] finishes its erase instead.
 	if _, err := os.Stat(filepath.Join(dir, stateGroupForgettingName)); err == nil {
@@ -2480,7 +2565,7 @@ func (self *DurableStateStore) groupRecordInLocked(name string) (*GroupRecord, e
 // the read's own error. A leave mark is held against it ([DurableStateStore.leaveMarkLocked]), and
 // that is the one reader that asks about a record while the mark stands.
 func (self *DurableStateStore) readGroupRecordLocked(name string) (*GroupRecord, error) {
-	dir := filepath.Join(self.dataDir, "group", name)
+	dir := filepath.Join(self.dataDir, stateRootGroupsName, name)
 	parts, err := self.readRecord(filepath.Join(dir, stateGroupRecordName), stateKindGroupRecord)
 	if err != nil {
 		if errors.Is(err, ErrStateNotFound) || classifyRead(err) != readPermanent {
@@ -2762,7 +2847,7 @@ const (
 // decided on. Each of those is the unproven class, but a mark naming another group, which keeps the
 // format sentinel it always had.
 func (self *DurableStateStore) leaveMarkLocked(name string) ([]byte, leaveMarkVerdict, error) {
-	path := filepath.Join(self.dataDir, "group", name, stateGroupForgettingName)
+	path := filepath.Join(self.dataDir, stateRootGroupsName, name, stateGroupForgettingName)
 	parts, err := self.readRecord(path, stateKindForgetting)
 	if errors.Is(err, ErrStateNotFound) {
 		return nil, leaveMarkNone, nil
@@ -2812,7 +2897,7 @@ func (self *DurableStateStore) laterIncarnationLocked(name string, decided uint6
 		return false, fmt.Errorf("%w: the leave mark in %s names epoch %d, and whether a record above it stands could not be read, so the mark decides nothing yet: %w",
 			notReadSentinel(classifyRead(err)), name, decided, err)
 	}
-	dir := filepath.Join(self.dataDir, "group", name, stateGroupEpochsName)
+	dir := filepath.Join(self.dataDir, stateRootGroupsName, name, stateGroupEpochsName)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || stateIsNotADirectory(dir) {
@@ -2861,7 +2946,7 @@ func (self *DurableStateStore) GroupsBeingForgotten() ([][]byte, error) {
 	if err := self.refuseIfClosed(); err != nil {
 		return nil, err
 	}
-	root := filepath.Join(self.dataDir, "group")
+	root := filepath.Join(self.dataDir, stateRootGroupsName)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -3296,4 +3381,194 @@ func (self *DurableStateStore) PeerHeads(groupId []byte) ([]PeerHead, error) {
 		})
 	}
 	return heads, nil
+}
+
+// ── the identity layer's three records (identity phase 1's Task 12; Spec A A-36 section 8.1) ────────
+
+// IdentityRecord is store kind 11, the identity record: the root, the chain, the current identity key
+// and the account ID's salt, and its ended mark. Every value in it is public but the mark, which is
+// this device's own; it is the identity's and not this device's, so no device key is in it.
+//
+// THE CHAIN IS STORED STEP BY STEP, at its fixed width: each step is its old key, its form and the old
+// key's signature over the next, 32, 1 and 64 octets. A chain is at most four steps (Spec A A-36
+// section 3.4), and it is empty until the first phrase change.
+type IdentityRecord struct {
+	Root       []byte
+	Chain      []messagegroup.IdentityStep
+	CurrentKey []byte
+	Salt       [messagegroup.AccountIdSaltSize]byte
+	Ended      bool
+}
+
+// identityStepOctets is one stored step: an Ed25519 public key, the form octet and an Ed25519
+// signature.
+const identityStepOctets = ed25519.PublicKeySize + 1 + ed25519.SignatureSize
+
+// IdentityHead is one row of store kind 12, the heads: for a root this device has seen, the newest list
+// of it, as the 0xF005 body that carried it. The own-signature log and the phrase-device marks join this
+// record in the tasks that make them (Spec A A-36 section 8.1).
+type IdentityHead struct {
+	Root     []byte
+	Identity []byte
+}
+
+// PhraseKeyRecord is store kind 13, the phrase key: isk_seed[g], naming its identity key and its key
+// number. A phrase device keeps it, and only for the current key number (Property 4); it is the one
+// phrase secret that outlives a ceremony (MASTER section 5.2).
+type PhraseKeyRecord struct {
+	IdentityKey []byte
+	KeyNumber   uint32
+	Seed        []byte
+}
+
+// PutIdentity writes the identity record.
+func (self *DurableStateStore) PutIdentity(record *IdentityRecord) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return err
+	}
+	if record == nil || len(record.Root) != ed25519.PublicKeySize || len(record.CurrentKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("%w: an identity record names a root and a current key of 32 octets each", ErrStateStoreFormat)
+	}
+	chain := make([]byte, 0, len(record.Chain)*identityStepOctets)
+	for at, step := range record.Chain {
+		if len(step.OldKey) != ed25519.PublicKeySize || len(step.Signature) != ed25519.SignatureSize {
+			return fmt.Errorf("%w: step %d of the identity chain is not a key, a form and a signature", ErrStateStoreFormat, at)
+		}
+		chain = append(chain, step.OldKey...)
+		chain = append(chain, step.Form)
+		chain = append(chain, step.Signature...)
+	}
+	ended := []byte{0}
+	if record.Ended {
+		ended[0] = 1
+	}
+	return self.writeRecord(self.identityRecordPath(), stateKindIdentity,
+		record.Root, chain, record.CurrentKey, record.Salt[:], ended)
+}
+
+// Identity reads the identity record back. A store with none answers [ErrStateNotFound].
+func (self *DurableStateStore) Identity() (*IdentityRecord, error) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return nil, err
+	}
+	parts, err := self.readRecord(self.identityRecordPath(), stateKindIdentity)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) != 5 || len(parts[0]) != ed25519.PublicKeySize || len(parts[1])%identityStepOctets != 0 ||
+		len(parts[2]) != ed25519.PublicKeySize || len(parts[3]) != messagegroup.AccountIdSaltSize ||
+		len(parts[4]) != 1 || parts[4][0] > 1 {
+		return nil, fmt.Errorf("%w: the identity record is not one this build wrote", ErrStateStoreFormat)
+	}
+	record := &IdentityRecord{
+		Root:       append([]byte(nil), parts[0]...),
+		CurrentKey: append([]byte(nil), parts[2]...),
+		Ended:      parts[4][0] == 1,
+	}
+	copy(record.Salt[:], parts[3])
+	for at := 0; at < len(parts[1]); at += identityStepOctets {
+		step := parts[1][at : at+identityStepOctets]
+		record.Chain = append(record.Chain, messagegroup.IdentityStep{
+			OldKey:    append([]byte(nil), step[:ed25519.PublicKeySize]...),
+			Form:      step[ed25519.PublicKeySize],
+			Signature: append([]byte(nil), step[ed25519.PublicKeySize+1:]...),
+		})
+	}
+	return record, nil
+}
+
+// PutIdentityHeads writes the heads, every row in one record.
+func (self *DurableStateStore) PutIdentityHeads(heads []IdentityHead) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return err
+	}
+	rows := []byte{}
+	for at, head := range heads {
+		if len(head.Root) != ed25519.PublicKeySize || len(head.Identity) == 0 {
+			return fmt.Errorf("%w: head row %d names no root of 32 octets or no list", ErrStateStoreFormat, at)
+		}
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(head.Identity)))
+		rows = append(rows, head.Root...)
+		rows = append(rows, length[:]...)
+		rows = append(rows, head.Identity...)
+	}
+	return self.writeRecord(self.identityHeadsPath(), stateKindIdentityHeads, rows)
+}
+
+// IdentityHeads reads the heads back. A store with none answers [ErrStateNotFound].
+func (self *DurableStateStore) IdentityHeads() ([]IdentityHead, error) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return nil, err
+	}
+	parts, err := self.readRecord(self.identityHeadsPath(), stateKindIdentityHeads)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) != 1 {
+		return nil, fmt.Errorf("%w: the heads record carries %d parts and this build writes 1", ErrStateStoreFormat, len(parts))
+	}
+	heads := []IdentityHead{}
+	rows := parts[0]
+	for at := 0; at < len(rows); {
+		if len(rows)-at < ed25519.PublicKeySize+4 {
+			return nil, fmt.Errorf("%w: a head row is cut short", ErrStateStoreFormat)
+		}
+		root := rows[at : at+ed25519.PublicKeySize]
+		length := int(binary.BigEndian.Uint32(rows[at+ed25519.PublicKeySize:]))
+		at += ed25519.PublicKeySize + 4
+		if length == 0 || len(rows)-at < length {
+			return nil, fmt.Errorf("%w: a head row's list is empty or cut short", ErrStateStoreFormat)
+		}
+		heads = append(heads, IdentityHead{
+			Root:     append([]byte(nil), root...),
+			Identity: append([]byte(nil), rows[at:at+length]...),
+		})
+		at += length
+	}
+	return heads, nil
+}
+
+// PutPhraseKey writes the phrase key, in place of any the store held: one key number's, the current
+// one's (Property 4).
+func (self *DurableStateStore) PutPhraseKey(record *PhraseKeyRecord) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return err
+	}
+	if record == nil || len(record.IdentityKey) != ed25519.PublicKeySize || record.KeyNumber == 0 ||
+		len(record.Seed) != ed25519.SeedSize {
+		return fmt.Errorf("%w: a phrase key names an identity key, a key number from 1 and a seed of 32 octets", ErrStateStoreFormat)
+	}
+	var keyNumber [4]byte
+	binary.BigEndian.PutUint32(keyNumber[:], record.KeyNumber)
+	return self.writeRecord(self.phraseKeyPath(), stateKindPhraseKey, record.IdentityKey, keyNumber[:], record.Seed)
+}
+
+// PhraseKey reads the phrase key back. A store with none -- every device that is not a phrase
+// device -- answers [ErrStateNotFound]. Its parts are the read's own, answered as GetDeviceIdentity
+// answers the device's, so that the seed has one copy for the caller to erase rather than two.
+func (self *DurableStateStore) PhraseKey() (*PhraseKeyRecord, error) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return nil, err
+	}
+	parts, err := self.readRecord(self.phraseKeyPath(), stateKindPhraseKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) != 3 || len(parts[0]) != ed25519.PublicKeySize || len(parts[1]) != 4 || len(parts[2]) != ed25519.SeedSize {
+		return nil, fmt.Errorf("%w: the phrase key record is not one this build wrote", ErrStateStoreFormat)
+	}
+	return &PhraseKeyRecord{IdentityKey: parts[0], KeyNumber: binary.BigEndian.Uint32(parts[1]), Seed: parts[2]}, nil
 }

@@ -493,6 +493,20 @@ int main(void) {
   CHECK(counter_a.calls == 0, "A connected first time and the attempt callback fired %ld times",
         (long)counter_a.calls);
 
+  step("an identity, on both: every group this build founds requires one of each member");
+  err = NULL;
+  bool a_identified = urnet_message_loopback_device_identify(a.device, ctx, &err);
+  if (!a_identified) {
+    show_error("A's identity", err);
+  }
+  REQUIRE(a_identified, "A has no identity");
+  err = NULL;
+  bool b_identified = urnet_message_loopback_device_identify(b.device, ctx, &err);
+  if (!b_identified) {
+    show_error("B's identity", err);
+  }
+  REQUIRE(b_identified, "B has no identity");
+
   step("B's key package, through the buffer-out pattern");
   int32_t kp_len = 0;
   bool sized = urnet_message_device_key_package(b.device, NULL, &kp_len, &err);

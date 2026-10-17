@@ -743,8 +743,12 @@ type ownSealed struct {
 
 // Group is one group on one device.
 type Group struct {
-	device         *Device
-	id             []byte
+	device *Device
+	id     []byte
+	// system marks a system group: one whose context carries 0xF006, the self group among them. It is
+	// held like every group and answered by no list (identity phase 1's Task 12, Property 3). Set
+	// once, before the group is held, and never written after.
+	system         bool
 	handle         messagegroup.GroupHandle
 	groupHandleKey []byte
 
@@ -1314,8 +1318,15 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 	if err != nil {
 		return nil, err
 	}
+	return self.foundGroupLocked(groupId, false, nonce, nonceEpoch)
+}
 
-	handle, err := self.createMlsGroup(groupId)
+// foundGroupLocked founds one group and holds it: a conversation for [Device.CreateGroup], and the
+// self group, a system group, for [Device.ConfirmWords] (identity phase 1's Task 12). Both need the
+// identity, which [Device.createMlsGroup] asks for first ([ErrNoIdentity]). Called with admitMutex
+// held.
+func (self *Device) foundGroupLocked(groupId []byte, system bool, nonce []byte, nonceEpoch uint64) (*Group, error) {
+	handle, err := self.createMlsGroup(groupId, system)
 	if err != nil {
 		return nil, err
 	}
@@ -1347,6 +1358,7 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 	group := &Group{
 		device:         self,
 		id:             append([]byte(nil), groupId...),
+		system:         system,
 		handle:         handle,
 		groupHandleKey: groupHandleKey,
 		// AT EPOCH ZERO, WHICH IS THE ONE EPOCH A FOUNDING DRAW CAN FILE. The commit
@@ -1483,7 +1495,7 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 	}()
 	// BOUND TO THE GROUP THE INVITE NAMES. A Welcome that describes any other group is refused
 	// inside mls, ahead of its persist, and the engine puts the join code back itself.
-	handle, err = self.engine.JoinFromWelcomeInto(invite.Welcome, invite.RatchetTree, invite.GroupId)
+	handle, err = self.currentEngine().JoinFromWelcomeInto(invite.Welcome, invite.RatchetTree, invite.GroupId)
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: JoinFromWelcomeInto: %w", err)
 	}
@@ -2780,7 +2792,7 @@ func (self *Group) Delete(ctx context.Context, target []byte) (*Message, error) 
 	if err != nil {
 		return nil, err
 	}
-	if !sameSender(self.ownHandleLocked(), self.device.identityPub, held) {
+	if !sameSender(self.ownHandleLocked(), self.device.credentialIdentity(), held) {
 		return nil, fmt.Errorf("%w: message %x was sealed by %x and this device may only delete its own",
 			ErrContentMalformed, target, held.SenderHandle)
 	}
@@ -3051,7 +3063,7 @@ func (self *Group) sendContentLocked(ctx context.Context, plaintext []byte, what
 	// stands at that leaf would be asking a question whose answer this function already IS, and it
 	// would make a line this device just wrote undeterminable at the window edge where the ask can
 	// come back short.
-	sent := newMessage(entry, recordId, record.Header.SenderHandle[:], self.device.identityPub,
+	sent := newMessage(entry, recordId, record.Header.SenderHandle[:], self.device.credentialIdentity(),
 		true, sentAtMs, messageId[:], senderRoleAtSend)
 	line := self.deliverLocked(sent, entry)
 	// THIS IS A SEND AND NOT A WALK, SO THE REBUILD CANNOT WAIT FOR ONE. A reaction or a tombstone
@@ -5046,12 +5058,12 @@ func (self *Group) openOwnFromCopyLocked(walk *pageWalk, recordId uint64, parsed
 	// off the tree would also make it empty exactly where the epoch has aged out, on the one road
 	// whose records this device is certain of.
 	senderRoleAtSend := self.roleAtSendLocked(header.Epoch, self.handle.OwnLeafIndex())
-	received := newMessage(entry, recordId, header.SenderHandle[:], self.device.identityPub, true,
+	received := newMessage(entry, recordId, header.SenderHandle[:], self.device.credentialIdentity(), true,
 		sealed.sentAtMs, messageId[:], senderRoleAtSend)
 	if verdict == ContentUnsupported {
 		self.stats.GapUnsupported += 1
 		received = newGap(GapUnsupported, entry, recordId, header.SenderHandle[:],
-			self.device.identityPub, true, sealed.sentAtMs, messageId[:], senderRoleAtSend)
+			self.device.credentialIdentity(), true, sealed.sentAtMs, messageId[:], senderRoleAtSend)
 	}
 	if self.deliverLocked(received, entry) {
 		walk.opened = append(walk.opened, received)
@@ -5661,7 +5673,7 @@ func (self *Group) noteEpochGapLocked(walk *pageWalk, recordId uint64, header *m
 	mine := false
 	var senderIdentity []byte
 	if sealed, found := self.ownIndices[header.StreamIndex]; found && sealed.bodyHash == header.BodyHash {
-		mine, senderIdentity = true, self.device.identityPub
+		mine, senderIdentity = true, self.device.credentialIdentity()
 	}
 	entry := &Content{}
 	received := newGap(GapOutOfWindow, entry, recordId, header.SenderHandle[:], senderIdentity, mine, 0,
@@ -5797,7 +5809,7 @@ func (self *Group) recordIsOwnLocked(senderIdentity []byte, maybeMine bool) bool
 	if len(senderIdentity) == 0 {
 		return maybeMine
 	}
-	return bytes.Equal(senderIdentity, self.device.identityPub)
+	return bytes.Equal(senderIdentity, self.device.credentialIdentity())
 }
 
 // ── what a record becomes ────────────────────────────────────────────────────────────────────

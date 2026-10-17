@@ -46,6 +46,7 @@ func (self *world) clockPersona(t *testing.T, name string, clock *atomic.Int64) 
 		streamStore.Close()
 		t.Fatalf("%s: NewDevice: %v", name, err)
 	}
+	self.identify(t, name, device)
 	current := &persona{
 		name: name, stateDir: stateDir, streamDir: streamDir,
 		client: client, transport: transport,

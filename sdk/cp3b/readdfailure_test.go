@@ -57,6 +57,7 @@ func (self *world) readdSinkPersona(t *testing.T, name string) (*persona, *readd
 		streamStore: streamStore, stateStore: durable, device: device,
 	}
 	t.Cleanup(current.kill)
+	self.identify(t, name, device)
 	return current, sink
 }
 

@@ -679,29 +679,45 @@ func TestAdvSimACopiedStateDirectoryReadsTheJoinEpoch(t *testing.T) {
 		advHarness(t, "the thief's copy does not open: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	signerPub, signerPriv, leafKeys, _, err := store.GetDeviceIdentity()
+	_, signerPriv, leafKeys, _, err := store.GetDeviceIdentity()
 	if err != nil {
 		advHarness(t, "the thief's copy holds no identity: %v", err)
 	}
+	// the identity record, in the clear like the rest: its key is the credential every leaf of the
+	// device names (identity phase 1's Task 12)
+	identity, err := store.Identity()
+	if err != nil {
+		advHarness(t, "the thief's copy holds no identity record: %v", err)
+	}
+	// the joined group's record, beside the self group's
 	records, err := store.GroupRecords()
-	if err != nil || len(records) != 1 {
-		advHarness(t, "the thief's copy holds %d group record(s): %v", len(records), err)
+	if err != nil || len(records) != 2 {
+		advHarness(t, "the thief's copy holds %d group record(s), and bob holds the group's and his self group's: %v", len(records), err)
+	}
+	var record *urmessage.GroupRecord
+	for _, one := range records {
+		if bytes.Equal(one.GroupId, scene.groupId) {
+			record = one
+		}
+	}
+	if record == nil {
+		advHarness(t, "the thief's copy holds no record of the group")
 	}
 	crypto, err := mls.NewCryptoProvider(mls.CipherSuiteX25519ChaCha20Sha256Ed25519)
 	if err != nil {
 		advHarness(t, "the crypto provider: %v", err)
 	}
 	engine, err := messagegroup.NewConnectMlsEngine(crypto, store, mls.SignaturePrivateKey(signerPriv),
-		mls.BasicCredential(signerPub), leafKeys)
+		mls.BasicCredential(identity.CurrentKey), leafKeys)
 	if err != nil {
 		advHarness(t, "the thief's engine: %v", err)
 	}
-	handle, err := engine.LoadGroup(records[0].GroupId, records[0].Epoch)
+	handle, err := engine.LoadGroup(record.GroupId, record.Epoch)
 	if err != nil {
 		advHarness(t, "the thief's LoadGroup: %v", err)
 	}
 	shadow := &advShadow{handle: handle, epoch: handle.Epoch(), ownLeaf: handle.OwnLeafIndex()}
-	observed := advRead(t, scene.world, shadow, records[0].PqSecret, records[0].GroupHandleKey, scene.canaries)
+	observed := advRead(t, scene.world, shadow, record.PqSecret, record.GroupHandleKey, scene.canaries)
 	advJudge(t, "S4-state-thief", observed)
 }
 

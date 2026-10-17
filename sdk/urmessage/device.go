@@ -2,6 +2,7 @@ package urmessage
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -225,9 +226,28 @@ type Device struct {
 	// existed only to feed that call has been deleted rather than left as state nothing reads.
 	stateStore mls.StateStore
 
-	// The credential identity this device founds and joins under: its signer's public half. See
-	// [NewDevice] for why it is that value and not another.
+	// The credential identity this device founds and joins under: its signer's public half until it
+	// has an identity, and the identity key from then on (identity phase 1's Task 12). See
+	// [NewDevice] for why it is that value and not another. Guarded by identityLock, with engine,
+	// since [Device.ConfirmWords] replaces both: read them through [Device.credentialIdentity] and
+	// [Device.currentEngine].
 	identityPub []byte
+
+	// THE IDENTITY (identity phase 1's Task 12), guarded by identityLock: the identity this device
+	// runs under once [Device.ConfirmWords] has made it, or [NewDevice] read it back; the words
+	// [Device.CreateIdentity] offered, until they are typed back; and the heads, the newest list of
+	// every root seen, as 0xF005 bodies by root.
+	identityLock sync.RWMutex
+	identity     *deviceIdentityState
+	offered      *messagegroup.RecoveryPhrase
+	heads        map[string][]byte
+
+	// signer is this device's own signing key, device_sig, and devicePub its public half: the key
+	// every leaf this device makes is signed with, and the author's key of every list this device
+	// signs. The engine holds a copy of its own; this one signs the lists, which no engine method
+	// does. Guarded by [Device.mutex], and erased by [Device.Close] as the wrap seed is.
+	signer    mls.SignaturePrivateKey
+	devicePub ed25519.PublicKey
 
 	// wrapSeed is the PRIVATE half of the X-Wing key pair whose public half is inside
 	// [Device.leafKeys], as the 32 octet seed [messagegroup.XwingKeyGenFromSeed] expands. It is
@@ -453,8 +473,21 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	// and writes still reaches stateStore, call for call; what the stage adds is that a join's
 	// first epoch state waits in memory until [Device.Join] commits it. See [joinStage].
 	stage := newJoinStage(stateStore)
+	// THE IDENTITY, READ BACK (identity phase 1's Task 12): a durable store that holds one answers it
+	// with its heads, and the engine is built under its identity key; with none, the device runs
+	// under its own key until [Device.ConfirmWords] makes one, and makes no leaf before it.
+	identity, heads := (*deviceIdentityState)(nil), map[string][]byte{}
+	if store, durable := stateStore.(DeviceStore); durable {
+		if identity, heads, err = loadIdentity(store, ed25519.PublicKey(signerPub)); err != nil {
+			return nil, err
+		}
+	}
+	credential := []byte(signerPub)
+	if identity != nil {
+		credential = identity.record.CurrentKey
+	}
 	engine, err := messagegroup.NewConnectMlsEngine(crypto, stage, signer,
-		mls.BasicCredential(signerPub), leafKeys)
+		mls.BasicCredential(credential), leafKeys)
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: the mls engine: %w", err)
 	}
@@ -470,7 +503,11 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		engine:           engine,
 		leafKeys:         leafKeys,
 		stateStore:       stateStore,
-		identityPub:      append([]byte(nil), signerPub...),
+		identityPub:      append([]byte(nil), credential...),
+		identity:         identity,
+		heads:            heads,
+		signer:           signer,
+		devicePub:        ed25519.PublicKey(append([]byte(nil), signerPub...)),
 		wrapSeed:         wrapSeed,
 		nowMs:            nowMs,
 		random:           random,
@@ -750,7 +787,13 @@ func (self *Device) KeyPackage() ([]byte, error) {
 	if seedless {
 		return nil, fmt.Errorf("%w, and so it publishes no join code: an invite to one is sealed to that leaf", ErrNoDeviceWrapKey)
 	}
-	keyPackage, err := self.engine.NewKeyPackage()
+	// A DEVICE WITH NO IDENTITY PUBLISHES NO JOIN CODE (identity phase 1's Task 12, Property 2): every
+	// group this build founds requires 0xF005, and a key package is this device's leaf in one.
+	identity, err := self.requireIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("%w, and so it publishes no join code", err)
+	}
+	keyPackage, err := self.currentEngine().NewBoundKeyPackage([]messagegroup.ExtensionBytes{identity.extension})
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: this device's key package: %w", err)
 	}
@@ -841,6 +884,11 @@ func (self *Device) Groups() []*Group {
 	defer self.mutex.Unlock()
 	groups := make([]*Group, 0, len(self.groups))
 	for _, group := range self.groups {
+		// CONVERSATIONS ONLY (identity phase 1's Task 12, Property 3): a system group, the self group
+		// among them, is held and never answered
+		if group.system {
+			continue
+		}
 		groups = append(groups, group)
 	}
 	return groups
@@ -902,7 +950,15 @@ func (self *Device) Close() error {
 	self.groups = map[string]*Group{}
 	zeroizeState(self.wrapSeed)
 	self.wrapSeed = nil
+	zeroizeState(self.signer)
+	self.signer = nil
 	self.mutex.Unlock()
+	self.identityLock.Lock()
+	if self.offered != nil {
+		self.offered.Erase()
+		self.offered = nil
+	}
+	self.identityLock.Unlock()
 	var first error
 	for _, group := range groups {
 		if err := group.Close(); err != nil && first == nil {
@@ -928,9 +984,13 @@ func (self *Device) nonce() ([]byte, uint64, error) {
 // before there is a second member and is what mls.GroupPolicyExtension.Validate requires. It is
 // canonicalized before it is encoded, because the extension travels inside the group context and
 // two members that encoded it differently would export different secrets.
-func (self *Device) createMlsGroup(groupId []byte) (messagegroup.GroupHandle, error) {
+func (self *Device) createMlsGroup(groupId []byte, system bool) (messagegroup.GroupHandle, error) {
+	identity, err := self.requireIdentity()
+	if err != nil {
+		return nil, err
+	}
 	policy := &mls.GroupPolicyExtension{
-		Roles: []mls.RoleEntry{{MemberId: self.identityPub, Role: mls.RoleOwner}},
+		Roles: []mls.RoleEntry{{MemberId: self.credentialIdentity(), Role: mls.RoleOwner}},
 	}
 	if err := policy.Canonicalize(); err != nil {
 		return nil, fmt.Errorf("urmessage: the group policy: %w", err)
@@ -939,9 +999,21 @@ func (self *Device) createMlsGroup(groupId []byte) (messagegroup.GroupHandle, er
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: the group policy: %w", err)
 	}
-	handle, err := self.engine.CreateGroup(groupId, encoded.ExtensionData, self.leafKeys)
+	// EVERY GROUP THIS BUILD FOUNDS IS BOUND (identity phase 1's Task 12, Property 2): the founder's
+	// leaf carries this identity's 0xF005, and the engine requires 0xF004 and 0xF005 of every member;
+	// a system group's context carries 0xF006 {1, root}, which the engine then requires as well.
+	var context []messagegroup.ExtensionBytes
+	if system {
+		purpose, err := selfGroupPurpose(identity.record.Root)
+		if err != nil {
+			return nil, fmt.Errorf("urmessage: the self group's purpose: %w", err)
+		}
+		context = []messagegroup.ExtensionBytes{purpose}
+	}
+	handle, err := self.currentEngine().CreateBoundGroup(groupId, encoded.ExtensionData, self.leafKeys,
+		[]messagegroup.ExtensionBytes{identity.extension}, context)
 	if err != nil {
-		return nil, fmt.Errorf("urmessage: CreateGroup: %w", err)
+		return nil, fmt.Errorf("urmessage: CreateBoundGroup: %w", err)
 	}
 	return handle, nil
 }

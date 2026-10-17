@@ -73,8 +73,10 @@ var sdkCryptoImports = map[string]sdkCryptoImport{
 			"inside a TLS 1.3 configuration"},
 	"message_stream_store.go": {[]string{"crypto/sha256"},
 		"the stream store's row identities and key-shape digests"},
-	"urmessage/device.go": {[]string{"crypto/rand"},
-		"the device's randomness when the caller hands it none"},
+	"urmessage/device.go": {[]string{"crypto/ed25519", "crypto/rand"},
+		"the device's randomness when the caller hands it none; and the type its own public half is held as, the key every list it signs names as its author (identity phase 1's Task 12)"},
+	"urmessage/identity.go": {[]string{"crypto/ed25519"},
+		"the identity at the device (identity phase 1's Task 12): the author's key of the first base, expanded from the device's seed for its one signature and erased after it, and the widths and the type a device's public half is checked and named by"},
 	"urmessage/group.go": {[]string{"crypto/sha256"},
 		"pq secret witnesses, group-context hashes and a sealed body's hash check"},
 	"urmessage/joinseal.go": {[]string{"crypto/sha256", "crypto/subtle"},
@@ -85,8 +87,8 @@ var sdkCryptoImports = map[string]sdkCryptoImport{
 		"pq secret witnesses, compared in constant time"},
 	"urmessage/restore.go": {[]string{"crypto/sha256"},
 		"the width of a restored witness row"},
-	"urmessage/statestore_durable.go": {[]string{"crypto/sha256"},
-		"the durable state store's witness rows and its file checksum"},
+	"urmessage/statestore_durable.go": {[]string{"crypto/ed25519", "crypto/sha256"},
+		"the durable state store's witness rows and its file checksum; and the widths of the identity layer's records, a key and a phrase key's seed (identity phase 1's Task 12)"},
 }
 
 // sdkOverlaidSourceDirs is the directories named testdata, relative to this module's root, whose

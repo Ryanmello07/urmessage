@@ -52,10 +52,12 @@ const typedByBob = "hello alice -- and this is the answer, sealed under the join
 func TestATextTypedOnOneClientComesBackOnASecondThroughARunningServer(t *testing.T) {
 	world := newWorld(t)
 	ctx := context.Background()
-	before := world.peer.Stats()
 
 	alice, _, _ := world.device(t, "alice")
 	bob, _, _ := world.device(t, "bob")
+	// taken once both devices have their identities, each made under a Hello of its own
+	// ([world.identify]), so that the count below is this case's requests and nothing else
+	before := world.peer.Stats()
 
 	// ── §4.3.1 on both clients ───────────────────────────────────────────────────────────
 	if err := alice.Connect(ctx); err != nil {

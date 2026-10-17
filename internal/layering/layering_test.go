@@ -115,14 +115,18 @@ var layeringRules = map[string]layeringRule{
 		reason:   "the composed library's .def generator and its tests: the C header's text limits against urmessage's, and the one test that links both SDKs, MessageServiceUrls against the core SDK's ServiceUrl",
 	},
 	"sdk/cp3b": {
-		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "sdk/urmessage"},
+		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "sdk/urmessage", "syntax"},
 		external: []string{"github.com/urnetwork/connect", "github.com/urnetwork/message-server", "google.golang.org/protobuf"},
-		reason:   "the cross-process suite: devices against a real message server and its store",
+		reason: "the cross-process suite: devices against a real message server and its store. syntax is how its " +
+			"cases read a join code's leaf, with the identity it carries, as every receiver reads it (identity " +
+			"phase 1's Task 12)",
 	},
 	"sdk/livepeer": {
 		module:   []string{"protocol", "sdk", "sdk/urmessage"},
-		external: []string{"github.com/urnetwork/connect"},
-		reason:   "the live peer command: one device on a real network",
+		external: []string{"github.com/urnetwork/connect", "google.golang.org/protobuf"},
+		reason: "the live peer command: one device on a real network. protobuf is its tests' server double, which " +
+			"answers Hello so that a device can make its identity: an identity's self group is founded under a " +
+			"connection (identity phase 1's Task 12)",
 	},
 	"sdk/liveprobe": {
 		module:   []string{"messagegroup", "mls", "protocol", "sdk", "sdk/urmessage"},

@@ -607,3 +607,54 @@ func TestTheSingleWordCheckReadsOneTokenThroughTheSameFold(t *testing.T) {
 		}
 	}
 }
+
+// A WRONG WORD TYPED BACK IS NAMED BY ITS POSITION, against the phrase shown (Spec A A-36 section 7.2,
+// ConfirmWords; identity phase 1's Task 12). ParseRecoveryPhrase names a word that is not on the list
+// and cannot name a list word whose checksum fails; the device that showed the words compares them,
+// through the same fold, and names every position that differs, a missing or an extra word included.
+func TestAWrongWordTypedBackIsNamedByItsPositionAgainstThePhraseShown(t *testing.T) {
+	shown := &RecoveryPhrase{}
+	copy(shown.p34[:], phraseHexOctets(t, phraseBP34Hex))
+	words := slices.Clone(phraseBWords)
+	fullwidth := []rune{}
+	for _, letter := range strings.ToUpper(words[0]) {
+		fullwidth = append(fullwidth, letter-'A'+0xFF21)
+	}
+	other := "abandon"
+	swapped := slices.Clone(words)
+	swapped[0], swapped[1] = swapped[1], swapped[0]
+	for _, one := range []struct {
+		name  string
+		typed []string
+		want  []int
+	}{
+		{"the words shown", words, []int{}},
+		{"the words shown, the first in fullwidth capitals, which the fold reads as the word", append([]string{string(fullwidth)}, words[1:]...), []int{}},
+		{"another list word at 7", append(append(slices.Clone(words[:6]), other), words[7:]...), []int{7}},
+		{"a word not on the list at 3", append(append(slices.Clone(words[:2]), "zzzz"), words[3:]...), []int{3}},
+		{"the first two swapped", swapped, []int{1, 2}},
+		{"the last missing", words[:24], []int{25}},
+		{"one more than 25", append(slices.Clone(words), other), []int{26}},
+		{"nothing", nil, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}},
+	} {
+		typed := "\t" + strings.Join(one.typed, "  \n ") + " "
+		if got := shown.WordsDiffering(typed); !slices.Equal(got, one.want) {
+			t.Errorf("%s: WordsDiffering answers %v, want %v", one.name, got, one.want)
+		}
+	}
+	// A WORD NOT ON THE LIST WHERE THE WORD SHOWN IS THE LIST'S FIRST, "abandon": the reading leaves
+	// an index of 0 at a word it could not look up, which is abandon's, so only the reading's own
+	// positions of the words not on the list name this one
+	zero := &RecoveryPhrase{}
+	copy(zero.p34[:], phraseHexOctets(t, phraseAP34Hex))
+	notListed := append(append(slices.Clone(phraseAWords[:1]), "zzzz"), phraseAWords[2:]...)
+	if got := zero.WordsDiffering(strings.Join(notListed, " ")); !slices.Equal(got, []int{2}) {
+		t.Errorf("a word not on the list where abandon was shown: WordsDiffering answers %v, want [2]", got)
+	}
+	// THE CONTROL: another list word at 7 is a phrase the parser refuses by its checksum and names
+	// no position of, which is why the device compares
+	wrong := append(append(slices.Clone(words[:6]), other), words[7:]...)
+	if phrase, positions, err := ParseRecoveryPhrase(strings.Join(wrong, " ")); phrase != nil || positions != nil || !errors.Is(err, ErrRecoveryPhraseChecksum) {
+		t.Errorf("CONTROL FAILED: the parser answers %v, %v, %v for another list word at 7, want the checksum's refusal and no position", phrase, positions, err)
+	}
+}

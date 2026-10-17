@@ -327,7 +327,11 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 			}
 			continue
 		}
-		restored = append(restored, group)
+		// CONVERSATIONS ONLY (identity phase 1's Task 12, Property 3): the self group is restored and
+		// held, and is in no list this answers
+		if !group.system {
+			restored = append(restored, group)
+		}
 	}
 	if firstFailure == nil {
 		firstFailure = unfinished
@@ -353,13 +357,35 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 // rather than the one caller that remembered to make it. The wrap below carries the group id and
 // the epoch this record named, so an operator reading the refusal still sees which row asked.
 func (self *Device) restoreOne(store DeviceStore, record *GroupRecord, nonce []byte, nonceEpoch uint64) (*Group, error) {
-	handle, err := self.engine.LoadGroup(record.GroupId, record.Epoch)
+	handle, err := self.currentEngine().LoadGroup(record.GroupId, record.Epoch)
 	if err != nil {
 		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
 	}
 	// ONLY A GROUP THAT REQUIRES THE JOIN SEAL IS RESTORED: see [ErrGroupPredatesJoinSeal]. It is
 	// asked before a session is built, so nothing of the group is in memory when it is refused.
 	if err := requireJoinSeal(handle); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	// ONLY A GROUP OF THE IDENTITY LAYER IS RESTORED, AND EVERY LEAF OF IT IS RE-VERIFIED (identity
+	// phase 1's Task 12): its context requires 0xF005 ([ErrGroupPredatesIdentity]), every leaf binds
+	// ([ErrGroupLeafUnbound]), and the lists the leaves carry raise the heads. A system group is
+	// marked as one, off its own context, so that no list answers it.
+	if err := requireIdentityExtension(handle); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	verified, err := verifyEveryLeaf(handle)
+	if err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	if err := self.raiseHeads(verified); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: the heads: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	system, err := groupIsSystem(handle)
+	if err != nil {
 		handle.Close()
 		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
 	}
@@ -436,6 +462,7 @@ func (self *Device) restoreOne(store DeviceStore, record *GroupRecord, nonce []b
 	restored := &Group{
 		device:         self,
 		id:             append([]byte(nil), record.GroupId...),
+		system:         system,
 		handle:         handle,
 		groupHandleKey: append([]byte(nil), record.GroupHandleKey...),
 		pqSecrets:      pqSecretsMapOf(table),
@@ -612,7 +639,7 @@ func (self *Device) persistPeerHeads(groupId []byte, heads []PeerHead) error {
 func (self *Device) pastEpochLoader(groupId []byte) messagegroup.PastEpochLoader {
 	id := append([]byte(nil), groupId...)
 	return func(epoch uint64) (messagegroup.GroupHandle, error) {
-		return self.engine.LoadGroup(id, epoch)
+		return self.currentEngine().LoadGroup(id, epoch)
 	}
 }
 

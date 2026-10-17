@@ -185,6 +185,40 @@ func (self *RecoveryPhrase) Equal(other *RecoveryPhrase) bool {
 	return subtle.ConstantTimeCompare(self.p34[:], other.p34[:]) == 1
 }
 
+// WordsDiffering answers the positions, from 1, at which typed input's words are not this phrase's,
+// in order: a word that is another list word, a word that is not on the list, a word missing before
+// the 25th, and every word past it. Spec A A-36 section 7.2's ConfirmWords: "a wrong word is named by
+// its position and nothing is corrected", which ParseRecoveryPhrase cannot do for a list word with
+// a failing checksum, since it holds no phrase to compare with; the device that showed the words
+// does. The input is read through the fold ParseRecoveryPhrase reads it through, and each word is
+// compared with this phrase's word at its position in constant time. An empty answer is the typed
+// words being this phrase's. No answer carries a word.
+func (self *RecoveryPhrase) WordsDiffering(phraseTyped string) []int {
+	phraseTypedIndices, count, notInTheList := phraseTokensOf(phraseTyped)
+	defer clear(phraseTypedIndices[:])
+	phraseShownIndices := phraseIndicesOf(&self.p34)
+	defer clear(phraseShownIndices[:])
+	wrong := make([]bool, max(count, RecoveryPhraseWordCount))
+	for _, position := range notInTheList {
+		wrong[position-1] = true
+	}
+	for position := range RecoveryPhraseWordCount {
+		if position >= count || subtle.ConstantTimeEq(int32(phraseTypedIndices[position]), int32(phraseShownIndices[position])) != 1 {
+			wrong[position] = true
+		}
+	}
+	for position := RecoveryPhraseWordCount; position < count; position++ {
+		wrong[position] = true
+	}
+	positions := []int{}
+	for position, differs := range wrong {
+		if differs {
+			positions = append(positions, position+1)
+		}
+	}
+	return positions
+}
+
 // Erase blanks the phrase, at the end of the ceremony that made or read it.
 //
 //go:noinline

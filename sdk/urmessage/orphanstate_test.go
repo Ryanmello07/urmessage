@@ -21,6 +21,7 @@ func TestAJoinThatFailsAfterItsCommitLeavesNoEpochStateBehind(t *testing.T) {
 	durable := openTestStore(t, t.TempDir())
 	store := &recordSink{DurableStateStore: durable}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, groupId := windowInvite(t, joiner)
 	store.armed = true
 	_, err := joiner.Join(ctx, honest)
@@ -76,6 +77,7 @@ func TestRestoreErasesEpochStateNoRecordStandsBesideAndNothingElse(t *testing.T)
 		t.Fatal(err)
 	}
 	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	testIdentify(t, device)
 	if _, err := device.CreateGroup(ctx, founded); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
@@ -150,6 +152,7 @@ func TestTheSweepErasesOnItsOwnMarkAndAStaleMarkGoes(t *testing.T) {
 	}
 
 	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	testIdentify(t, device)
 	_, err = device.Restore(ctx)
 	t.Logf("Restore: %v", err)
 	// THE FIRST SHAPE IS ERASED
@@ -215,6 +218,7 @@ func TestARetractedCreationMarkIsNotSweptAndARecordThatReadsKeepsItsRetraction(t
 	}
 
 	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	testIdentify(t, device)
 	_, err = device.Restore(ctx)
 	t.Logf("Restore with the record away: %v", err)
 	if erased := store.ErasedWithNoRecord(); len(erased) != 0 {
@@ -276,6 +280,7 @@ func TestTheCreationsRetractionIsKeptForTheGroupsLife(t *testing.T) {
 		}
 	}
 	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	testIdentify(t, device)
 
 	// the mark put back, and the record moved away
 	if err := os.WriteFile(store.pendingPath(groupId), mark, 0o600); err != nil {
@@ -351,6 +356,7 @@ func TestTheSweepTakesOnlyTheStoresOwnEntriesOfACreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	testIdentify(t, device)
 	if _, err := device.Restore(ctx); err != nil {
 		t.Logf("Restore: %v", err)
 	}
@@ -405,6 +411,7 @@ func TestAJoinWhoseRecordLandedAndThenFailedLeavesNoRecordBehind(t *testing.T) {
 	durable := openTestStore(t, t.TempDir())
 	store := &landedRecordSink{DurableStateStore: durable}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, groupId := windowInvite(t, joiner)
 	store.armed = true
 	if _, err := joiner.Join(ctx, honest); !errors.Is(err, ErrJoinCodeSpent) {

@@ -1688,6 +1688,12 @@ func groupAnswerRows(t *testing.T) []groupAnswerRow {
 			answer := group.OwnLeafNodeCopy()
 			return []any{&answer}
 		}},
+		// OwnLeafNodeCopy for any leaf (identity phase 1's Task 12), driven at the one leaf a group
+		// of one holds, which is the leaf whose arrays the tree keeps
+		{name: "LeafNodeCopy", call: func(group *Group) []any {
+			answer := group.LeafNodeCopy(group.OwnLeafIndex())
+			return []any{&answer}
+		}},
 		{name: "Members", call: func(group *Group) []any {
 			answer := group.Members()
 			return []any{&answer}
@@ -1816,6 +1822,14 @@ func groupAnswerRows(t *testing.T) []groupAnswerRow {
 			groupAnswerStagedCommit(t, group)
 			answer, err := group.PendingExport("the exporter label this gate reads",
 				[]byte("the exporter context this gate reads"), 32)
+			return []any{&answer, &err}
+		}},
+		// and the sixth, identity phase 1's Task 12: the staged leaf, at this member's own leaf,
+		// which is the committer's post-commit leaf. It answers a deep copy, so the staged tree's
+		// arrays are not the caller's
+		{name: "PendingLeafNode", call: func(group *Group) []any {
+			groupAnswerStagedCommit(t, group)
+			answer, err := group.PendingLeafNode(group.OwnLeafIndex())
 			return []any{&answer, &err}
 		}},
 		// THE MESSAGE LIFECYCLE, p7 task 18's four exported methods.

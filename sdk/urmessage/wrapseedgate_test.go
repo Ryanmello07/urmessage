@@ -113,6 +113,15 @@ var wrapSeedProducerSites = map[string]string{
 	"deviceIdentity|xwing.Seed": "the MINT arm: the 32 octets under the public half this same " +
 		"call encodes into the leaf keys extension. Seed answers a copy, so this array is this " +
 		"call's own -- which is what lets [Device.Close] erase ONE array rather than chase two.",
+	"loadIdentity|parameter devicePub": "the device's PUBLIC half, arriving at the identity's read back " +
+		"(identity phase 1's Task 12) from [NewDevice], which binds it beside the seed: the walk follows " +
+		"a parameter of every function it reaches with a tainted argument, and the public half is one.",
+	"newDeviceIdentityState|parameter devicePub": "the same public half, arriving at the binding check of " +
+		"this device's own 0xF005.",
+	"PutPhraseKey|record.Seed": "THE PHRASE KEY'S SEED, which is not the wrap seed: store kind 13, isk_seed " +
+		"of the identity's current key number on a phrase device (identity phase 1's Task 12). This net " +
+		"takes every field named Seed, and the record's is one; its own census is the phrase-secret " +
+		"census of this package.",
 	"PutDeviceIdentity|parameter wrapSeed": "the store's WRITE path, where the value arrives from " +
 		"the caller with a name and is otherwise indistinguishable from the three record parts " +
 		"beside it. Seeding here is what puts statestore_durable.go inside this census at all.",
@@ -283,27 +292,148 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 		why:     "the leaf keys body, the PUBLIC half's carrier, tainted by the binding beside the seed.",
 	},
 	"NewDevice|literal Device.identityPub": {
-		carries: []string{"signerPub"},
+		carries: []string{"credential"},
 		occurs:  []string{"append(...)"},
-		why:     "the credential identity, a copy of the signer's public half.",
+		why: "the credential identity: a copy of the signer's public half until this device has an " +
+			"identity, and of the identity key once it has one (identity phase 1's Task 12). Public " +
+			"either way, and tainted because `credential` starts as the public half.",
 	},
 	"NewDevice|call append": {
+		carries: []string{"credential", "signerPub"},
+		occurs:  []string{"credential", "signerPub"},
+		why: "two copies of public values being taken: the credential identity's, and the device's " +
+			"own public half for [Device.devicePub], which every list this device signs names as its " +
+			"author.",
+	},
+	"NewDevice|call []byte": {
 		carries: []string{"signerPub"},
 		occurs:  []string{"signerPub"},
-		why:     "that copy being taken.",
+		why: "the public half as the credential a device with no identity yet would publish -- it " +
+			"makes no leaf before it has one -- before the identity key replaces it.",
+	},
+	"NewDevice|call ed25519.PublicKey": {
+		carries: []string{"signerPub"},
+		occurs:  []string{"append(...)", "signerPub"},
+		why: "the public half cast to the type the identity layer names a device by: once for the " +
+			"identity's read back, and once for the field.",
+	},
+	"NewDevice|call loadIdentity": {
+		carries: []string{"signerPub"},
+		occurs:  []string{"ed25519.PublicKey(...)"},
+		why: "THE IDENTITY, READ BACK (identity phase 1's Task 12), handed the public half: the " +
+			"stored list must name this device's key, and the read checks it does. The seed is not " +
+			"at this call.",
 	},
 	"NewDevice|call mls.BasicCredential": {
-		carries: []string{"signerPub"},
-		occurs:  []string{"signerPub"},
-		why:     "the public half becoming the credential the engine publishes.",
+		carries: []string{"credential"},
+		occurs:  []string{"credential"},
+		why:     "the credential the engine publishes: the identity key, or the public half before there is one.",
 	},
 	"NewDevice|call messagegroup.NewConnectMlsEngine": {
-		carries: []string{"leafKeys", "signer", "signerPub"},
+		carries: []string{"credential", "leafKeys", "signer"},
 		occurs:  []string{"leafKeys", "mls.BasicCredential(...)", "signer"},
-		why: "the signature private key going into the engine, which is where this device's signer " +
-			"LIVES -- [Device] holds no field for it, and the seed is the only key material this " +
-			"type holds in a field of its own. The seed is NOT at this call and must never be: the " +
-			"engine is `connect`'s and has no door for it.",
+		why: "the signature private key going into the engine, which holds a copy of its own for every " +
+			"leaf it signs. The seed is NOT at this call and must never be: the engine is `connect`'s " +
+			"and has no door for it.",
+	},
+	"NewDevice|literal Device.signer": {
+		carries: []string{"signer"},
+		occurs:  []string{"signer"},
+		why: "THE SIGNER'S FIELD (identity phase 1's Task 12). [Device] holds the device's signature " +
+			"private key beside the engine's copy, because the lists this device signs as their " +
+			"author -- the first base at [Device.ConfirmWords], and the amendments of the tasks after " +
+			"it -- are signed by no engine method. It is the second key material [Device] holds in a " +
+			"field, and [Device.Close] erases it under the same mutex as the seed. The seed is not in " +
+			"it: the signer is the mls signature key, which this census follows because it leaves " +
+			"deviceIdentity beside the seed.",
+	},
+	"NewDevice|literal Device.devicePub": {
+		carries: []string{"signerPub"},
+		occurs:  []string{"ed25519.PublicKey(...)"},
+		why:     "the device's public half, the key every list this device signs names as its author. Public.",
+	},
+	"NewDevice|literal Device.identity": {
+		carries: []string{"identity"},
+		occurs:  []string{"identity"},
+		why: "the identity the store answered, tainted because its read was handed the public half. " +
+			"It holds the identity record and this device's 0xF005, every value of which is public; " +
+			"the phrase key is a record of its own and is not in it.",
+	},
+	"NewDevice|literal Device.heads": {
+		carries: []string{"heads"},
+		occurs:  []string{"heads"},
+		why:     "the heads the store answered beside the identity: 0xF005 bodies by root, public.",
+	},
+	"loadIdentity|call newDeviceIdentityState": {
+		carries: []string{"devicePub"},
+		occurs:  []string{"devicePub"},
+		why:     "the public half handed on to the binding check of this device's own 0xF005.",
+	},
+	"loadIdentity|return": {
+		carries: []string{"state"},
+		occurs:  []string{"state"},
+		why:     "the identity state that check answered, which holds the public half and public values only.",
+	},
+	"newDeviceIdentityState|call messagegroup.VerifyLeafBinding": {
+		carries: []string{"devicePub"},
+		occurs:  []string{"devicePub"},
+		why: "THE BINDING CHECK, as every receiver makes it: the public half as the leaf's signature " +
+			"key, under the identity key as its credential.",
+	},
+	"newDeviceIdentityState|call bytes.Equal": {
+		carries: []string{"device", "devicePub", "verified"},
+		occurs:  []string{"device.DeviceKey", "devicePub", "verified.Root"},
+		why: "the list's root compared with the record's, and the list's entries searched for this " +
+			"device's public half: comparisons of public values.",
+	},
+	"newDeviceIdentityState|call fmt.Errorf": {
+		carries: []string{"verified"},
+		occurs:  []string{"verified.Root"},
+		why: "THE ONE FORMATTING, and of a public value: the root of the identity this device's own " +
+			"list is under, named in the refusal that it is not the root the record names. The walk " +
+			"taints `verified` because the check that answered it was handed the public half; the " +
+			"root is the identity's public anchor, which every leaf of it carries.",
+	},
+	"newDeviceIdentityState|call messagegroup.DeviceIdOf": {
+		carries: []string{"devicePub"},
+		occurs:  []string{"devicePub"},
+		why:     "this device's ID, derived from the root and its public half (Spec A A-36 section 7.1). Public.",
+	},
+	"newDeviceIdentityState|literal deviceIdentityState.verified": {
+		carries: []string{"verified"},
+		occurs:  []string{"verified"},
+		why:     "the verified list, held: public.",
+	},
+	"newDeviceIdentityState|literal deviceIdentityState.deviceId": {
+		carries: []string{"deviceId"},
+		occurs:  []string{"deviceId"},
+		why:     "this device's ID, held: public.",
+	},
+	"newDeviceIdentityState|assign state.phrase": {
+		carries: []string{"device"},
+		occurs:  []string{"?"},
+		why: "the phrase device's mark, read off this device's entry in its own list: a flag, public. " +
+			"The walk spells the flag's expression `?`.",
+	},
+	"newDeviceIdentityState|return": {
+		carries: []string{"state", "verified"},
+		occurs:  []string{"fmt.Errorf(...)", "state"},
+		why:     "the state, or the refusal above.",
+	},
+	"PutPhraseKey|call self.writeRecord": {
+		carries: []string{"record.Seed"},
+		occurs:  []string{"record.Seed"},
+		why: "THE PHRASE KEY GOING TO DISK (store kind 13; identity phase 1's Task 12), which is not " +
+			"the wrap seed: this census's net takes every field named Seed, and the phrase key " +
+			"record's is one. The seed is isk_seed of the identity's current key number, on a phrase " +
+			"device only, in the clear in the store as the device's own keys are; its own census is " +
+			"the phrase-secret census of this package (phrasesecretgate_test.go), which holds it as " +
+			"the kind-13 record.",
+	},
+	"PutPhraseKey|return": {
+		carries: []string{"record.Seed"},
+		occurs:  []string{"self.writeRecord(...)"},
+		why:     "the write's own answer, an error or nil: the seed is not in it.",
 	},
 	"NewDevice|literal Device.engine": {
 		carries: []string{"engine"},
@@ -708,6 +838,11 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 // A site here with no entry is a new count nobody weighed, and a count is one edit from a value --
 // M9 drives that direction and M3 drives the edit.
 var wrapSeedCountedNotCarriedSites = map[string]string{
+	"PutPhraseKey|len record.Seed": "the phrase key record's width refusal: a seed of other than 32 " +
+		"octets is refused before it is written, and the refusal names the widths it wants and " +
+		"formats nothing of the record. The phrase key's " +
+		"seed, which this census's net takes by its field's name (store kind 13; identity phase 1's " +
+		"Task 12).",
 	"PutDeviceIdentity|len wrapSeed": "the write path's length refusal: 32 and 64 both expand " +
 		"into a well formed X-Wing pair and only one of them is the pair whose public half is in " +
 		"leafKeys, so the length is checked at the one moment the value is still in the caller's " +

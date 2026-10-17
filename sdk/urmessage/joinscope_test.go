@@ -31,6 +31,7 @@ func TestAnInviteIntoAGroupWhoseRecordIsMissingIsRefusedAsUnproven(t *testing.T)
 	}
 	before := failClosedFiles(t, store, groupId)
 	device := newAnsweringDeviceOver(t, store, []byte("the restarted device's nonce"))
+	testIdentify(t, device)
 	invite, inviteId := windowInvite(t, device)
 	if !bytes.Equal(inviteId, groupId) {
 		t.Fatalf("CONTROL FAILED: the invite is into group %x and the folder is group %x's", inviteId, groupId)
@@ -69,6 +70,7 @@ func TestAFailedJoinOverAnUnfinishedCreationErasesOnlyWhatItWrote(t *testing.T) 
 	durable := openTestStore(t, t.TempDir())
 	store := &recordSink{DurableStateStore: durable}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, groupId := windowInvite(t, joiner)
 	earlier := bytes.Repeat([]byte{0x7E}, 64)
 	if err := durable.PutGroupState(groupId, 9, earlier); err != nil {
@@ -107,6 +109,7 @@ func TestAFailedJoinOverAFolderKeptByAStrayFileTakesOnlyWhatItWrote(t *testing.T
 	durable := openTestStore(t, t.TempDir())
 	store := &recordSink{DurableStateStore: durable}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, groupId := windowInvite(t, joiner)
 	if err := os.MkdirAll(durable.groupDir(groupId), 0o700); err != nil {
 		t.Fatal(err)
@@ -145,6 +148,7 @@ type plainStateStore struct {
 func TestAStoreWithNoSingleEpochEraseIsRefusedAndKeepsEveryState(t *testing.T) {
 	store := &plainStateStore{StateStore: NewMemoryStateStore()}
 	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	testIdentify(t, device)
 	groupId := bytes.Repeat([]byte{0x75}, GroupIdBytes)
 	for _, epoch := range []uint64{1, 2} {
 		if err := store.PutGroupState(groupId, epoch, bytes.Repeat([]byte{byte(epoch)}, 32)); err != nil {

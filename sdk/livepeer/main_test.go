@@ -12,13 +12,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
+	"google.golang.org/protobuf/proto"
 )
 
 // THIS PACKAGE HAS TESTS SO THAT ITS TEST BINARY EXISTS AND STARTS. A main package with no test is
@@ -257,11 +260,12 @@ func TestAnInviteCodeFileIsWaitedForReadAndDeleted(t *testing.T) {
 }
 
 // THE JOIN CODE IS THE TEXT THE APP'S ADD DIALOG TAKES. The key package is a real one, from a real
-// Device over a transport that never reaches a server (KeyPackage is local). Its join code must be
+// Device with an identity, over a transport whose server answers Hello and nothing else (KeyPackage is
+// local; the identity's self group is founded under the connection). Its join code must be
 // byte for byte the text the app's own encoder makes of the same octets, must decode under the
 // app's own reader, and must be written to -joincodeout exactly, with nothing around it.
 func TestTheJoinCodeIsTheTextTheAppsAddDialogTakes(t *testing.T) {
-	keyPackage, err := offlineDevice(t).KeyPackage()
+	keyPackage, err := identifiedDevice(t).KeyPackage()
 	if err != nil {
 		t.Fatalf("KeyPackage: %v", err)
 	}
@@ -305,7 +309,7 @@ func TestTheJoinCodeIsTheTextTheAppsAddDialogTakes(t *testing.T) {
 // before it reaches its window, so the live run is what drives the real one); the rest are
 // ParseInvite's own refusals of real octets.
 func TestEachRefusalOfTheJoinRoadSaysWhatToDo(t *testing.T) {
-	ownJoinCode, err := offlineDevice(t).KeyPackage()
+	ownJoinCode, err := identifiedDevice(t).KeyPackage()
 	if err != nil {
 		t.Fatalf("KeyPackage: %v", err)
 	}
@@ -565,25 +569,83 @@ func withChecksum(octets []byte) []byte {
 	return append(append([]byte(nil), octets...), sum[:]...)
 }
 
-// silentClient is a connect client that sends nothing and hears nothing.
-type silentClient struct{}
-
-func (silentClient) SendWithTimeout(*connectprotocol.Frame, connect.Id, connect.AckFunction, time.Duration, ...any) bool {
-	return false
+// helloClient is a connect client whose server answers Hello, with a nonce, and nothing else: the
+// smallest thing a device can be connected through. The answer is delivered on another goroutine,
+// because the transport is still inside its own send when the request leaves it.
+type helloClient struct {
+	mutex   sync.Mutex
+	receive connect.ReceiveFunction
 }
 
-func (silentClient) AddReceiveCallback(connect.ReceiveFunction) func() {
+func (self *helloClient) AddReceiveCallback(receive connect.ReceiveFunction) func() {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	self.receive = receive
 	return func() {}
 }
 
-// offlineDevice is a real urmessage.Device over durable stores in a temp directory and a transport
-// whose client never reaches a server: enough for KeyPackage, which is local, and for nothing that
-// needs a Hello.
-func offlineDevice(t *testing.T) *urmessage.Device {
+func (self *helloClient) SendWithTimeout(frame *connectprotocol.Frame, destination connect.Id,
+	ack connect.AckFunction, timeout time.Duration, opts ...any) bool {
+
+	if frame.GetMessageType() != connectprotocol.MessageType_MessageMessageServerRequest {
+		return true
+	}
+	request := &protocol.MessageServerRequest{}
+	if proto.Unmarshal(frame.GetMessageBytes(), request) != nil || request.GetHello() == nil {
+		return false
+	}
+	self.mutex.Lock()
+	receive := self.receive
+	self.mutex.Unlock()
+	if receive == nil {
+		return false
+	}
+	encoded, err := proto.Marshal(&protocol.MessageServerResponse{
+		RequestId: request.GetRequestId(),
+		Reason:    protocol.Reason_REASON_OK,
+		Body: &protocol.MessageServerResponse_Hello{
+			Hello: &protocol.HelloResponse{ServerNonce: []byte("livepeer's test server nonce")},
+		},
+	})
+	if err != nil {
+		return false
+	}
+	go receive(connect.TransferPath{}, []*connectprotocol.Frame{{
+		MessageType:  connectprotocol.MessageType_MessageMessageServerResponse,
+		MessageBytes: encoded,
+	}}, connect.Peer{})
+	return true
+}
+
+// identifiedDevice is a real urmessage.Device over durable stores in a temp directory, connected
+// through a [helloClient], with the identity a person sets up: the words offered, typed back, and the
+// identity made (identity phase 1's Task 12). A device with no identity publishes no join code.
+func identifiedDevice(t *testing.T) *urmessage.Device {
+	t.Helper()
+	device := deviceOver(t, &helloClient{})
+	ctx := context.Background()
+	if err := device.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	words, err := device.CreateIdentity()
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	typed := strings.Join(words, " ")
+	clear(words)
+	if err := device.ConfirmWords(ctx, typed); err != nil {
+		t.Fatalf("ConfirmWords: %v", err)
+	}
+	return device
+}
+
+// deviceOver is a real urmessage.Device over durable stores in a temp directory and a transport over
+// the client given.
+func deviceOver(t *testing.T, client sdk.MessageTransportClient) *urmessage.Device {
 	t.Helper()
 	root := t.TempDir()
 	transport, err := sdk.NewMessageTransport(&sdk.MessageTransportConfig{
-		Client: silentClient{}, Server: connect.NewId(), ProtocolVersion: 1, Timeout: time.Second,
+		Client: client, Server: connect.NewId(), ProtocolVersion: 1, Timeout: time.Second,
 	})
 	if err != nil {
 		t.Fatalf("transport: %v", err)

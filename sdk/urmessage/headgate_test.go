@@ -289,7 +289,7 @@ func sealOneOfEveryRecordKind(t *testing.T) []sealedKind {
 	founding := newCrossProcessSession(t, handle, pqSecret, nil, alice.reserver, "a founding nonce")
 	defer founding.Close()
 
-	keyPackage, err := bob.engine.NewKeyPackage()
+	keyPackage, err := bob.keyPackage()
 	if err != nil {
 		t.Fatalf("bob's key package: %v", err)
 	}

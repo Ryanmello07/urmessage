@@ -146,8 +146,10 @@ var pqSecretProducerSites = map[string]string{
 	"AddMember|self.pqSecretLocked": "THE FOUNDING EPOCH'S SECRET, READ FOR THE JOIN SEAL. Epoch one's secret travels sealed " +
 		"inside [Invite.JoinSeal], to the key the joiner's leaf publishes, because the only other " +
 		"member is holding the Welcome and has no leaf to address a wrap to yet.",
-	"CreateGroup|messagegroup.NewPqSecret": "THE FOUNDING DRAW. The group's first pq_secret, at epoch zero, and the only one drawn " +
-		"outside [Group.stageEpochRotationLocked].",
+	"foundGroupLocked|messagegroup.NewPqSecret": "THE FOUNDING DRAW. The group's first pq_secret, at epoch zero, and the only one drawn " +
+		"outside [Group.stageEpochRotationLocked]. One founding body draws it for a conversation " +
+		"([Device.CreateGroup]) and for the self group ([Device.ConfirmWords]) alike (identity phase 1's " +
+		"Task 12).",
 	"ParseInvite|field.into":                        "T",
 	"PutGroupRecord|encodePqSecretTable":            "the table as the one octet string part six is.",
 	"PutGroupRecord|record.PqSecret":                "the scalar the record still carries, part two.",
@@ -398,46 +400,46 @@ var pqSecretSinks = map[string]pqSecretSink{
 		why: "the founding epoch's secret filed at the epoch the handle is standing at, which is where " +
 			"the table's first row comes from for a founder that has not yet committed.",
 	},
-	"CreateGroup|call messagegroup.GroupHandleKey": {
+	"foundGroupLocked|call messagegroup.GroupHandleKey": {
 		carries: []string{"pqSecret"},
 		occurs:  []string{"messagegroup.StorageRoot(...)"},
 		why: "the group_handle_key, derived from that root. It carries `pqSecret` because the root " +
 			"expression is nested in this call.",
 	},
-	"CreateGroup|call messagegroup.NewGroupSession": {
+	"foundGroupLocked|call messagegroup.NewGroupSession": {
 		carries: []string{"pqSecret"},
 		occurs:  []string{"pqSecret"},
 		why: "the secret going into connect's own per-epoch table, which is the other half of ruling " +
 			"40.",
 	},
-	"CreateGroup|call messagegroup.StorageRoot": {
+	"foundGroupLocked|call messagegroup.StorageRoot": {
 		carries: []string{"pqSecret"},
 		occurs:  []string{"pqSecret"},
 		why:     "the founding storage root's post-quantum half.",
 	},
-	"CreateGroup|call self.hold": {
+	"foundGroupLocked|call self.hold": {
 		carries: []string{"group"},
 		occurs:  []string{"group"},
 		why:     "the whole group going onto the device, tainted through its own table.",
 	},
-	"CreateGroup|literal ?.0": {
+	"foundGroupLocked|literal ?.0": {
 		carries: []string{"pqSecret"},
 		occurs:  []string{"0: pqSecret"},
 		why:     "the sdk-side table's first entry, epoch zero's.",
 	},
-	"CreateGroup|literal Group.founding": {
+	"foundGroupLocked|literal Group.founding": {
 		carries: []string{"founding"},
 		occurs:  []string{"founding"},
 		why:     "the session, tainted because it was constructed with the secret.",
 	},
-	"CreateGroup|literal Group.groupHandleKey": {
+	"foundGroupLocked|literal Group.groupHandleKey": {
 		carries: []string{"groupHandleKey"},
 		occurs:  []string{"groupHandleKey"},
 		why: "the handle key, tainted by derivation from the root. It is not itself a secret this gate " +
 			"is about; it is censused because the walk cannot tell a derivation from a copy, which is " +
 			"the safe direction.",
 	},
-	"CreateGroup|return": {
+	"foundGroupLocked|return": {
 		carries: []string{"group"},
 		occurs:  []string{"group"},
 		why:     "the same group handed back.",
@@ -2293,7 +2295,7 @@ var pqSecretCountedNotCarriedSites = map[string]string{
 }
 
 var pqSecretAccumulatorSites = map[string]string{
-	"CreateGroup|accumulate self.hold": "THE DEVICE. A group whose table holds the founding secret goes into [Device.groups], and " +
+	"foundGroupLocked|accumulate self.hold": "THE DEVICE. A group whose table holds the founding secret goes into [Device.groups], and " +
 		"what that map does with it afterwards is not a thing this walk over names can follow. It " +
 		"is bounded: the group's own table is censused wherever it is read.",
 	"Join|accumulate self.holdReplacing": "the same, for a joiner.",

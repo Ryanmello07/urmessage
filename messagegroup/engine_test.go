@@ -55,6 +55,11 @@ var sectionSixGroupEngine = map[string]string{
 	// mls had persisted the joined epoch under the id the Welcome named. This door carries the id
 	// in, which is the whole of what it adds.
 	"JoinFromWelcomeInto": "func(welcome []byte, ratchetTree []byte, groupId []byte) (GroupHandle, error)",
+	// THE SEVENTH AND THE EIGHTH, Spec A A-36's, transcribed as section 6 has them (identity phase
+	// 1's Task 12; LRI R64): a key package whose leaf carries the identity extension, and a founding
+	// whose founder's leaf and whose context carry the identity layer's extensions.
+	"NewBoundKeyPackage": "func(leafExtensions []ExtensionBytes) (keyPackage []byte, err error)",
+	"CreateBoundGroup":   "func(groupId []byte, policy []byte, leafKeys []byte, leafExtensions []ExtensionBytes, contextExtensions []ExtensionBytes) (GroupHandle, error)",
 }
 
 var sectionSixGroupHandle = map[string]string{
@@ -68,6 +73,8 @@ var sectionSixGroupHandle = map[string]string{
 	// it arrives holding a leaf that an open authenticated, and answering connect/mls's own
 	// Role.String() because a uint8 here would be a re-export of mls.Role under another name.
 	"RoleAt": "func(leaf uint32) (identityPub []byte, role string, err error)",
+	// Spec A A-36's, transcribed (identity phase 1's Task 12): a leaf as the binding rules read it.
+	"LeafAt": "func(leaf uint32) (*LeafView, error)",
 
 	"Export":              "func(label string, context []byte, length int) ([]byte, error)",
 	"PairwiseExport":      "func(label string, peer uint32, length int) ([]byte, error)",
@@ -302,8 +309,14 @@ func TestTheEngineInterfacesAreExactlySectionSixsBlock(t *testing.T) {
 	// not a third parameter on JoinFromWelcome: that door's call sites, in three packages
 	// (`git grep -E '\.JoinFromWelcome\(' -- '*.go'`), state no intent, and a nil they would all
 	// have to pass is the unbound join spelled once per call.
-	if len(sectionSixGroupEngine) != 6 || len(sectionSixGroupHandle) != 35 {
-		t.Errorf("section 6's block is transcribed as %d and %d methods; it was measured at 6 and 35, and a change to either is a change to the seam",
+	//
+	// AND IT IS 8 AND 36 FROM IDENTITY PHASE 1's TASK 12 (Spec A A-36; LRI R64), three of the four
+	// methods section 6 designs for the identity layer, transcribed as it writes them: the ENGINE half
+	// gains NewBoundKeyPackage and CreateBoundGroup, and the HANDLE half LeafAt. CommitOwnLeaf and
+	// ProcessedMember's two fields are the library's Tasks 13 and 42, and section 6's block takes
+	// 8 and 37 when they land, as A-36 says.
+	if len(sectionSixGroupEngine) != 8 || len(sectionSixGroupHandle) != 36 {
+		t.Errorf("section 6's block is transcribed as %d and %d methods; it was measured at 8 and 36, and a change to either is a change to the seam",
 			len(sectionSixGroupEngine), len(sectionSixGroupHandle))
 	}
 }
@@ -1487,18 +1500,59 @@ func TestNewKeyPackageErasesEveryPrivateHalfItMintedBeforeItReturns(t *testing.T
 	// package reaches it. The minted key package holds a COPY of device_sig on an unexported
 	// field, the value is a local, and a method that returned the encoding and dropped it leaves
 	// the device's long term signing key in the heap.
+	//
+	// THE BODY IS newKeyPackage SINCE IDENTITY PHASE 1's TASK 12, which both doors are: NewKeyPackage
+	// and Spec A A-36's NewBoundKeyPackage. So the erases are read off that body, and each door is
+	// held to being that body and nothing else -- a door that minted on its own would reach none of
+	// them.
 	erases := engineNewKeyPackageErasesInSource(t)
-	t.Logf("(*connectMlsEngine).NewKeyPackage reaches these erases in its own source: %v", erases)
+	t.Logf("(*connectMlsEngine).newKeyPackage reaches these erases in its own source: %v", erases)
 	for _, owed := range []string{"keyPackage.Zeroize", "zeroize(initPrivate)", "zeroize(encryptPrivate)"} {
 		if !slices.Contains(erases, owed) {
-			t.Errorf("(*connectMlsEngine).NewKeyPackage does not reach %s; it holds three private halves and drops every one this method does not erase",
+			t.Errorf("(*connectMlsEngine).newKeyPackage does not reach %s; it holds three private halves and drops every one this method does not erase",
 				owed)
+		}
+	}
+	for door, body := range engineMethodBodiesInSource(t, "NewKeyPackage", "NewBoundKeyPackage") {
+		if !strings.HasPrefix(body, "return self.newKeyPackage(") || strings.Count(body, "\n") != 0 {
+			t.Errorf("(*connectMlsEngine).%s is %q, not a return of newKeyPackage's answer; a door that mints on its own erases nothing of what it mints",
+				door, body)
 		}
 	}
 }
 
+// engineMethodBodiesInSource answers each named method of connectMlsEngine as the text of its one
+// statement, and fails for a method that is missing or that is more than one statement.
+func engineMethodBodiesInSource(t *testing.T, names ...string) map[string]string {
+	t.Helper()
+	fileSet, sources := messagegroupProductionSources(t)
+	bodies := map[string]string{}
+	for _, source := range sources {
+		for _, declaration := range source.parsed.Decls {
+			function, isFunction := declaration.(*ast.FuncDecl)
+			if !isFunction || function.Recv == nil || !slices.Contains(names, function.Name.Name) {
+				continue
+			}
+			if len(function.Body.List) != 1 {
+				t.Fatalf("%s's body is %d statements", function.Name.Name, len(function.Body.List))
+			}
+			rendered := &strings.Builder{}
+			if err := printer.Fprint(rendered, fileSet, function.Body.List[0]); err != nil {
+				t.Fatalf("render %s: %v", function.Name.Name, err)
+			}
+			bodies[function.Name.Name] = rendered.String()
+		}
+	}
+	for _, name := range names {
+		if _, found := bodies[name]; !found {
+			t.Fatalf("no production method of this package is named %s", name)
+		}
+	}
+	return bodies
+}
+
 // engineNewKeyPackageErasesInSource reads this package's own production source and answers, for
-// (*connectMlsEngine).NewKeyPackage, the erase calls its body makes -- rendered as callee plus
+// (*connectMlsEngine).newKeyPackage, both key-package doors' one body, the erase calls it makes -- rendered as callee plus
 // argument so the gate can name WHICH array is missing rather than reporting "an erase is
 // missing".
 func engineNewKeyPackageErasesInSource(t *testing.T) []string {
@@ -1509,7 +1563,7 @@ func engineNewKeyPackageErasesInSource(t *testing.T) []string {
 	for _, source := range sources {
 		for _, declaration := range source.parsed.Decls {
 			function, isFunction := declaration.(*ast.FuncDecl)
-			if !isFunction || function.Name.Name != "NewKeyPackage" || function.Recv == nil {
+			if !isFunction || function.Name.Name != "newKeyPackage" || function.Recv == nil {
 				continue
 			}
 			seen = true
@@ -1531,7 +1585,7 @@ func engineNewKeyPackageErasesInSource(t *testing.T) []string {
 		}
 	}
 	if !seen {
-		t.Fatal("no production method of this package is named NewKeyPackage, so this clause read nothing")
+		t.Fatal("no production method of this package is named newKeyPackage, so this clause read nothing")
 	}
 	slices.Sort(found)
 	return found

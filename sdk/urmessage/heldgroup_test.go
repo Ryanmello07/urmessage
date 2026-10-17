@@ -19,8 +19,11 @@ import (
 func TestAnInviteIntoAGroupThisDeviceHoldsIsRefused(t *testing.T) {
 	ctx := context.Background()
 	alice, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	testIdentify(t, alice)
 	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	testIdentify(t, bob)
 	mallory, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("mallory's nonce"))
+	testIdentify(t, mallory)
 	for _, device := range []*Device{alice, bob, mallory} {
 		if err := device.Connect(ctx); err != nil {
 			t.Fatalf("Connect: %v", err)
@@ -120,6 +123,7 @@ func TestAnInviteIntoAGroupTheLastRestoreCouldNotReadAnswersThatClass(t *testing
 func TestAMapEntryIsReplacedOnlyByTheJoinThatJudgedIt(t *testing.T) {
 	ctx := context.Background()
 	device, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("a nonce"))
+	testIdentify(t, device)
 	if err := device.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -168,6 +172,7 @@ func TestAMapEntryIsReplacedOnlyByTheJoinThatJudgedIt(t *testing.T) {
 func TestNoGroupIsFoundedUnderAnIdThisDeviceHolds(t *testing.T) {
 	ctx := context.Background()
 	device, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("a nonce"))
+	testIdentify(t, device)
 	if err := device.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

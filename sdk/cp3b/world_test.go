@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"math"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +49,11 @@ type world struct {
 	// the tap in front of the HANDLER, when this world has one: every §4.3 request that reached
 	// the api layer and every response that came back. See [wireTap].
 	wire *wireTap
+
+	// the identities this world's devices were given, and the words each was made from
+	// ([world.identify]; identity phase 1's Task 12)
+	identityMutex sync.Mutex
+	identities    []*worldIdentity
 }
 
 const worldProtocolVersion = 1
@@ -236,6 +242,7 @@ func (self *world) device(t *testing.T, name string) (*urmessage.Device, *connec
 		t.Fatalf("%s: urmessage.NewDevice: %v", name, err)
 	}
 	t.Cleanup(func() { device.Close() })
+	self.identify(t, name, device)
 	return device, client, transport
 }
 
@@ -347,7 +354,36 @@ func (self *world) durablePersona(t *testing.T, name string, stateDir string, st
 		streamStore: streamStore, stateStore: stateStore, device: device,
 	}
 	t.Cleanup(current.kill)
+	// a persona over a store that holds an identity -- a restart -- reads it back
+	self.identify(t, name, device)
 	return current
+}
+
+// durablePersonaRefused stands one up over two directories as durablePersona does, where NewDevice is
+// expected to refuse, and answers the refusal; everything it opened is closed again.
+func (self *world) durablePersonaRefused(t *testing.T, name string, stateDir string, streamDir string) error {
+	t.Helper()
+	client := self.connectClient(t)
+	transport := self.transport(t, client)
+	streamStore, err := sdk.OpenStreamStore(streamDir)
+	if err != nil {
+		t.Fatalf("%s: sdk.OpenStreamStore(%s): %v", name, streamDir, err)
+	}
+	defer streamStore.Close()
+	stateStore, err := urmessage.OpenDurableStateStore(stateDir)
+	if err != nil {
+		t.Fatalf("%s: urmessage.OpenDurableStateStore(%s): %v", name, stateDir, err)
+	}
+	defer stateStore.Close()
+	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
+		Transport:  transport,
+		Reserver:   sdk.NewStreamIndexReserver(streamStore),
+		StateStore: stateStore,
+	})
+	if err == nil {
+		device.Close()
+	}
+	return err
 }
 
 // newPersona is durablePersona over two fresh directories.

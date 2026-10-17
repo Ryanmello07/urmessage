@@ -274,6 +274,7 @@ func (self *platformWorld) device(t *testing.T, name string) (*urmessage.Device,
 		t.Fatalf("%s: urmessage.NewDevice: %v", name, err)
 	}
 	t.Cleanup(func() { device.Close() })
+	identifyDevice(t, name, device)
 	return device, client
 }
 

@@ -808,6 +808,20 @@ func (self *Group) OwnLeafNodeCopy() *LeafNode {
 	return leaf.Clone()
 }
 
+// LeafNodeCopy is the current tree's leaf node at one leaf, as a deep copy, and nil for a leaf
+// that is blank or outside the tree. It is OwnLeafNodeCopy for any leaf: the identity layer reads
+// a member's credential, signature key and extensions through it, for Spec A section 6's LeafAt
+// (identity phase 1's Task 12), and the copy is deep for OwnLeafNodeCopy's reason.
+func (self *Group) LeafNodeCopy(leaf LeafIndex) *LeafNode {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	node := self.tree.Leaf(leaf)
+	if node == nil {
+		return nil
+	}
+	return node.Clone()
+}
+
 // Members returns a snapshot of the membership with roles resolved from the group policy extension.
 func (self *Group) Members() []Member {
 	self.stateLock.Lock()
@@ -2986,6 +3000,25 @@ func (self *Group) PendingRemovedLeaves() ([]LeafIndex, error) {
 		return nil, ErrNoPendingCommit
 	}
 	return self.pending.RemovedLeaves(), nil
+}
+
+// PendingLeafNode is the staged commit's leaf node at one leaf, as a deep copy: the leaf the epoch
+// the commit opens will hold there (identity phase 1's Task 12; LRI R68, the review's L3-5). For
+// this member's own leaf it is the committer's POST-commit leaf, its update path's and its
+// OwnLeafPatch's -- the leaf the sending side has to judge as every receiver will, before
+// anything is sent, where OwnLeafNodeCopy still answers the live tree's. ErrNoPendingCommit with
+// no staged commit, and ErrBlankLeaf for a leaf the staged tree holds no member at.
+func (self *Group) PendingLeafNode(leaf LeafIndex) (*LeafNode, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.pending == nil {
+		return nil, ErrNoPendingCommit
+	}
+	node := self.pending.LeafNodeAfter(leaf)
+	if node == nil {
+		return nil, fmt.Errorf("%w: leaf %d of the staged tree", ErrBlankLeaf, leaf)
+	}
+	return node, nil
 }
 
 // PendingGroupContext is the serialized GroupContext of the epoch the staged commit opens, which

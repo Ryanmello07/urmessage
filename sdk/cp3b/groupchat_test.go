@@ -421,6 +421,7 @@ func (self *world) deviceWithAuthorizer(t *testing.T, name string, authorizer ur
 		t.Fatalf("%s: urmessage.NewDevice: %v", name, err)
 	}
 	t.Cleanup(func() { device.Close() })
+	self.identify(t, name, device)
 	return device
 }
 

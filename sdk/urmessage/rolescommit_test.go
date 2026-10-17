@@ -172,7 +172,7 @@ func TestTheSendSideJudgesTheSameValueEveryReceiverWillJudge(t *testing.T) {
 			name: "an Add of a stranger",
 			intent: func(t *testing.T, world *roleWorld, owner *roleMember) *outgoingCommit {
 				dave := world.device("dave")
-				keyPackage, err := dave.engine.NewKeyPackage()
+				keyPackage, err := dave.keyPackage()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -341,7 +341,7 @@ func TestAMembersRoleVerbsAreRefusedOnTheSendSideAndNothingIsBuilt(t *testing.T)
 	world := newRoleWorld(t, "owner", "bob", "carol")
 	owner, bob, carol := world.member("owner"), world.member("bob"), world.member("carol")
 	stranger := world.device("stranger")
-	strangerKeyPackage, err := stranger.engine.NewKeyPackage()
+	strangerKeyPackage, err := stranger.keyPackage()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -358,6 +358,12 @@ func TestAFounderKilledAndRestartedComesBackIntoTheGroupItPublished(t *testing.T
 //
 // It is what makes [NewDevice]'s persisted identity load-bearing: delete the PutDeviceIdentity
 // call and every device comes back with a new key, which is the state this case reproduces.
+//
+// AND FROM IDENTITY PHASE 1'S TASK 12 THE STORE REFUSES IT FIRST, BY NAME. The identity layer's
+// records name the lost key in their list, so a device key is not minted beside them: NewDevice
+// answers that the store holds an identity and no device key, before any group is read. Only with
+// those records gone too -- every record that names the old key -- does the device come back under a
+// new key, a new identity, and the restore refusal this case was written for.
 func TestARestartedDeviceWithoutItsPersistedIdentityCannotRestoreItsGroup(t *testing.T) {
 	world := newWorld(t)
 	ctx := context.Background()
@@ -384,6 +390,19 @@ func TestARestartedDeviceWithoutItsPersistedIdentityCannotRestoreItsGroup(t *tes
 		t.Fatalf("removing the persisted identity: %v", err)
 	}
 
+	// THE STORE'S OWN REFUSAL: an identity that would not name a new key, and no device key
+	err := world.durablePersonaRefused(t, "bob", stateDir, bob.streamDir)
+	if !errors.Is(err, urmessage.ErrStateStoreState) || !strings.Contains(err.Error(), "holds an identity and no device key") {
+		t.Fatalf("a device over a store that holds an identity and no device key answered %v, want the store's refusal of a new key", err)
+	}
+	t.Logf("a device whose key is gone beside its identity is refused by name: %v", err)
+
+	// AND WITH EVERY RECORD THAT NAMES THE OLD KEY GONE, the restore's refusal
+	for _, name := range []string{"identity", "identity-heads", "phrase-key"} {
+		if err := os.Remove(filepath.Join(stateDir, "state", name)); err != nil {
+			t.Fatalf("removing the identity layer's %s record: %v", name, err)
+		}
+	}
 	revived := world.durablePersona(t, "bob", stateDir, bob.streamDir)
 	if err := revived.device.Connect(ctx); err != nil {
 		t.Fatalf("the revived bob's Connect: %v", err)

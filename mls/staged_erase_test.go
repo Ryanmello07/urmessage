@@ -1218,6 +1218,11 @@ var typesTheEraseClassReachesThatOweNoErase = map[string]string{
 		"the leaf itself carries",
 	"Member": "the public view of one member this package hands its caller: an identity, a signature public " +
 		"key and the leaf keys extension. Every field is read out of that member's own published leaf node",
+	"LeafView": "one leaf as the seam's LeafAt answers it (Spec A A-36 section 6; identity phase 1's Task 12): " +
+		"the credential's identity, the signature PUBLIC key and the leaf's extensions, deep copies of a leaf " +
+		"node every member of the group holds and every joiner is handed in the ratchet tree. It is Member's " +
+		"row one package over, and an ANSWER the binding rules read: no production declaration holds one in " +
+		"a field, so there is no drop site an erase could be reachable from",
 	"PreSharedKeyInput": "an ARGUMENT. PskSecret takes a list of them, extracts each into the chain and erases " +
 		"its own intermediates; the secret in an entry is storage the CALLER owns and is still holding, and " +
 		"erasing it here would erase a value the caller passed by value",

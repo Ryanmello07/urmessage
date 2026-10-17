@@ -31,7 +31,7 @@ func TestAfterAnEpochChangeEveryTrackedKeyNamesTheNewEpochAndTheOldOnesArePrinte
 	defer bob.close()
 
 	// alice founds and adds bob; both reach epoch one.
-	handle, err := alice.device.createMlsGroup(groupId)
+	handle, err := alice.device.createMlsGroup(groupId, false)
 	if err != nil {
 		t.Fatalf("createMlsGroup: %v", err)
 	}

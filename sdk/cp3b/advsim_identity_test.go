@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -807,6 +808,20 @@ func TestAdvSimAnUnboundKeyPackageIsAdmittedByEveryReceiver(t *testing.T) {
 	if err != nil {
 		advHarness(t, "carol's KeyPackage: %v", err)
 	}
+	// AND IT IS A BOUND ONE (identity phase 1's Task 12; LRI R62): it carries a 0xF005 binding its key
+	// to the identity Carol's words made, and that identity's list names the key
+	carolDecoded, carolVerified, err := keyPackageIdentity(t, carolKeyPackage)
+	if err != nil {
+		advHarness(t, "carol's key package does not bind: %v", err)
+	}
+	if named := world.identityClaimed(t, carolDecoded.LeafNode.Credential.Identity); named.name != "carol" {
+		advHarness(t, "carol's key package names %s's identity", named.name)
+	}
+	if !slices.ContainsFunc(carolVerified.Devices, func(entry messagegroup.DeviceEntry) bool {
+		return bytes.Equal(entry.DeviceKey, carolDecoded.LeafNode.SignatureKey)
+	}) {
+		advHarness(t, "carol's key package's list does not name the key it is signed with")
+	}
 	commit, _, _, err := attacker.handle.CommitAdd([][]byte{carolKeyPackage})
 	if err != nil {
 		advHarness(t, "the attacker's CommitAdd of carol's key package: %v", err)
@@ -823,7 +838,9 @@ func TestAdvSimAnUnboundKeyPackageIsAdmittedByEveryReceiver(t *testing.T) {
 	}
 	t.Logf("CONTROL: the attacker's addition of carol's key package was admitted by Alice's first device and by Bob")
 
-	// THE SCENARIO: the attacker adds a key package that names no identity
+	// THE SCENARIO: the attacker adds a key package that names no identity. From identity phase 1's
+	// Task 12 every seam member's package is bound, this one included, and Task 13 builds it without
+	// 0xF005 on purpose and asserts so before the add (LRI R62)
 	stranger := world.seamMember(t, ctx, "stranger")
 	commit, _, _, err = attacker.handle.CommitAdd([][]byte{stranger.keyPackage(t)})
 	if err != nil {

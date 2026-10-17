@@ -32,6 +32,7 @@ func failClosedScene(t *testing.T) (string, []byte) {
 		t.Fatalf("OpenDurableStateStore: %v", err)
 	}
 	joiner := newAnsweringDeviceOver(t, durable, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, groupId := windowInvite(t, joiner)
 	if _, err := joiner.Join(context.Background(), honest); err != nil {
 		t.Fatalf("the honest join: %v", err)

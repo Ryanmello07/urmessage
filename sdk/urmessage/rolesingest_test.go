@@ -89,7 +89,7 @@ func newRoleWorld(t *testing.T, names ...string) *roleWorld {
 	keyPackages := [][]byte{}
 	for _, name := range names[1:] {
 		joiner := world.device(name)
-		keyPackage, err := joiner.engine.NewKeyPackage()
+		keyPackage, err := joiner.keyPackage()
 		if err != nil {
 			t.Fatalf("%s's key package: %v", name, err)
 		}
@@ -484,7 +484,7 @@ func TestAnOwnersPromotionIsAllowedAndOnlyTheAdminMayThenAdd(t *testing.T) {
 
 	// epoch 2 -> 3: bob, now an admin, adds dave
 	dave := world.device("dave")
-	daveKeyPackage, err := dave.engine.NewKeyPackage()
+	daveKeyPackage, err := dave.keyPackage()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +497,7 @@ func TestAnOwnersPromotionIsAllowedAndOnlyTheAdminMayThenAdd(t *testing.T) {
 
 	// epoch 3 -> refused: carol, a member, adds erin
 	erin := world.device("erin")
-	erinKeyPackage, err := erin.engine.NewKeyPackage()
+	erinKeyPackage, err := erin.keyPackage()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func TestTheOwnerAddingAStrangerAndCrowningItInOneCommitIsRefused(t *testing.T) 
 	owner, bob, carol := world.member("owner"), world.member("bob"), world.member("carol")
 
 	dave := world.device("dave")
-	daveKeyPackage, err := dave.engine.NewKeyPackage()
+	daveKeyPackage, err := dave.keyPackage()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -845,7 +845,7 @@ func TestTheOwnerAddingAStrangerAndCrowningItInOneCommitIsRefused(t *testing.T) 
 	world = newRoleWorld(t, "owner", "bob", "carol")
 	owner, bob, carol = world.member("owner"), world.member("bob"), world.member("carol")
 	dave = world.device("dave")
-	daveKeyPackage, err = dave.engine.NewKeyPackage()
+	daveKeyPackage, err = dave.keyPackage()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -895,10 +895,15 @@ func keylessKeyPackage(t *testing.T, dev *crossProcessDevice) []byte {
 	capabilities := mls.Capabilities{
 		Versions:     []mls.ProtocolVersion{mls.ProtocolVersionMls10},
 		CipherSuites: mls.Suites(),
+		// the engine's own listing, so that the package lacks the leaf keys and nothing else: every
+		// group this build founds requires urmessage_identity of a joiner's capabilities too (identity
+		// phase 1's Task 12), and a package that did not list it would be refused for that instead
 		Extensions: []mls.ExtensionType{
 			mls.ExtensionTypeUrmessageGroupPolicy,
 			mls.ExtensionTypeUrmessageLeafKeys,
 			mls.ExtensionTypeUrmessageJoinSeal,
+			mls.ExtensionTypeUrmessageIdentity,
+			mls.ExtensionTypeUrmessageGroupPurpose,
 		},
 		Proposals:   []mls.ProposalType{},
 		Credentials: []mls.CredentialType{mls.CredentialTypeBasic},
