@@ -57,6 +57,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -246,6 +247,17 @@ func main() {
 		fail("Connect: %v", err)
 	}
 	fmt.Printf("  routed to after %v\n", time.Since(connectStarted).Round(time.Millisecond))
+
+	// ── 1b. this peer's identity ───────────────────────────────────────────────────────────
+	// EVERY GROUP THIS BUILD FOUNDS REQUIRES AN IDENTITY OF EACH MEMBER, and a device with none
+	// publishes no join code (identity phase 1's Task 12). So a first run makes one, as a person
+	// does, under the connection just made, and a restart over the same -dir reads it back.
+	say("this peer's identity")
+	identityLine, _, err := ensureIdentity(ctx, p.device)
+	if err != nil {
+		fail("%v", err)
+	}
+	fmt.Printf("  %s\n", identityLine)
 
 	// ── 2. restore, or do the handshake ────────────────────────────────────────────────────
 	//
@@ -1055,8 +1067,9 @@ func printArrived(one *urmessage.Message) {
 		short(one.ReplyToId), clip(one.Text))
 }
 
-// printRoster is this peer's Members() -- every leaf, its role, its identity's first octets and
-// whether it is this device -- with the epoch it was read at, and this peer's own role beside it.
+// printRoster is this peer's Members() BY IDENTITY ([rosterByIdentity]), with the epoch it was read at
+// and this peer's own role beside it: one line per person, each with their devices, so that a
+// conversation of two people reads as two lines however many devices each has.
 func printRoster(group *urmessage.Group, when string) {
 	members, err := group.Members()
 	if err != nil {
@@ -1064,15 +1077,103 @@ func printRoster(group *urmessage.Group, when string) {
 		return
 	}
 	myRole, _ := group.MyRole()
-	rows := []string{}
-	for _, member := range members {
-		mine := ""
-		if member.Mine {
-			mine = " (this peer)"
+	lines := rosterByIdentity(members)
+	identities := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "identity ") {
+			identities += 1
 		}
-		rows = append(rows, fmt.Sprintf("leaf %d %s %s%s", member.LeafIndex, member.Role, short(member.IdentityPub), mine))
 	}
-	fmt.Printf("  <- ROSTER %s, epoch %d, my role %s: %s\n", when, group.Epoch(), myRole, strings.Join(rows, "; "))
+	fmt.Printf("  <- ROSTER %s, epoch %d, my role %s: %d identity(ies) over %d leaf/leaves\n",
+		when, group.Epoch(), myRole, identities, len(members))
+	for _, line := range lines {
+		fmt.Printf("       %s\n", line)
+	}
+}
+
+// ensureIdentity gives this peer its identity as a person sets one up, or reads back the one its -dir
+// holds (identity phase 1's Task 15; LRI R81). A first run's device has none: the words are offered,
+// typed back at once, and the identity made, its self group founded under the connection, so the
+// device must be connected. The words are cleared once typed back, and never printed, logged or
+// written. A restart over the same -dir reads the identity back off the disk and makes nothing. It
+// answers the line to print, digests only (Property 1), and whether it made the identity.
+func ensureIdentity(ctx context.Context, device *urmessage.Device) (string, bool, error) {
+	identity, err := device.Identity()
+	if err == nil {
+		return "this peer's identity, read back: " + identityDigests(identity), false, nil
+	}
+	if !errors.Is(err, urmessage.ErrNoIdentity) {
+		return "", false, fmt.Errorf("this peer's identity: %w", err)
+	}
+	words, err := device.CreateIdentity()
+	if err != nil {
+		return "", false, fmt.Errorf("CreateIdentity: %w", err)
+	}
+	typed := strings.Join(words, " ")
+	clear(words)
+	if err := device.ConfirmWords(ctx, typed); err != nil {
+		return "", false, fmt.Errorf("ConfirmWords, which makes the identity under the connection: %w", err)
+	}
+	identity, err = device.Identity()
+	if err != nil {
+		return "", false, fmt.Errorf("this peer's identity, once its words were typed back: %w", err)
+	}
+	return "an identity, made as a person makes one: " + identityDigests(identity) + "; its words typed back and cleared", true, nil
+}
+
+// identityDigests is what this peer prints of its identity: the digests of its account ID and its
+// device ID, and nothing of either.
+func identityDigests(identity *urmessage.Identity) string {
+	return "account " + digestOf([]byte(identity.AccountId)) + ", device " + digestOf([]byte(identity.DeviceId))
+}
+
+// rosterByIdentity is a roster as this peer prints it (identity phase 1's Task 15): one line per
+// identity, in the order of its first leaf, with how many devices it has and each device's leaf, role
+// and device ID, this peer's own identity marked; and a line for each leaf no identity binds. Digests
+// only (Property 1): an identity by the digest of its root, a device by the digest of its device ID.
+func rosterByIdentity(members []urmessage.Member) []string {
+	keys := []string{}
+	held := map[string][]urmessage.Member{}
+	for _, member := range members {
+		key := "identity " + string(member.Identity)
+		if len(member.Identity) == 0 {
+			key = fmt.Sprintf("leaf %d", member.LeafIndex)
+		}
+		if _, seen := held[key]; !seen {
+			keys = append(keys, key)
+		}
+		held[key] = append(held[key], member)
+	}
+	lines := []string{}
+	for _, key := range keys {
+		rows := held[key]
+		if len(rows[0].Identity) == 0 {
+			lines = append(lines, fmt.Sprintf("a leaf no identity binds: leaf %d %s", rows[0].LeafIndex, rows[0].Role))
+			continue
+		}
+		mine := ""
+		devices := []string{}
+		for _, member := range rows {
+			if member.Mine {
+				mine = " (this peer)"
+			}
+			devices = append(devices, fmt.Sprintf("leaf %d %s device %s", member.LeafIndex, member.Role, digestOf([]byte(member.DeviceId))))
+		}
+		count := "1 device"
+		if 1 < len(rows) {
+			count = fmt.Sprintf("%d devices", len(rows))
+		}
+		lines = append(lines, fmt.Sprintf("identity %s%s: %s: %s", digestOf(rows[0].Identity), mine, count, strings.Join(devices, ", ")))
+	}
+	return lines
+}
+
+// digestOf is how this peer prints a value made from a person's words (Property 1): the first 8
+// octets of its SHA-256, in hex, marked as a digest. Equal values print equal, and nothing of the
+// value is printed.
+func digestOf(value []byte) string {
+	sum := sha256.Sum256(value)
+	return "sha256:" + hex.EncodeToString(sum[:8])
 }
 
 func short(id []byte) string {

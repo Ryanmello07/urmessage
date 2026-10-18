@@ -64,10 +64,10 @@ type sdkCryptoImport struct {
 var sdkCryptoImports = map[string]sdkCryptoImport{
 	"cgo/ctest/testdata/loopback_test_world.go": {[]string{"crypto/rand"},
 		"the loopback harness's peer connections draw on crypto/rand.Reader"},
-	"livepeer/main.go": {[]string{"crypto/rand"},
-		"a fresh group id"},
-	"liveprobe/main.go": {[]string{"crypto/rand", "crypto/sha256"},
-		"a fresh group id, and the reader messagegroup.XwingGenerateKey draws a key pair from; and the checksum over an invite whose version octets the probe changed, so that what is refused is the version"},
+	"livepeer/main.go": {[]string{"crypto/rand", "crypto/sha256"},
+		"a fresh group id; and the digests that are all this peer prints of an identity (identity phase 1's Task 15)"},
+	"liveprobe/main.go": {[]string{"crypto/ed25519", "crypto/rand", "crypto/sha256"},
+		"a fresh group id, and the reader messagegroup.XwingGenerateKey draws a key pair from; the checksum over an invite whose version octets the probe changed, so that what is refused is the version; the digests that are all this probe prints of an identity; and the author's key of a list the seam signs for a leaf it binds, expanded from that leaf's seed for its one signature (identity phase 1's Task 15)"},
 	"message_route.go": {[]string{"crypto/sha256", "crypto/subtle", "crypto/tls"},
 		"the route client's pin: the SHA-256 of the server's public key, compared in constant time, " +
 			"inside a TLS 1.3 configuration"},

@@ -153,9 +153,20 @@ var layeringRules = map[string]layeringRule{
 			"connection (identity phase 1's Task 12)",
 	},
 	"sdk/liveprobe": {
-		module:   []string{"messagegroup", "mls", "protocol", "sdk", "sdk/urmessage"},
+		module:   []string{"messagegroup", "mls", "protocol", "sdk", "sdk/urmessage", "syntax"},
 		external: []string{"github.com/urnetwork/connect"},
-		reason:   "the live probe command: a group's round trips against a deployment",
+		testFiles: map[string]testFileAllowance{
+			"sdk/liveprobe/main_test.go": {
+				external: []string{"google.golang.org/protobuf"},
+				reason: "the probe's identity test's server double, which answers a Hello so that a party can make " +
+					"its identity: an identity's self group is founded under a connection (identity phase 1's " +
+					"Task 15). The answer is a protobuf message, and protobuf is the double's alone: the probe " +
+					"reaches the server through sdk",
+			},
+		},
+		reason: "the live probe command: a group's round trips against a deployment. syntax is how step 11 reads " +
+			"C's own list off a key package C's device makes, as every receiver reads a join code's leaf, so that " +
+			"C's second device is bound by the next base of that list (identity phase 1's Task 15)",
 	},
 }
 

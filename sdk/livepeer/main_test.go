@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -678,4 +680,75 @@ func deviceOver(t *testing.T, client sdk.MessageTransportClient) *urmessage.Devi
 		transport.Close()
 	})
 	return device
+}
+
+// ── the peer's identity (identity phase 1's Task 15) ──────────────────────────────────────────
+
+// THE PEER MAKES ITS IDENTITY AS A PERSON DOES (LRI R81): connected, the words offered, typed back, and
+// the identity made, its self group founded under the connection; and a second call, as a restart
+// over the same -dir makes, reads it back and makes nothing. A device that is not connected makes
+// none. What it prints is digests only, in a line whose whole shape is fixed, so that no word of the
+// phrase has room in it (Property 1).
+func TestAPeerMakesItsIdentityAsAPersonDoes(t *testing.T) {
+	ctx := context.Background()
+	device := deviceOver(t, &helloClient{})
+	if _, _, err := ensureIdentity(ctx, device); err == nil {
+		t.Fatalf("a device that is not connected made an identity")
+	}
+	if _, err := device.Identity(); !errors.Is(err, urmessage.ErrNoIdentity) {
+		t.Fatalf("after the refused typing back the device's identity answers %v, want ErrNoIdentity", err)
+	}
+	if err := device.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	line, made, err := ensureIdentity(ctx, device)
+	if err != nil || !made {
+		t.Fatalf("ensureIdentity answered made %v, %v", made, err)
+	}
+	identity, err := device.Identity()
+	if err != nil || len(identity.AccountId) != 36 || len(identity.DeviceId) != 19 || !identity.PhraseDevice {
+		t.Fatalf("the identity made is %v (%v)", identity, err)
+	}
+	digests := "account " + digestOf([]byte(identity.AccountId)) + ", device " + digestOf([]byte(identity.DeviceId))
+	shape := regexp.MustCompile(`^an identity, made as a person makes one: account sha256:[0-9a-f]{16}, device sha256:[0-9a-f]{16}; its words typed back and cleared$`)
+	if !shape.MatchString(line) || !strings.Contains(line, digests) {
+		t.Errorf("the line is %q: want exactly %q with %q", line, shape, digests)
+	}
+	again, made, err := ensureIdentity(ctx, device)
+	if err != nil || made {
+		t.Fatalf("a second call answered made %v, %v: want the identity read back", made, err)
+	}
+	if want := "this peer's identity, read back: " + digests; again != want {
+		t.Errorf("the second line is %q, want %q", again, want)
+	}
+}
+
+// THE ROSTER IS PRINTED BY IDENTITY: a line per identity, in the order of its first leaf, with its
+// devices, each its leaf, role and device ID's digest; this peer's own identity marked; a leaf no
+// identity binds said to be one; digests only.
+func TestTheRosterIsPrintedByIdentity(t *testing.T) {
+	alice, bob := bytes.Repeat([]byte{0xA1}, 32), bytes.Repeat([]byte{0xB0}, 32)
+	members := []urmessage.Member{
+		{LeafIndex: 0, IdentityPub: []byte("alice's key"), Role: "owner", Identity: alice, DeviceId: "aaaa-aaaa-aaaa-aaa1"},
+		{LeafIndex: 1, IdentityPub: []byte("bob's key"), Role: "member", Mine: true, Identity: bob, DeviceId: "bbbb-bbbb-bbbb-bbb1"},
+		{LeafIndex: 2, IdentityPub: []byte("alice's key"), Role: "owner", Identity: alice, DeviceId: "aaaa-aaaa-aaaa-aaa2"},
+		{LeafIndex: 3, IdentityPub: []byte("a key"), Role: "member"},
+	}
+	want := []string{
+		"identity " + digestOf(alice) + ": 2 devices: leaf 0 owner device " + digestOf([]byte("aaaa-aaaa-aaaa-aaa1")) +
+			", leaf 2 owner device " + digestOf([]byte("aaaa-aaaa-aaaa-aaa2")),
+		"identity " + digestOf(bob) + " (this peer): 1 device: leaf 1 member device " + digestOf([]byte("bbbb-bbbb-bbbb-bbb1")),
+		"a leaf no identity binds: leaf 3 member",
+	}
+	lines := rosterByIdentity(members)
+	if !slices.Equal(lines, want) {
+		t.Fatalf("the roster by identity is\n%q\nwant\n%q", lines, want)
+	}
+	for _, line := range lines {
+		for _, plain := range []string{fmt.Sprintf("%x", alice[:4]), fmt.Sprintf("%x", bob[:4]), "aaaa-aaaa", "bbbb-bbbb"} {
+			if strings.Contains(line, plain) {
+				t.Errorf("the line %q carries %q itself, and not its digest", line, plain)
+			}
+		}
+	}
 }
