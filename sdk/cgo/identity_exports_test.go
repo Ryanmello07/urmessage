@@ -108,6 +108,14 @@ func newIdentityDevice(t *testing.T, dir string) *identityDevice {
 // given: its keys, at NewDevice, and its account ID's salt, when its identity is made.
 func newIdentityDeviceDrawingFrom(t *testing.T, dir string, random io.Reader) *identityDevice {
 	t.Helper()
+	return newIdentityDeviceOver(t, dir, random, nil)
+}
+
+// newIdentityDeviceOver is newIdentityDeviceDrawingFrom whose device keeps its state through the
+// armed store given, when it is not nil: the durable store opened in dir, wrapped. The identityDevice's
+// store is the durable store itself either way.
+func newIdentityDeviceOver(t *testing.T, dir string, random io.Reader, armed *armedPanicStore) *identityDevice {
+	t.Helper()
 	transport, err := sdk.NewMessageTransport(&sdk.MessageTransportConfig{
 		Client:          &identityAnsweringClient{},
 		Server:          connect.NewId(),
@@ -126,14 +134,19 @@ func newIdentityDeviceDrawingFrom(t *testing.T, dir string, random io.Reader) *i
 		streamStore.Close()
 		t.Fatalf("the state store: %v", err)
 	}
-	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
+	config := urmessage.DeviceConfig{
 		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
 		Transport:     transport,
 		Reserver:      sdk.NewStreamIndexReserver(streamStore),
 		StateStore:    stateStore,
 		Random:        random,
 		Connect:       urmessage.ConnectPolicy{Budget: 30 * time.Second, AttemptTimeout: 2 * time.Second},
-	})
+	}
+	if armed != nil {
+		armed.DurableStateStore = stateStore
+		config.StateStore = armed
+	}
+	device, err := urmessage.NewDevice(config)
 	if err != nil {
 		streamStore.Close()
 		stateStore.Close()
@@ -694,11 +707,45 @@ func TestAPanicInsideConfirmWordsAnswersFailedAndNoPosition(t *testing.T) {
 // A PANIC INSIDE ENSURE_SUBSCRIBED ANSWERS -1, NOT "ALREADY CURRENT" (LRI R84 item 3). Its 0 says the
 // subscription is current, which a recovered panic must never say. The group handle is a group no
 // device made, whose subscribe panics inside.
+//
+// THE CONTROL: the same subscribe, called outside the export, panics -- so the -1 was the recovered
+// panic's, and not a refusal's.
 func TestAPanicInsideEnsureSubscribedAnswersThatItDidNotSubscribe(t *testing.T) {
 	group := newHandle(&urmessage.Group{})
 	defer handleRelease(group)
 	if got := callExportNil(t, urnet_message_group_ensure_subscribed, group, uint64(0), nil)[0].Int(); got != -1 {
 		t.Errorf("a panic inside ensure_subscribed answered %d, want -1: 0 says the subscription is current and 1 that it was made", got)
+	}
+	panicked := func() (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		(&urmessage.Group{}).EnsureSubscribed(context.Background())
+		return false
+	}()
+	if !panicked {
+		t.Fatal("CONTROL FAILED: a group no device made subscribed without a panic, so the -1 was not a recovered panic's")
+	}
+}
+
+// A PANIC INSIDE FORGET_GROUP ANSWERS FAILED, NEVER OK (LRI R84 item 3). Its result is preset to
+// FAILED, as every kind-answering export's is (gen's TestEveryKindAnsweringExportPresetsItsFailure):
+// an unpreset result answers its zero value, URNET_MESSAGE_FORGET_OK, a group a caller is told is
+// gone. The panic is real and inside the leave: the device's durable store panics once armed, at the
+// first question a leave asks it.
+//
+// THE CONTROL: the armed store was asked, so the FAILED was the panic's. A group this device does not
+// hold answers FAILED as well, which is why the control is the store's and not a second call's.
+func TestAPanicInsideForgetGroupAnswersFailedNeverOk(t *testing.T) {
+	store := &armedPanicStore{}
+	one := newIdentityDeviceOver(t, t.TempDir(), nil, store)
+	store.arm(true)
+	got := callExportNil(t, urnet_message_device_forget_group, one.handle, nil, int32(0), nil)[0].Int()
+	store.arm(false)
+	if int32(got) != messageForgetFailed {
+		t.Errorf("a panic inside forget_group answered kind %d, want FAILED (%d): %d is OK, a group a caller is told is gone",
+			got, messageForgetFailed, messageForgetOk)
+	}
+	if !store.panicked() {
+		t.Fatal("CONTROL FAILED: the armed store was never asked, so nothing panicked")
 	}
 }
 
@@ -766,4 +813,38 @@ func (self *armedPanicReader) Read(octets []byte) (int, error) {
 		panic("the test's armed randomness, read inside the identity's making")
 	}
 	return rand.Read(octets)
+}
+
+// armedPanicStore is a device's durable state store whose GroupBeingForgotten -- the first question a
+// leave asks a durable store -- panics once armed, and is the durable store's before.
+type armedPanicStore struct {
+	*urmessage.DurableStateStore
+	mutex   sync.Mutex
+	armed   bool
+	reached bool
+}
+
+func (self *armedPanicStore) arm(armed bool) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	self.armed = armed
+}
+
+func (self *armedPanicStore) panicked() bool {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	return self.reached
+}
+
+func (self *armedPanicStore) GroupBeingForgotten(groupId []byte) (bool, error) {
+	self.mutex.Lock()
+	armed := self.armed
+	if armed {
+		self.reached = true
+	}
+	self.mutex.Unlock()
+	if armed {
+		panic("the test's armed store, asked inside forget_group")
+	}
+	return self.DurableStateStore.GroupBeingForgotten(groupId)
 }
