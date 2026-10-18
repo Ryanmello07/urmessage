@@ -206,7 +206,7 @@ func TestAHookThatRefusesLeavesNothingStagedAndNothingSent(t *testing.T) {
 		t.Fatalf("sdk.OpenStreamStore: %v", err)
 	}
 	t.Cleanup(func() { streamStore.Close() })
-	connected, err := NewDevice(DeviceConfig{Transport: transport, Reserver: sdk.NewStreamIndexReserver(streamStore)})
+	connected, err := NewDevice(DeviceConfig{PhraseStretch: messagegroup.FastPhraseStretchForTests(), Transport: transport, Reserver: sdk.NewStreamIndexReserver(streamStore)})
 	if err != nil {
 		t.Fatalf("NewDevice: %v", err)
 	}

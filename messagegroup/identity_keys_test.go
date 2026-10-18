@@ -22,12 +22,13 @@ import (
 	"testing"
 )
 
-// The stretch's TEST SEAM: the cheapest Argon2id there is, one pass over 64 KiB in one lane. Every
-// test of this package stretches through it but one, which runs the frozen parameters. It is
-// declared here, in a _test.go file, and handed to withPhraseKeys as an argument;
-// TestProductionStretchesWithTheFrozenParametersOnly holds that production never names it and
-// never builds anything like it.
-var phraseStretchForTests = phraseStretchParameters{time: 1, memoryKiB: 64, lanes: 1}
+// The stretch's TEST SEAM, phraseStretchSeam's parameters: the cheapest Argon2id there is, one pass
+// over 64 KiB in one lane. Every test of this package stretches through it but the ones that hold
+// the frozen parameters. This name is declared here, in a _test.go file, and
+// TestProductionStretchesWithTheFrozenParametersOnly holds that production never names it. The
+// seam reaches production only through FastPhraseStretchForTests, which no production source
+// names (LRI R76 item 10).
+var phraseStretchForTests = phraseStretchSeam()
 
 // One phrase's known answers under one set of stretch parameters.
 type phraseKnownAnswers struct {
@@ -392,23 +393,35 @@ func TestTheAccountIdIsTheKnownAnswerAndMovesWithTheSalt(t *testing.T) {
 // the seam (MI9). Five clauses, each over every production file of this package:
 //
 //  1. the one Argon2id call is stretchPhrase's, and it reads its parameters off its argument;
-//  2. the one phraseStretchParameters value production spells is the literal phraseStretchFrozen
-//     answers, and phraseStretchFrozen is a FUNCTION whose whole body returns it;
+//  2. production spells two phraseStretchParameters values, each the whole body of a FUNCTION
+//     answering it: the frozen one, phraseStretchFrozen's, and the test seam's, phraseStretchSeam's;
 //  3. so the parameters are unwritable by construction: there is no variable to write, and no
 //     production body writes, steps or takes the address of a parameter of the type, or of a field
 //     of one, and the type declares no method;
 //  4. every production call of a function taking the parameters passes phraseStretchFrozen() or
-//     forwards its own parameter, and the exported entry passes phraseStretchFrozen();
-//  5. the seam's name appears in no production file.
+//     phraseStretchSeam(), or forwards its own parameter; the frozen parameters are passed by the
+//     two exported entries, WithPhraseKeys and WithPhraseKeysUnder, and by nothing else; and the
+//     seam's are passed by WithPhraseKeysUnder alone, inside the branch its PhraseStretch's seam
+//     field opens;
+//  5. the test seam's name appears in no production file; a PhraseStretch whose seam field is set
+//     is built by FastPhraseStretchForTests alone, and no production body writes the field; and
+//     FastPhraseStretchForTests is named by no production file of this package but its own
+//     declaration. sdk's TestNoProductionSourceOfTheSdkNamesTheTestStretch holds the same over
+//     the sdk module, which is where the door is used.
 //
-// So the seam's cheap parameters can reach a stretch only from a test file. The review of Tasks 8
-// to 10 lightened the variable this gate used to hold, through a pointer-receiver method (its M3,
-// beside the plan's MI9) and with -- (its M3b), and both passed clause 3 as it was (L2-03); neither
-// can be written against a function, and clause 3 now holds the parameters' own copies as well.
+// So the seam's cheap parameters reach a stretch only from a test. The door to them that tests
+// outside this package use (LRI R76 item 10) is the one production path to them, and production
+// never opens it. The review of Tasks 8 to 10 lightened the variable this gate used to hold,
+// through a pointer-receiver method (its M3, beside the plan's MI9) and with -- (its M3b), and
+// both passed clause 3 as it was (L2-03); neither can be written against a function, and clause 3
+// now holds the parameters' own copies as well.
 func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 	fileSet, sources := messagegroupProductionSources(t)
 	const parametersType = "phraseStretchParameters"
 	const frozen = "phraseStretchFrozen"
+	const seam = "phraseStretchSeam"
+	const door = "WithPhraseKeysUnder"
+	const testDoor = "FastPhraseStretchForTests"
 
 	// the functions that take the parameters, read off their signatures
 	taking := map[string]int{}
@@ -439,11 +452,19 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 	}
 
 	argon2Calls, literals, frozenPasses, frozenBodies := 0, 0, 0, 0
+	seamPasses, seamBodies, seamStretches, testDoorNames := 0, 0, 0, 0
 	for _, source := range sources {
 		text := source.path
 		if strings.Contains(messagegroupSourceText(t, source.path), "phraseStretchForTests") {
 			t.Errorf("%s names phraseStretchForTests, the test seam", text)
 		}
+		// the test door is named by its own declaration and by nothing else of production
+		ast.Inspect(source.parsed, func(node ast.Node) bool {
+			if identifier, isName := node.(*ast.Ident); isName && identifier.Name == testDoor {
+				testDoorNames += 1
+			}
+			return true
+		})
 		for _, declaration := range source.parsed.Decls {
 			switch typed := declaration.(type) {
 			case *ast.GenDecl:
@@ -464,13 +485,31 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 				if typed.Recv != nil && strings.Contains(phraseNodeText(t, fileSet, typed.Recv.List[0].Type), parametersType) {
 					t.Errorf("%s declares a method %s on %s", text, typed.Name.Name, parametersType)
 				}
-				// the one literal is the frozen function's whole body
+				// the two literals are the two functions' whole bodies
 				if typed.Name.Name == frozen {
 					frozenBodies += 1
 					if typed.Recv != nil || len(typed.Body.List) != 1 ||
 						phraseNodeText(t, fileSet, typed.Body) != "{\n\treturn phraseStretchParameters{time: 3, memoryKiB: 262144, lanes: 4}\n}" {
 						t.Errorf("%s is %s", frozen, phraseNodeText(t, fileSet, typed))
 					}
+				}
+				if typed.Name.Name == seam {
+					seamBodies += 1
+					if typed.Recv != nil || len(typed.Body.List) != 1 ||
+						phraseNodeText(t, fileSet, typed.Body) != "{\n\treturn phraseStretchParameters{time: 1, memoryKiB: 64, lanes: 1}\n}" {
+						t.Errorf("%s is %s", seam, phraseNodeText(t, fileSet, typed))
+					}
+				}
+				// the door's seam branch: the one place the seam's parameters may be passed
+				seamBranches := [][2]token.Pos{}
+				if typed.Name.Name == door {
+					ast.Inspect(typed.Body, func(node ast.Node) bool {
+						if branch, isIf := node.(*ast.IfStmt); isIf && branch.Init == nil &&
+							phraseNodeText(t, fileSet, branch.Cond) == "stretch.seam" {
+							seamBranches = append(seamBranches, [2]token.Pos{branch.Body.Pos(), branch.Body.End()})
+						}
+						return true
+					})
 				}
 				// the function's own parameter of the type, which it may forward
 				own := ""
@@ -484,14 +523,24 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 					case *ast.CompositeLit:
 						if identifier, isName := shape.Type.(*ast.Ident); isName && identifier.Name == parametersType {
 							literals += 1
-							if typed.Name.Name != frozen {
+							if typed.Name.Name != frozen && typed.Name.Name != seam {
 								t.Errorf("%s builds a %s in %s: %s", text, parametersType, typed.Name.Name, phraseNodeText(t, fileSet, shape))
+							}
+						}
+						// a PhraseStretch that names its seam field at all is the test door's
+						if identifier, isName := shape.Type.(*ast.Ident); isName && identifier.Name == "PhraseStretch" && len(shape.Elts) != 0 {
+							seamStretches += 1
+							if typed.Name.Name != testDoor || phraseNodeText(t, fileSet, shape) != "PhraseStretch{seam: true}" {
+								t.Errorf("%s builds %s in %s; only %s builds the seam's", text, phraseNodeText(t, fileSet, shape), typed.Name.Name, testDoor)
 							}
 						}
 					case *ast.AssignStmt:
 						for _, left := range shape.Lhs {
 							if spelled := phraseNodeText(t, fileSet, left); own != "" && (spelled == own || strings.HasPrefix(spelled, own+".")) {
 								t.Errorf("%s writes %s in %s", text, spelled, typed.Name.Name)
+							}
+							if spelled := phraseNodeText(t, fileSet, left); spelled == "seam" || strings.HasSuffix(spelled, ".seam") {
+								t.Errorf("%s writes %s in %s, a PhraseStretch's seam field", text, spelled, typed.Name.Name)
 							}
 						}
 					case *ast.IncDecStmt:
@@ -523,8 +572,18 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 						switch {
 						case passed == frozen+"()":
 							frozenPasses += 1
-							if typed.Name.Name != "WithPhraseKeys" {
-								t.Errorf("%s passes %s to %s from %s; only the exported entry chooses the parameters", text, frozen, callee, typed.Name.Name)
+							if typed.Name.Name != "WithPhraseKeys" && typed.Name.Name != door {
+								t.Errorf("%s passes %s to %s from %s; only the exported entries choose the parameters", text, frozen, callee, typed.Name.Name)
+							}
+						case passed == seam+"()":
+							seamPasses += 1
+							inside := false
+							for _, branch := range seamBranches {
+								inside = inside || (branch[0] <= shape.Pos() && shape.End() <= branch[1])
+							}
+							if typed.Name.Name != door || !inside {
+								t.Errorf("%s passes %s to %s from %s; only %s passes them, inside the branch its PhraseStretch's seam field opens",
+									text, seam, callee, typed.Name.Name, door)
 							}
 						case own != "" && passed == own:
 						default:
@@ -536,9 +595,14 @@ func TestProductionStretchesWithTheFrozenParametersOnly(t *testing.T) {
 			}
 		}
 	}
-	if argon2Calls != 1 || literals != 1 || frozenPasses != 1 || frozenBodies != 1 {
-		t.Errorf("%d argon2.IDKey calls, %d %s literals, %d passes of %s() and %d declarations of it; want 1, 1, 1 and 1",
-			argon2Calls, literals, parametersType, frozenPasses, frozen, frozenBodies)
+	if argon2Calls != 1 || literals != 2 || frozenPasses != 2 || frozenBodies != 1 || seamPasses != 1 || seamBodies != 1 {
+		t.Errorf("%d argon2.IDKey calls, %d %s literals, %d passes of %s() and %d declarations of it, %d passes of %s() and %d "+
+			"declarations of it; want 1, 2, 2, 1, 1 and 1",
+			argon2Calls, literals, parametersType, frozenPasses, frozen, frozenBodies, seamPasses, seam, seamBodies)
+	}
+	if seamStretches != 1 || testDoorNames != 1 {
+		t.Errorf("%d PhraseStretch literals naming the seam and %d production names of %s; want 1 and 1, the test door's own body and "+
+			"declaration: production never opens the door", seamStretches, testDoorNames, testDoor)
 	}
 }
 
@@ -571,4 +635,40 @@ func phraseNodeText(t *testing.T, fileSet *token.FileSet, node ast.Node) string 
 		t.Fatalf("print a node: %v", err)
 	}
 	return text.String()
+}
+
+// THE DOOR'S TWO STRETCHES ARE THE TWO KNOWN ANSWERS (LRI R76 item 10). WithPhraseKeysUnder under
+// PhraseStretch's zero value answers phrase A's frozen keys, so the zero value is the frozen
+// stretch. Under FastPhraseStretchForTests it answers the seam's, which differ, so a test that
+// makes an identity through the door makes a test's own. This is one of the tests that run the
+// frozen parameters, as known answers do.
+func TestTheDoorsTwoStretchesAreTheFrozenAndTheSeamsKnownAnswers(t *testing.T) {
+	for _, one := range []struct {
+		name    string
+		stretch PhraseStretch
+		known   phraseKnownAnswers
+	}{
+		{"the zero value", PhraseStretch{}, phraseKnownAnswersFrozen["A"]},
+		{"FastPhraseStretchForTests", FastPhraseStretchForTests(), phraseKnownAnswersSeam["A"]},
+	} {
+		phrase := phraseOfKnownAnswers(t, one.known)
+		var irk, isk string
+		err := WithPhraseKeysUnder(one.stretch, phrase, []uint32{1}, func(keys *PhraseKeys) error {
+			phraseKey, err := keys.PhraseKey(1)
+			if err != nil {
+				return err
+			}
+			irk, isk = phraseHexText(keys.IdentityKey()), phraseHexText(phraseKey)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", one.name, err)
+		}
+		if irk != one.known.irk || isk != one.known.iskSeeds[1][1] {
+			t.Errorf("under %s phrase A's IRK is %s and ISK_1 %s, want %s and %s", one.name, irk, isk, one.known.irk, one.known.iskSeeds[1][1])
+		}
+	}
+	if phraseKnownAnswersFrozen["A"].irk == phraseKnownAnswersSeam["A"].irk {
+		t.Fatal("CONTROL FAILED: the frozen and the seam's known answers are one key, so this case tells nothing apart")
+	}
 }

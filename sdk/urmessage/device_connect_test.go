@@ -12,6 +12,7 @@ import (
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/messagegroup"
 	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 )
@@ -76,9 +77,10 @@ func newUnansweredDevice(t *testing.T, policy ConnectPolicy) (*Device, *acceptin
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport: transport,
-		Reserver:  sdk.NewStreamIndexReserver(streamStore),
-		Connect:   policy,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		Connect:       policy,
 	})
 	if err != nil {
 		t.Fatalf("NewDevice: %v", err)
@@ -352,8 +354,9 @@ func TestAnAttemptThatFailsAtOnceIsNotRetriedInATightLoop(t *testing.T) {
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport: newSilentTransport(t),
-		Reserver:  sdk.NewStreamIndexReserver(streamStore),
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     newSilentTransport(t),
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
 		Connect: ConnectPolicy{
 			Budget:         300 * time.Millisecond,
 			AttemptTimeout: time.Second,
@@ -505,8 +508,9 @@ func newAnsweringDevice(t *testing.T, reason messageprotocol.Reason, nonce []byt
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport: transport,
-		Reserver:  sdk.NewStreamIndexReserver(streamStore),
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
 		// a budget long enough that one trip through the retry loop would be
 		// UNMISTAKABLE in the elapsed time below.
 		Connect: ConnectPolicy{

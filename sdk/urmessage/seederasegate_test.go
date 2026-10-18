@@ -888,8 +888,9 @@ func wrapSeedFaultDevice(t *testing.T, stateStore mls.StateStore) (*Device, erro
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	return NewDevice(DeviceConfig{
-		Transport:  newSilentTransport(t),
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: stateStore,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     newSilentTransport(t),
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    stateStore,
 	})
 }

@@ -6,6 +6,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -38,6 +40,9 @@ func testIdentify(t testing.TB, device *Device) {
 	defer phrase.Erase()
 	device.admitMutex.Lock()
 	defer device.admitMutex.Unlock()
+	// a test's identity is made under the test seam's stretch (LRI R76 item 10), whatever the device
+	// was built with
+	device.phraseStretch = messagegroup.FastPhraseStretchForTests()
 	if err := device.makeIdentity(phrase); err != nil {
 		t.Fatalf("the device's identity: %v", err)
 	}
@@ -101,7 +106,7 @@ func testListIdentity(t testing.TB, phrase *messagegroup.RecoveryPhrase, baseNum
 	defer zeroizeState(author)
 	var identityKey []byte
 	var own *messagegroup.UrmessageIdentity
-	if err := messagegroup.WithPhraseKeys(phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
+	if err := messagegroup.WithPhraseKeysUnder(messagegroup.FastPhraseStretchForTests(), phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
 		cert, err := keys.SignIskCert(1)
 		if err != nil {
 			return err
@@ -131,18 +136,6 @@ func testListIdentity(t testing.TB, phrase *messagegroup.RecoveryPhrase, baseNum
 		t.Fatalf("a signer's identity extension: %v", err)
 	}
 	return identityKey, extension
-}
-
-// holdsSystemGroup answers whether a device holds a system group, which no list it answers shows.
-func (self *Device) holdsSystemGroup() bool {
-	self.mutex.Lock()
-	defer self.mutex.Unlock()
-	for _, group := range self.groups {
-		if group.system {
-			return true
-		}
-	}
-	return false
 }
 
 // identityOrderStore is a durable store that writes down the order of the writes Property 1 is about:
@@ -522,7 +515,7 @@ func TestOnlyAPhraseDeviceKeepsThePhrasesKey(t *testing.T) {
 	}
 	defer phrase.Erase()
 	var want []byte
-	if err := messagegroup.WithPhraseKeys(phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
+	if err := messagegroup.WithPhraseKeysUnder(messagegroup.FastPhraseStretchForTests(), phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
 		want, err = keys.PhraseKeySeed(1)
 		return err
 	}); err != nil {
@@ -761,5 +754,178 @@ func TestARestoreRaisesTheHeadsToTheNewestListOfEachRoot(t *testing.T) {
 	if held := after[string(other.Base.IdentityKey)]; !bytes.Equal(held, newerList.Data) {
 		t.Errorf("after the restore the other root's head is the list of %d octets, want base 2's: the newest list, and not the last one read",
 			len(held))
+	}
+}
+
+// recordRefusingStore is a durable store that takes no group record: a founding whose record cannot
+// be written, which is where a ConfirmWords that stopped between the identity's records and its
+// self group leaves the disk.
+type recordRefusingStore struct {
+	*DurableStateStore
+}
+
+func (self *recordRefusingStore) PutGroupRecord(record *GroupRecord) error {
+	return fmt.Errorf("%w: this store takes no group record", ErrStateStoreState)
+}
+
+// selfGroupOf answers the id of the system group a device holds, and the root its 0xF006 names.
+func selfGroupOf(t *testing.T, device *Device) ([]byte, []byte) {
+	t.Helper()
+	device.mutex.Lock()
+	var self *Group
+	for _, group := range device.groups {
+		if group.system {
+			self = group
+		}
+	}
+	device.mutex.Unlock()
+	if self == nil {
+		return nil, nil
+	}
+	extensions, err := groupContextExtensions(self.handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, found, err := mls.FindExtension(extensions, mls.ExtensionTypeUrmessageGroupPurpose)
+	if err != nil || !found {
+		t.Fatalf("the system group carries no 0xF006 (%v, %v)", found, err)
+	}
+	purpose, err := messagegroup.ParseGroupPurpose(messagegroup.ExtensionBytes{Type: uint16(mls.ExtensionTypeUrmessageGroupPurpose), Data: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.Clone(self.id), purpose.IdentityRoot
+}
+
+// A SELF GROUP WHOSE FOUNDING DID NOT FINISH IS FOUNDED AGAIN AT START (LRI R76 item 2). The setup
+// stops between the identity's records and the self group: the store takes no group record, so the
+// founding's record is refused, ConfirmWords answers the refusal, and the identity stands with no
+// self group on the disk. The next process's Restore founds the self group again, from the device
+// key and the identity's own list, with no words; and the process after that restores it rather
+// than founding another.
+//
+// THE CONTROL: before the restart the identity stands, and the store holds no group record.
+func TestASelfGroupWhoseFoundingDidNotFinishIsFoundedAgainAtStart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenDurableStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := newAnsweringDeviceOver(t, &recordRefusingStore{DurableStateStore: store}, []byte("the first process's nonce"))
+	words, err := device.CreateIdentity()
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	typed := strings.Join(words, " ")
+	clear(words)
+	if err := device.ConfirmWords(ctx, typed); !errors.Is(err, ErrStateStoreState) {
+		t.Fatalf("CONTROL FAILED: ConfirmWords over a store that takes no group record answered %v, want the refusal", err)
+	}
+	made, err := device.Identity()
+	if err != nil {
+		t.Fatalf("CONTROL FAILED: the identity does not stand after its records were written: %v", err)
+	}
+	if records, err := store.GroupRecords(); err != nil || len(records) != 0 {
+		t.Fatalf("CONTROL FAILED: the store holds %d group record(s) (%v), and the self group's was refused", len(records), err)
+	}
+	device.Close()
+	store.Close()
+
+	restart := func(nonce string) (*DurableStateStore, *Device) {
+		t.Helper()
+		reopened, err := OpenDurableStateStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restarted := newAnsweringDeviceOver(t, reopened, []byte(nonce))
+		restored, err := restarted.Restore(ctx)
+		if err != nil || len(restored) != 0 {
+			t.Fatalf("Restore answered %d group(s) and %v; want none and no error", len(restored), err)
+		}
+		return reopened, restarted
+	}
+	reopened, restarted := restart("the second process's nonce")
+	again, err := restarted.Identity()
+	if err != nil || again.AccountId != made.AccountId {
+		t.Fatalf("the identity came back as %+v (%v)", again, err)
+	}
+	selfId, root := selfGroupOf(t, restarted)
+	identity, err := restarted.requireIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selfId == nil || !bytes.Equal(root, identity.record.Root) {
+		t.Fatalf("after the restart the device holds no self group of its own root (%x)", root)
+	}
+	records, err := reopened.GroupRecords()
+	if err != nil || len(records) != 1 || !bytes.Equal(records[0].GroupId, selfId) {
+		t.Fatalf("after the restart the store holds %d group record(s) (%v), want the self group's alone", len(records), err)
+	}
+	restarted.Close()
+	reopened.Close()
+
+	// AND THE PROCESS AFTER THAT RESTORES IT, rather than founding another
+	reopened, restarted = restart("the third process's nonce")
+	defer reopened.Close()
+	if id, _ := selfGroupOf(t, restarted); !bytes.Equal(id, selfId) {
+		t.Errorf("the third process holds self group %x, and the second founded %x", id, selfId)
+	}
+	if records, err := reopened.GroupRecords(); err != nil || len(records) != 1 {
+		t.Errorf("the third process's store holds %d group record(s) (%v), want the one self group's", len(records), err)
+	}
+}
+
+// A SELF GROUP WHOSE RECORD DOES NOT READ IS NOT FOUNDED AGAIN BESIDE IT (LRI R76 item 2). The
+// repair founds the self group only when every record came back, since a record that did not may
+// be the self group's own. Here it is: its record is cut in half, Restore reports it, and no
+// second self group is founded beside the one the store cannot read.
+//
+// THE CONTROL: before the damage the device holds its self group, and its record reads.
+func TestASelfGroupWhoseRecordDoesNotReadIsNotFoundedAgainBesideIt(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenDurableStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := newAnsweringDeviceOver(t, store, []byte("the first process's nonce"))
+	words, err := device.CreateIdentity()
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	typed := strings.Join(words, " ")
+	clear(words)
+	if err := device.ConfirmWords(ctx, typed); err != nil {
+		t.Fatalf("ConfirmWords: %v", err)
+	}
+	selfId, _ := selfGroupOf(t, device)
+	if records, err := store.GroupRecords(); selfId == nil || err != nil || len(records) != 1 {
+		t.Fatalf("CONTROL FAILED: the device holds self group %x and the store %d record(s) (%v)", selfId, len(records), err)
+	}
+	device.Close()
+	octets, err := os.ReadFile(store.groupRecordPath(selfId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.groupRecordPath(selfId), octets[:len(octets)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	reopened, err := OpenDurableStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	restarted := newAnsweringDeviceOver(t, reopened, []byte("the second process's nonce"))
+	if _, err := restarted.Restore(ctx); !errors.Is(err, ErrGroupRecordDamaged) {
+		t.Errorf("Restore answered %v, want the damaged record reported", err)
+	}
+	if restarted.holdsSystemGroup() {
+		t.Error("the restart founded a self group beside the one whose record does not read")
+	}
+	if records, _ := reopened.GroupRecords(); len(records) != 0 {
+		t.Errorf("the store holds %d group record(s) that read, and the only record of a group on it is the damaged one", len(records))
 	}
 }

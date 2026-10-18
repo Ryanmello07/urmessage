@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
 )
@@ -79,9 +80,10 @@ func (self *world) freshLeaveRestart(t *testing.T, previous *persona) (*persona,
 	}
 	wrapper := &freshLeaveStore{DurableStateStore: durable}
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport:  transport,
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: wrapper,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    wrapper,
 	})
 	if err != nil {
 		durable.Close()

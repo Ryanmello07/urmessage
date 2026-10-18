@@ -999,28 +999,17 @@ var recordKeyOneWayProbes = map[string]func(secret []byte) [][]byte{
 	// "a member that returned its own input" cannot be seen for it here. The phrase's one-way
 	// property is the phrase-secret census's, which is its enforcer.
 	"WithPhraseKeys": func(secret []byte) [][]byte {
-		phrase := &RecoveryPhrase{}
-		copy(phrase.p34[2:], secret)
-		produced := [][]byte{}
-		err := withPhraseKeys(phrase, []uint32{1, 2}, phraseStretchForTests, func(keys *PhraseKeys) error {
-			produced = append(produced, keys.IdentityKey())
-			for _, keyNumber := range keys.KeyNumbers() {
-				phraseKey, err := keys.PhraseKey(keyNumber)
-				if err != nil {
-					return err
-				}
-				seed, err := keys.PhraseKeySeed(keyNumber)
-				if err != nil {
-					return err
-				}
-				produced = append(produced, phraseKey, seed)
-			}
-			return nil
+		return phraseProbeThrough(secret, func(phrase *RecoveryPhrase, ceremony func(keys *PhraseKeys) error) error {
+			return withPhraseKeys(phrase, []uint32{1, 2}, phraseStretchForTests, ceremony)
 		})
-		if err != nil {
-			return nil
-		}
-		return produced
+	},
+	// The door under a stretch a test names (LRI R76 item 10): WithPhraseKeys's row through the door
+	// itself, under FastPhraseStretchForTests, which is the test seam's stretch. A formality of the
+	// class for the same reason.
+	"WithPhraseKeysUnder": func(secret []byte) [][]byte {
+		return phraseProbeThrough(secret, func(phrase *RecoveryPhrase, ceremony func(keys *PhraseKeys) error) error {
+			return WithPhraseKeysUnder(FastPhraseStretchForTests(), phrase, []uint32{1, 2}, ceremony)
+		})
 	},
 	// D2 IL8's derivation, handed a rung as IRK's seed: the public half of the key it derives under
 	// a label. Built straight over a PhraseKeys holding that IRK, since what is asked is the
@@ -1035,6 +1024,34 @@ var recordKeyOneWayProbes = map[string]func(secret []byte) [][]byte{
 		}
 		return [][]byte{derived}
 	},
+}
+
+// phraseProbeThrough runs one ceremony over a rung as the phrase, its 32 octets as P34 below two
+// zero octets, through the entry it is handed, and answers what a ceremony can take out: IRK's
+// public half, and each key number's public half and isk_seed[g].
+func phraseProbeThrough(secret []byte, entry func(phrase *RecoveryPhrase, ceremony func(keys *PhraseKeys) error) error) [][]byte {
+	phrase := &RecoveryPhrase{}
+	copy(phrase.p34[2:], secret)
+	produced := [][]byte{}
+	err := entry(phrase, func(keys *PhraseKeys) error {
+		produced = append(produced, keys.IdentityKey())
+		for _, keyNumber := range keys.KeyNumbers() {
+			phraseKey, err := keys.PhraseKey(keyNumber)
+			if err != nil {
+				return err
+			}
+			seed, err := keys.PhraseKeySeed(keyNumber)
+			if err != nil {
+				return err
+			}
+			produced = append(produced, phraseKey, seed)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil
+	}
+	return produced
 }
 
 // The three fixed inputs the wrap probes above hold constant, so that the ONLY thing varying

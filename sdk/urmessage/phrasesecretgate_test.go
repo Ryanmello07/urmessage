@@ -49,7 +49,9 @@ var sdkPhraseSecretProducerNames = map[string]bool{
 	"phraseTyped":         true,
 	// THE CEREMONIES, AND THE ONE SECRET THAT LEAVES ONE
 	"WithPhraseKeys": true,
-	"PhraseKeySeed":  true,
+	// and its door under a stretch the device names, which is the one this package calls (LRI R76 item 10)
+	"WithPhraseKeysUnder": true,
+	"PhraseKeySeed":       true,
 	// THE KIND-13 RECORD, READ BACK. Nothing in production reads it yet: the stored-seed signer that
 	// does is Tasks 31 and 33's (LRI R72), and the net names the read so that its first caller is a
 	// site of this census rather than a road nobody weighed
@@ -67,7 +69,7 @@ var sdkPhraseSecretProducerSites = map[string]string{
 	"PutPhraseKey|parameter record":                 "the kind-13 record, handed by putIdentityRecords with isk_seed[1] in it",
 	"encodeStateRecord|parameter parts":             "the record's parts, isk_seed[1] among them, handed by writeRecord to be framed",
 	"makeIdentity|keys.PhraseKeySeed":               "ISK_SEED[1], copied out of the ceremony for the one place it may go: a phrase device's phrase key record, store kind 13",
-	"makeIdentity|messagegroup.WithPhraseKeys":      "THE CEREMONY over key number 1. The call is in the net so that every ceremony this package runs is a site; it answers an error",
+	"makeIdentity|messagegroup.WithPhraseKeysUnder": "THE CEREMONY over key number 1, under the stretch the device was built with, whose zero value is the frozen one (LRI R76 item 10). The call is in the net so that every ceremony this package runs is a site; it answers an error",
 	"makeIdentity|parameter parsed":                 "the parsed phrase, handed by ConfirmWords to the making",
 	"putIdentityRecords|parameter seed":             "isk_seed[1], handed by makeIdentity, for the phrase key record of a phrase device",
 	"writeRecord|parameter parts":                   "the record's parts, handed by PutPhraseKey",
@@ -93,7 +95,7 @@ var sdkPhraseSecretSinks = map[string]sdkPhraseSecretSink{
 	"PutPhraseKey|call self.writeRecord":                 {carries: []string{"record"}, occurs: []string{"record.IdentityKey", "record.Seed"}, why: "THE PHRASE KEY GOING TO DISK: store kind 13, the identity key, the key number and isk_seed[1], on a phrase device only (Property 4), in the clear as the device's own keys are"},
 	"PutPhraseKey|return":                                {carries: []string{"record"}, occurs: []string{"self.writeRecord(...)"}, why: "the write's error"},
 	"encodeStateRecord|call body.Write":                  {carries: []string{"part"}, occurs: []string{"part"}, why: "each part into the frame; see the horizon"},
-	"makeIdentity|call messagegroup.WithPhraseKeys":      {carries: []string{"parsed"}, occurs: []string{"parsed"}, why: "the parsed phrase into the ceremony, which derives the keys of key number 1 from it and erases them when it returns"},
+	"makeIdentity|call messagegroup.WithPhraseKeysUnder": {carries: []string{"parsed"}, occurs: []string{"parsed"}, why: "the parsed phrase into the ceremony, which derives the keys of key number 1 from it and erases them when it returns"},
 	"makeIdentity|call self.putIdentityRecords":          {carries: []string{"seed"}, occurs: []string{"seed"}, why: "isk_seed[1] to the records' writer, which writes it on a phrase device only"},
 	"makeIdentity|call zeroizeState":                     {carries: []string{"seed"}, occurs: []string{"seed"}, why: "ERASED: isk_seed[1], when the making returns, whatever it answered"},
 	"putIdentityRecords|literal PhraseKeyRecord.Seed":    {carries: []string{"seed"}, occurs: []string{"seed"}, why: "isk_seed[1] into the kind-13 record"},

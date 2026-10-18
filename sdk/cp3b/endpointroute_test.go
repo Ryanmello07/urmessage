@@ -23,6 +23,7 @@ import (
 	"github.com/urnetwork/message-server/endpoint"
 	"github.com/urnetwork/message-server/peer"
 	"github.com/urnetwork/message-server/store"
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
@@ -191,8 +192,9 @@ func (self *endpointWorld) deviceAndRoute(t *testing.T, name string) (*urmessage
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport: transport,
-		Reserver:  sdk.NewStreamIndexReserver(streamStore),
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
 	})
 	if err != nil {
 		t.Fatalf("%s: urmessage.NewDevice: %v", name, err)

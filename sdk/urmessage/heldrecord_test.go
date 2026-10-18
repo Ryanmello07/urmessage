@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
 	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
@@ -141,9 +142,10 @@ func newAnsweringDeviceOver(t *testing.T, store mls.StateStore, nonce []byte) *D
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport:  transport,
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: store,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    store,
 		Connect: ConnectPolicy{
 			Budget:         30 * time.Second,
 			AttemptTimeout: 2 * time.Second,

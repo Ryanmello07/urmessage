@@ -91,7 +91,7 @@ func identityKeyOf(t *testing.T, words string) []byte {
 	}
 	defer phrase.Erase()
 	var key []byte
-	if err := messagegroup.WithPhraseKeys(phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
+	if err := messagegroup.WithPhraseKeysUnder(messagegroup.FastPhraseStretchForTests(), phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
 		key = keys.IdentityKey()
 		return nil
 	}); err != nil {
@@ -161,7 +161,7 @@ func seamIdentity(t *testing.T, name string, words string, signer mls.SignatureP
 	}
 	var identityKey []byte
 	var own *messagegroup.UrmessageIdentity
-	if err := messagegroup.WithPhraseKeys(phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
+	if err := messagegroup.WithPhraseKeysUnder(messagegroup.FastPhraseStretchForTests(), phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
 		cert, err := keys.SignIskCert(1)
 		if err != nil {
 			return err

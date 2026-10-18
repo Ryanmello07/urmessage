@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
 )
@@ -63,9 +64,10 @@ func watchedDevice(t *testing.T, world *world, name string) (*urmessage.Device, 
 	}
 	watch := &gateWatch{DurableStateStore: inner, asked: make(chan struct{}, 8), release: make(chan struct{})}
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport:  transport,
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: watch,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    watch,
 	})
 	if err != nil {
 		t.Fatalf("%s: urmessage.NewDevice: %v", name, err)

@@ -76,6 +76,14 @@ type DeviceConfig struct {
 	// or not this is set; nil means "nothing beyond §11" and not "allow every commit", which is
 	// what it meant before R1 landed. See [CommitAuthorizer].
 	CommitAuthorizer CommitAuthorizer
+
+	// The stretch [Device.ConfirmWords] runs the words under. LEAVE IT ZERO: the zero value is the
+	// frozen stretch, MASTER section 5.2's, and the only one production runs.
+	// messagegroup.FastPhraseStretchForTests is the test seam's, for suites that make identities by
+	// the hundred (LRI R76 item 10). No production source of this module names it, which the sdk
+	// module's TestNoProductionSourceOfTheSdkNamesTheTestStretch holds. An identity made under it
+	// is not the one its words make at the frozen stretch.
+	PhraseStretch messagegroup.PhraseStretch
 }
 
 // ── §4.3.1's Hello, across an operator window this package does not own ──────────────────────
@@ -248,6 +256,9 @@ type Device struct {
 	// does. Guarded by [Device.mutex], and erased by [Device.Close] as the wrap seed is.
 	signer    mls.SignaturePrivateKey
 	devicePub ed25519.PublicKey
+
+	// the stretch the identity's ceremony runs under: [DeviceConfig.PhraseStretch], set once
+	phraseStretch messagegroup.PhraseStretch
 
 	// wrapSeed is the PRIVATE half of the X-Wing key pair whose public half is inside
 	// [Device.leafKeys], as the 32 octet seed [messagegroup.XwingKeyGenFromSeed] expands. It is
@@ -512,6 +523,7 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		nowMs:            nowMs,
 		random:           random,
 		commitAuthorizer: config.CommitAuthorizer,
+		phraseStretch:    config.PhraseStretch,
 		groups:           map[string]*Group{},
 		unrestored:       map[string]bool{},
 		notRead:          map[string]readClass{},

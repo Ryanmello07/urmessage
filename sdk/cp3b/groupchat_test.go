@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
 )
@@ -413,6 +414,7 @@ func (self *world) deviceWithAuthorizer(t *testing.T, name string, authorizer ur
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
+		PhraseStretch:    messagegroup.FastPhraseStretchForTests(),
 		Transport:        transport,
 		Reserver:         sdk.NewStreamIndexReserver(streamStore),
 		CommitAuthorizer: authorizer,

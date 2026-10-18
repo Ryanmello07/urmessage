@@ -91,6 +91,14 @@ func phraseStretchFrozen() phraseStretchParameters {
 	return phraseStretchParameters{time: 3, memoryKiB: 262144, lanes: 4}
 }
 
+// The TEST SEAM's parameters: the cheapest Argon2id there is, one pass over 64 KiB in one lane. A
+// function answering the literal, for phraseStretchFrozen's reason, and reached by one production
+// door, WithPhraseKeysUnder, and only under the one PhraseStretch value no production source names
+// (LRI R76 item 10).
+func phraseStretchSeam() phraseStretchParameters {
+	return phraseStretchParameters{time: 1, memoryKiB: 64, lanes: 1}
+}
+
 // S = Argon2id(P34, "URmessage/v1/phrase-stretch", t, m, p, 32), Argon2 version 0x13 with no
 // secret and no associated data.
 func stretchPhrase(p34 []byte, parameters phraseStretchParameters) []byte {
@@ -292,8 +300,40 @@ func WithPhraseKeys(phrase *RecoveryPhrase, keyNumbers []uint32, ceremony func(k
 	return withPhraseKeys(phrase, keyNumbers, phraseStretchFrozen(), ceremony)
 }
 
-// WithPhraseKeys under the stretch parameters it is handed. Production hands it the frozen ones
-// and nothing else.
+// PhraseStretch names the stretch a ceremony runs a phrase under, for [WithPhraseKeysUnder]. Its
+// zero value is the frozen stretch, MASTER section 5.2's, the only one production runs. Its one
+// other value is the test seam's, which [FastPhraseStretchForTests] answers. Its field is
+// unexported, so no caller can spell a third.
+type PhraseStretch struct {
+	seam bool
+}
+
+// FastPhraseStretchForTests answers the test seam's stretch: t = 1, m = 64 KiB, p = 1. It is for
+// tests outside this package that make identities by the hundred. Each identity at the frozen
+// parameters costs 256 MiB and the better part of a second, and a suite makes hundreds (LRI R76
+// item 10).
+//
+// NOTHING IN PRODUCTION NAMES IT. TestProductionStretchesWithTheFrozenParametersOnly holds that
+// over this package, and sdk's TestNoProductionSourceOfTheSdkNamesTheTestStretch holds it over the
+// sdk module. A key made under it is not the key the words make at the frozen parameters, so an
+// identity made under it is a test's own and nobody else's.
+func FastPhraseStretchForTests() PhraseStretch {
+	return PhraseStretch{seam: true}
+}
+
+// WithPhraseKeysUnder is WithPhraseKeys under the stretch it is handed. Under the zero value,
+// which is the frozen stretch, it is WithPhraseKeys.
+func WithPhraseKeysUnder(stretch PhraseStretch, phrase *RecoveryPhrase, keyNumbers []uint32,
+	ceremony func(keys *PhraseKeys) error) error {
+
+	if stretch.seam {
+		return withPhraseKeys(phrase, keyNumbers, phraseStretchSeam(), ceremony)
+	}
+	return withPhraseKeys(phrase, keyNumbers, phraseStretchFrozen(), ceremony)
+}
+
+// WithPhraseKeys under the stretch parameters it is handed. The two exported entries hand it the
+// frozen ones; only WithPhraseKeysUnder, under FastPhraseStretchForTests, hands it the seam's.
 func withPhraseKeys(phrase *RecoveryPhrase, keyNumbers []uint32, parameters phraseStretchParameters,
 	ceremony func(keys *PhraseKeys) error) error {
 

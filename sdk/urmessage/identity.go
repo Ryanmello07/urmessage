@@ -196,7 +196,7 @@ func (self *Device) makeIdentity(parsed *messagegroup.RecoveryPhrase) error {
 	var own *messagegroup.UrmessageIdentity
 	var seed []byte
 	defer func() { zeroizeState(seed) }()
-	err := messagegroup.WithPhraseKeys(parsed, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
+	err := messagegroup.WithPhraseKeysUnder(self.phraseStretch, parsed, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
 		identityKey := keys.IdentityKey()
 		cert, err := keys.SignIskCert(1)
 		if err != nil {

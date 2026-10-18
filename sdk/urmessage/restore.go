@@ -333,10 +333,41 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 			restored = append(restored, group)
 		}
 	}
+	// THE SELF GROUP, FOUNDED AGAIN WHERE ITS RECORD IS MISSING (LRI R76 item 2). ConfirmWords writes
+	// the identity's records before it founds the self group (Property 1). So a device that stopped
+	// between the two -- killed, or refused the founding's writes -- holds an identity and no self
+	// group, and nothing would ever found it. It is founded here, at start, under this connection,
+	// from the device's key and the identity's own list. The words are not needed.
+	//
+	// ONLY WHEN EVERY RECORD CAME BACK. A record that did not may be the self group's own, and this
+	// would found a second beside it; the next Restore that reads every record decides.
+	if firstFailure == nil && self.holdsIdentity() && !self.holdsSystemGroup() {
+		if err := self.foundSelfGroupLocked(ctx, nonce, nonceEpoch); err != nil {
+			firstFailure = fmt.Errorf("%w: the self group, founded again: %w", ErrRestore, err)
+		}
+	}
 	if firstFailure == nil {
 		firstFailure = unfinished
 	}
 	return restored, firstFailure
+}
+
+// holdsIdentity answers whether this device runs under an identity.
+func (self *Device) holdsIdentity() bool {
+	_, err := self.requireIdentity()
+	return err == nil
+}
+
+// holdsSystemGroup answers whether this device holds a system group, which no list it answers shows.
+func (self *Device) holdsSystemGroup() bool {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	for _, group := range self.groups {
+		if group.system {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreOne rebuilds one group: the MLS state at the record's epoch, then the session over it.

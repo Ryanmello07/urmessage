@@ -14,6 +14,7 @@ import (
 	"github.com/urnetwork/message-server/api"
 	"github.com/urnetwork/message-server/peer"
 	"github.com/urnetwork/message-server/store"
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
@@ -235,8 +236,9 @@ func (self *world) device(t *testing.T, name string) (*urmessage.Device, *connec
 		t.Fatalf("%s: sdk.NewStreamIndexReserver answered no reserver over a live store", name)
 	}
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport: transport,
-		Reserver:  reserver,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      reserver,
 	})
 	if err != nil {
 		t.Fatalf("%s: urmessage.NewDevice: %v", name, err)
@@ -339,9 +341,10 @@ func (self *world) durablePersona(t *testing.T, name string, stateDir string, st
 		t.Fatalf("%s: urmessage.OpenDurableStateStore(%s): %v", name, stateDir, err)
 	}
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport:  transport,
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: stateStore,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    stateStore,
 	})
 	if err != nil {
 		stateStore.Close()
@@ -376,9 +379,10 @@ func (self *world) durablePersonaRefused(t *testing.T, name string, stateDir str
 	}
 	defer stateStore.Close()
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport:  transport,
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: stateStore,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    stateStore,
 	})
 	if err == nil {
 		device.Close()
