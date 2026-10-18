@@ -44,6 +44,9 @@ type leafBound struct {
 	// the list the leaf carries, verified under its credential and signature key; nil for profile 1
 	// and for a leaf whose 0xF005 does not verify
 	verified *messagegroup.VerifiedIdentity
+	// the 0xF005 body as the leaf carries it, which names one list: the encoding is canonical, so two
+	// leaves carry one list exactly when their bodies are equal
+	list []byte
 	// why the leaf's 0xF005 does not verify, or why its extensions do not read
 	unbound error
 }
@@ -68,11 +71,12 @@ func boundLeavesOf(members []CommitMember) map[uint32]*leafBound {
 // that carries no 0xF005 among them (F1 section 2.3).
 func bindingOf(leaf uint32, identity []byte, signatureKey []byte, extensions []messagegroup.ExtensionBytes) *leafBound {
 	bound := &leafBound{leaf: leaf, identity: identity, signatureKey: signatureKey}
-	_, carried, err := mls.FindExtension(mlsExtensionsOf(extensions), mls.ExtensionTypeUrmessageIdentity)
+	body, carried, err := mls.FindExtension(mlsExtensionsOf(extensions), mls.ExtensionTypeUrmessageIdentity)
 	if err != nil {
 		bound.unbound = err
 		return bound
 	}
+	bound.list = body
 	if !carried && bytes.Equal(identity, signatureKey) {
 		return bound
 	}
@@ -122,24 +126,41 @@ const (
 
 // treeHeads is the newest list of every identity a tree holds, by root: head(X, T). Two lists of
 // one root that fork answer the fork, which is R8-EQ's refusal.
+//
+// EVERY PAIR OF ONE ROOT'S LISTS IS COMPARED, IN ANY LEAF ORDER (LRI R84 item 7; review C-1). Each
+// list a leaf carries is compared with every other list of its root the tree holds, and not only with
+// the newest read so far: two lists that fork at one version are a fork whatever newer list of their
+// identity stands between them in leaf order, and a reading that compared each with the running
+// newest admitted them in four orders of six. Leaves that carry one list -- equal bodies, since the
+// encoding is canonical -- are compared once, so a tree whose leaves of one identity carry one list
+// costs what it did.
 func treeHeads(bound map[uint32]*leafBound) (map[string]*messagegroup.VerifiedIdentity, error) {
 	heads := map[string]*messagegroup.VerifiedIdentity{}
+	// every distinct list of each root read so far, by its body, in the order first read
+	distinct := map[string][]*leafBound{}
 	for _, leaf := range sortedLeavesOf(bound) {
 		one := bound[leaf]
 		if one.verified == nil {
 			continue
 		}
 		root := string(one.verified.Root)
-		held, seen := heads[root]
-		if !seen {
-			heads[root] = one.verified
+		if slices.ContainsFunc(distinct[root], func(other *leafBound) bool { return bytes.Equal(other.list, one.list) }) {
 			continue
 		}
-		order, err := messagegroup.VerifyDeviceList(held.Identity, one.verified.Identity)
-		if err != nil {
-			return nil, fmt.Errorf("leaf %d's list and another of root %x: %w", leaf, one.verified.Root, err)
+		held, seen := heads[root]
+		newer := false
+		for _, other := range distinct[root] {
+			order, err := messagegroup.VerifyDeviceList(other.verified.Identity, one.verified.Identity)
+			if err != nil {
+				return nil, fmt.Errorf("leaf %d's list and leaf %d's, both of root %x: %w", leaf, other.leaf, one.verified.Root, err)
+			}
+			// the head is one of the lists read so far, so its order against this one is read here
+			if other.verified == held && order == messagegroup.ListNewer {
+				newer = true
+			}
 		}
-		if order == messagegroup.ListNewer {
+		distinct[root] = append(distinct[root], one)
+		if !seen || newer {
 			heads[root] = one.verified
 		}
 	}
@@ -291,7 +312,7 @@ func ruleSystemGroup(a *CommitAuthorization, before map[uint32]*leafBound, after
 		return fmt.Errorf("%w: a link group takes no commit at epoch %d", ErrSystemGroupViolation, a.Epoch-1)
 	}
 	committer, held := before[a.CommitterLeaf]
-	if !held || committer.verified == nil || !bytes.Equal(committer.verified.Root, purpose.IdentityRoot) {
+	if !held || committer.verified == nil || !bytes.Equal(committer.verified.IdentityKey, purpose.IdentityRoot) {
 		return fmt.Errorf("%w: only the identity's leaf commits in a link group, and leaf %d is not it",
 			ErrSystemGroupViolation, a.CommitterLeaf)
 	}
@@ -302,8 +323,13 @@ func ruleSystemGroup(a *CommitAuthorization, before map[uint32]*leafBound, after
 //
 //   - A SELF GROUP (purpose 1) admits leaves of its own identity only: every leaf is profile 2
 //     under the root 0xF006 names, read through the chain.
-//   - A LINK GROUP (purpose 2) holds at most two leaves, one profile-2 leaf of its root and one
-//     profile-1 leaf.
+//   - A LINK GROUP (purpose 2) holds at most two leaves, one profile-2 leaf of the identity whose
+//     CURRENT identity key 0xF006 names, and one profile-1 leaf.
+//
+// THE KEY 0xF006 NAMES IS THE ROOT IN A SELF GROUP AND THE CURRENT IDENTITY KEY, IRK, IN A LINK GROUP
+// (MASTER sections 5.3 and 5.4; Spec A sections 3.4 and 7.5; LRI R84 item 8), and a link group is
+// founded with {2, IRK}: once an identity has a chain, a leaf under the root, a retired key, is not
+// its leaf in a link group.
 //
 // A purpose this build does not know is refused: a system group is never read as a conversation.
 func systemGroupMembership(tree map[uint32]*leafBound, purpose *messagegroup.GroupPurpose) error {
@@ -324,7 +350,7 @@ func systemGroupMembership(tree map[uint32]*leafBound, purpose *messagegroup.Gro
 			switch {
 			case one.profileOne():
 				profileOneLeaves += 1
-			case one.verified != nil && bytes.Equal(one.verified.Root, purpose.IdentityRoot):
+			case one.verified != nil && bytes.Equal(one.verified.IdentityKey, purpose.IdentityRoot):
 				ownLeaves += 1
 			default:
 				return fmt.Errorf("%w: a link group of %x holds leaf %d (%x), which is neither its identity's nor profile 1",

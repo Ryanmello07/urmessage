@@ -439,6 +439,13 @@ type answeringClient struct {
 	reason  messageprotocol.Reason
 	nonce   []byte
 	answers int
+	// frames is every frame this client was handed, of every type, fragments included: what reaching
+	// the server is, where [answeringClient.answers] counts only the requests it answered (LRI R84
+	// item 2; review G-4)
+	frames int
+	// helloOnly refuses every frame but a Hello at once, so that a frame that should never have been
+	// sent fails in the call that sent it rather than after the transport's deadline
+	helloOnly bool
 }
 
 func (self *answeringClient) AddReceiveCallback(receiveCallback connect.ReceiveFunction) func() {
@@ -451,11 +458,18 @@ func (self *answeringClient) AddReceiveCallback(receiveCallback connect.ReceiveF
 func (self *answeringClient) SendWithTimeout(frame *connectprotocol.Frame, destination connect.Id,
 	ackCallback connect.AckFunction, timeout time.Duration, opts ...any) bool {
 
+	self.mutex.Lock()
+	self.frames += 1
+	helloOnly := self.helloOnly
+	self.mutex.Unlock()
 	if frame.GetMessageType() != connectprotocol.MessageType_MessageMessageServerRequest {
-		return true
+		return !helloOnly
 	}
 	request := &messageprotocol.MessageServerRequest{}
 	if proto.Unmarshal(frame.GetMessageBytes(), request) != nil {
+		return false
+	}
+	if helloOnly && request.GetHello() == nil {
 		return false
 	}
 	self.mutex.Lock()
@@ -488,6 +502,20 @@ func (self *answeringClient) answered() int {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
 	return self.answers
+}
+
+// handed is every frame this client was handed, of every type, fragments included.
+func (self *answeringClient) handed() int {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	return self.frames
+}
+
+// refuseAllButHello makes this client refuse every frame but a Hello from now on.
+func (self *answeringClient) refuseAllButHello() {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	self.helloOnly = true
 }
 
 func newAnsweringDevice(t *testing.T, reason messageprotocol.Reason, nonce []byte) (*Device, *answeringClient) {

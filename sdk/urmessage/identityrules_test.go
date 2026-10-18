@@ -3,6 +3,7 @@ package urmessage
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"testing"
@@ -499,6 +500,10 @@ func TestAnOwnCommitEveryReceiverWouldRefuseIsNeverPublished(t *testing.T) {
 	world := newRoleWorld(t, "alice", "bob", "carol")
 	alice, bob, carol := world.member("alice"), world.member("bob"), world.member("carol")
 	client := world.connect(alice)
+	// FROM HERE NOTHING BUT A HELLO REACHES THE SERVER, and anything else is refused at once: a commit
+	// sent despite the rules fails in the call that sent it, and is counted, fragments included
+	// (LRI R84 item 2; review G-4)
+	client.refuseAllButHello()
 	ctx := t.Context()
 
 	// THE TREE: Alice's laptop under base 2, and then Alice's own leaf under base 4, the newest
@@ -540,13 +545,15 @@ func TestAnOwnCommitEveryReceiverWouldRefuseIsNeverPublished(t *testing.T) {
 			return err
 		}, ErrDeviceNotCurrent},
 	} {
-		epoch, answered, refused := alice.group.Epoch(), client.answered(), alice.group.Stats().CommitRefusedOwn
+		epoch, handed, refused := alice.group.Epoch(), client.handed(), alice.group.Stats().CommitRefusedOwn
 		err := one.do()
 		if !errors.Is(err, ErrCommitUnauthorized) || !errors.Is(err, one.rule) {
 			t.Errorf("%s answered %v, want ErrCommitUnauthorized wrapping %v", one.name, err, one.rule)
 		}
-		if got := client.answered(); got != answered {
-			t.Errorf("%s: %d request(s) reached the server", one.name, got-answered)
+		// EVERY FRAME, FRAGMENTS INCLUDED: a commit's submission goes out as fragments, which a count
+		// of answered requests never saw
+		if got := client.handed(); got != handed {
+			t.Errorf("%s: %d frame(s) reached the server", one.name, got-handed)
 		}
 		if got := alice.group.Epoch(); got != epoch {
 			t.Errorf("%s: alice stands at epoch %d, from %d", one.name, got, epoch)
@@ -609,4 +616,201 @@ func keyPackageOf(t *testing.T, world *roleWorld, name string, identityKey []byt
 		t.Fatalf("%s's key package: %v", name, err)
 	}
 	return keyPackage
+}
+
+// R8-EQ REFUSES A FORK IN EVERY LEAF ORDER (LRI R84 item 7; review C-1). Two lists of one identity at
+// one version that differ -- two bases of one number, or two additions at one index on one base --
+// are a fork wherever they stand in a tree, and a strictly newer list of that identity standing
+// between them hides nothing: R8-EQ compares every pair of one root's lists, and not each against
+// the newest it has read so far. Every order of the three lists is refused, by the rule alone, by
+// the Join door's reading of the whole tree, and by the commit that adds the last of them.
+//
+// THE CONTROLS: the two forking lists are one version and the library calls them a fork; and three
+// lists that do not fork are admitted in every order, so the refusals are the fork's and not the
+// tree's.
+func TestR8EQRefusesAForkInEveryLeafOrder(t *testing.T) {
+	alice := newBindingIdentity(t)
+	author := ed25519.NewKeyFromSeed([]byte(bindingDeviceSeed("d1")))
+	withAddition := func(base messagegroup.ExtensionBytes, device string) messagegroup.ExtensionBytes {
+		t.Helper()
+		identity, err := messagegroup.ParseUrmessageIdentity(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		amendment, err := messagegroup.NewAddition(identity, messagegroup.DeviceEntry{DeviceKey: bindingDeviceKey(device)}, author, 1)
+		if err != nil {
+			t.Fatalf("an addition of %s: %v", device, err)
+		}
+		identity.Amendments = append(identity.Amendments, *amendment)
+		encoded, err := identity.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	base1 := alice.list(t, 1, "d1")
+	for _, shape := range []struct {
+		name          string
+		first, second messagegroup.ExtensionBytes
+		newest        messagegroup.ExtensionBytes
+		devices       [3]string
+	}{
+		{"two bases of one number", alice.list(t, 2, "a1", "a2"), alice.list(t, 2, "a1", "a2", "a3"),
+			alice.list(t, 3, "a1", "a2", "a3"), [3]string{"a1", "a2", "a3"}},
+		{"two additions at one index on one base", withAddition(base1, "d2"), withAddition(base1, "d3"),
+			alice.list(t, 2, "d1", "d2", "d3"), [3]string{"d2", "d3", "d1"}},
+	} {
+		// THE CONTROL: one version, and a fork by the library's own reading
+		first, err := messagegroup.ParseUrmessageIdentity(shape.first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := messagegroup.ParseUrmessageIdentity(shape.second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.Version() != second.Version() {
+			t.Fatalf("CONTROL FAILED: %s: the two lists are not one version", shape.name)
+		}
+		if _, err := messagegroup.VerifyDeviceList(first, second); !errors.Is(err, messagegroup.ErrDeviceListFork) {
+			t.Fatalf("CONTROL FAILED: %s: VerifyDeviceList answered %v, want a fork", shape.name, err)
+		}
+		lists := map[string]messagegroup.ExtensionBytes{"first": shape.first, "second": shape.second, "newest": shape.newest}
+		devices := map[string]string{"first": shape.devices[0], "second": shape.devices[1], "newest": shape.devices[2]}
+		for _, order := range [][3]string{
+			{"first", "second", "newest"}, {"second", "first", "newest"}, {"first", "newest", "second"},
+			{"second", "newest", "first"}, {"newest", "first", "second"}, {"newest", "second", "first"},
+		} {
+			leaves := []bindingLeaf{}
+			for at, name := range order {
+				leaves = append(leaves, bindingLeaf{uint32(at), alice.key, devices[name], lists[name]})
+			}
+			members := bindingMembersOf(leaves, nil)
+			if err := ruleNoListFork(boundLeavesOf(members)); !errors.Is(err, ErrDeviceListEquivocation) {
+				t.Errorf("%s, leaves %v: R8-EQ answered %v, want ErrDeviceListEquivocation", shape.name, order, err)
+			}
+			if _, err := checkTreeBinding(members, nil); !errors.Is(err, ErrDeviceListEquivocation) {
+				t.Errorf("%s, leaves %v: the Join door answered %v, want ErrDeviceListEquivocation", shape.name, order, err)
+			}
+			// the commit that adds the last of the three, by the first
+			row := bindingRow{name: shape.name, committer: 0, before: leaves[:2], after: leaves, added: []uint32{2}}
+			if err := authorizeCommit(row.decision(t)); !errors.Is(err, ErrDeviceListEquivocation) {
+				t.Errorf("%s, leaves %v: the commit adding leaf 2 answered %v, want ErrDeviceListEquivocation", shape.name, order, err)
+			}
+		}
+	}
+	// THE CONTROL: lists that do not fork are admitted in every order
+	older, newest := alice.list(t, 1, "a1", "a2", "a3"), alice.list(t, 2, "a1", "a2", "a3")
+	lists := map[string]messagegroup.ExtensionBytes{"older": older, "newest": newest, "again": newest}
+	devices := map[string]string{"older": "a1", "newest": "a2", "again": "a3"}
+	for _, order := range [][3]string{
+		{"older", "newest", "again"}, {"newest", "older", "again"}, {"again", "older", "newest"},
+		{"older", "again", "newest"}, {"newest", "again", "older"}, {"again", "newest", "older"},
+	} {
+		leaves := []bindingLeaf{}
+		for at, name := range order {
+			leaves = append(leaves, bindingLeaf{uint32(at), alice.key, devices[name], lists[name]})
+		}
+		if err := ruleNoListFork(boundLeavesOf(bindingMembersOf(leaves, nil))); err != nil {
+			t.Errorf("CONTROL FAILED: lists that do not fork, leaves %v, answered %v", order, err)
+		}
+	}
+}
+
+// chainedBindingList is a list of the identity key `to`, base 1 under key number 1 naming one phrase
+// device, whose chain is one form-1 step from `from`'s identity key, signed by `from`'s words: the
+// shape a leaf carries after a phrase change (MASTER section 5.5).
+func chainedBindingList(t *testing.T, from *bindingIdentity, to *bindingIdentity, device string) messagegroup.ExtensionBytes {
+	t.Helper()
+	var step *messagegroup.IdentityStep
+	if err := messagegroup.WithPhraseKeysUnder(messagegroup.FastPhraseStretchForTests(), from.phrase, []uint32{1},
+		func(keys *messagegroup.PhraseKeys) error {
+			var err error
+			step, err = keys.SignIdentityStep(ed25519.PublicKey(bytes.Clone(to.key)))
+			return err
+		}); err != nil {
+		t.Fatalf("the step: %v", err)
+	}
+	authorPub := bindingDeviceKey(device)
+	author := ed25519.NewKeyFromSeed([]byte(bindingDeviceSeed(device)))
+	var own *messagegroup.UrmessageIdentity
+	if err := messagegroup.WithPhraseKeysUnder(messagegroup.FastPhraseStretchForTests(), to.phrase, []uint32{1},
+		func(keys *messagegroup.PhraseKeys) error {
+			cert, err := keys.SignIskCert(1)
+			if err != nil {
+				return err
+			}
+			base := &messagegroup.DeviceListBase{IdentityKey: keys.IdentityKey(), KeyNumber: 1, BaseNumber: 1, IssuedAtMs: 1,
+				Devices:   []messagegroup.DeviceEntry{{DeviceKey: bytes.Clone(authorPub), Flags: messagegroup.DeviceFlagPhraseDevice}},
+				AuthorKey: bytes.Clone(authorPub)}
+			if err := messagegroup.SignBaseAuthor(base, author); err != nil {
+				return err
+			}
+			if err := keys.SignBase(1, base); err != nil {
+				return err
+			}
+			own = &messagegroup.UrmessageIdentity{IskCert: *cert, Base: *base, Chain: []messagegroup.IdentityStep{*step}}
+			return nil
+		}); err != nil {
+		t.Fatalf("the chained list: %v", err)
+	}
+	encoded, err := own.Encode()
+	if err != nil {
+		t.Fatalf("the chained list's encoding: %v", err)
+	}
+	return encoded
+}
+
+// R9 READS A LINK GROUP BY THE CURRENT IDENTITY KEY AND A SELF GROUP BY THE ROOT (LRI R84 item 8;
+// review C-2 and G-3). MASTER sections 5.3 and 5.4 and Spec A sections 3.4 and 7.5: 0xF006's
+// identity_root is the identity's root in a self group, and its current identity key, IRK, in a link
+// group, which E founds with {2, IRK}. Over an identity with a chain of one step -- root R, current
+// key K -- a link group {2, K} takes E's Add of the new device, at E's send side and at the new
+// device's Join door, and {2, R} takes neither; a self group {1, R} takes E's commit, and {1, K} does
+// not.
+//
+// THE CONTROL: the chained list binds with root R and identity key K, which differ; and with no chain
+// a link group {2, key} takes the Add, so the refusals are the chain's.
+func TestR9ReadsALinkGroupByTheCurrentKeyAndASelfGroupByTheRoot(t *testing.T) {
+	root, current := newBindingIdentity(t), newBindingIdentity(t)
+	chained := chainedBindingList(t, root, current, "e1")
+	verified, err := messagegroup.VerifyLeafBinding(current.key, bindingDeviceKey("e1"), []messagegroup.ExtensionBytes{chained})
+	if err != nil {
+		t.Fatalf("CONTROL FAILED: the chained list does not bind: %v", err)
+	}
+	if !bytes.Equal(verified.Root, root.key) || !bytes.Equal(verified.IdentityKey, current.key) || bytes.Equal(root.key, current.key) {
+		t.Fatal("CONTROL FAILED: the chained list's root and current key are not the two keys, apart")
+	}
+	identityLeaf := bindingLeaf{0, current.key, "e1", chained}
+	newDevice := bindingLeaf{1, bindingDeviceKey("n"), "n", messagegroup.ExtensionBytes{}}
+	link := func(purpose []byte) (error, error) {
+		row := bindingRow{name: "the link", committer: 0, purpose: purpose, opens: 1,
+			before: []bindingLeaf{identityLeaf}, after: []bindingLeaf{identityLeaf, newDevice}, added: []uint32{1}}
+		decision := row.decision(t)
+		_, joinErr := checkTreeBinding(decision.MembersAfter, decision.ExtensionsAfter)
+		return authorizeCommit(decision), joinErr
+	}
+	if commitErr, joinErr := link(bindingPurpose(t, 2, current.key)); commitErr != nil || joinErr != nil {
+		t.Errorf("a link group {2, IRK} over a chained identity: E's Add answered %v and the Join door %v, want both taken", commitErr, joinErr)
+	}
+	if commitErr, joinErr := link(bindingPurpose(t, 2, root.key)); !errors.Is(commitErr, ErrSystemGroupViolation) || !errors.Is(joinErr, ErrSystemGroupViolation) {
+		t.Errorf("a link group {2, root} over a chained identity: E's Add answered %v and the Join door %v, want R9 refusing both", commitErr, joinErr)
+	}
+	self := func(purpose []byte) error {
+		return authorizeCommit(bindingRow{name: "the self group", committer: 0, purpose: purpose,
+			before: []bindingLeaf{identityLeaf}, after: []bindingLeaf{identityLeaf}}.decision(t))
+	}
+	if err := self(bindingPurpose(t, 1, root.key)); err != nil {
+		t.Errorf("a self group {1, root} over its chained identity: a bare commit answered %v, want taken", err)
+	}
+	if err := self(bindingPurpose(t, 1, current.key)); !errors.Is(err, ErrSystemGroupViolation) {
+		t.Errorf("a self group {1, IRK} over its chained identity: a bare commit answered %v, want R9's refusal", err)
+	}
+	// THE CONTROL: with no chain the identity key is the root, and a link group of it takes the Add
+	plain := newBindingIdentity(t)
+	plainLeaf := bindingLeaf{0, plain.key, "p1", plain.list(t, 1, "p1")}
+	if err := authorizeCommit(bindingRow{name: "the chainless link", committer: 0, purpose: bindingPurpose(t, 2, plain.key), opens: 1,
+		before: []bindingLeaf{plainLeaf}, after: []bindingLeaf{plainLeaf, newDevice}, added: []uint32{1}}.decision(t)); err != nil {
+		t.Fatalf("CONTROL FAILED: a link group over an identity with no chain refuses the Add: %v", err)
+	}
 }
