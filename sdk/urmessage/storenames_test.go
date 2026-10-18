@@ -281,20 +281,29 @@ func TestEveryRootPathIsOneOfTheStoresOwnNames(t *testing.T) {
 	if held, err := stateRootNamesHeld(dir); err != nil || len(held) != 0 {
 		t.Fatalf("CONTROL FAILED: a root holding only %v answered %v, %v, want none of the root's names", strays, held, err)
 	}
+	// A NAME IN ANOTHER CASE IS THE STORE'S OWN ONLY WHERE THE FILESYSTEM FOLDS CASE (LRI R84 item 13;
+	// review L-6): there it opens the store's own file, and where case is kept it is a stray. Which
+	// this directory does is asked of it, as the reader asks.
+	folds := filesystemFoldsCase(t, dir)
 	for _, name := range stateRootNames {
 		for _, spelling := range []string{name, strings.ToUpper(name)} {
 			path := filepath.Join(dir, spelling)
 			if err := os.WriteFile(path, nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if held, err := stateRootNamesHeld(dir); err != nil || !slices.Equal(held, []string{name}) {
-				t.Errorf("a root holding %q answered %v, %v, want %q alone", spelling, held, err, name)
+			want := []string{name}
+			if spelling != name && !folds {
+				want = []string{}
+			}
+			if held, err := stateRootNamesHeld(dir); err != nil || !slices.Equal(held, want) {
+				t.Errorf("a root holding %q answered %v, %v, want %v (this filesystem folds case: %v)", spelling, held, err, want, folds)
 			}
 			if err := os.Remove(path); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
+	t.Logf("this filesystem folds case: %v", folds)
 	if _, err := stateRootNamesHeld(filepath.Join(dir, "nothing stands here")); !errors.Is(err, ErrStateStoreState) {
 		t.Errorf("a root that cannot be listed answered %v, want ErrStateStoreState", err)
 	}
@@ -372,5 +381,48 @@ func TestAnEmptyStoreFolderHoldsNothingOfAGroup(t *testing.T) {
 	}
 	if _, err := os.Stat(store.pendingPath(groupId)); err != nil {
 		t.Errorf("a state written into a folder holding only an empty epoch folder is not marked as a creation: %v", err)
+	}
+}
+
+// filesystemFoldsCase answers whether a directory's filesystem opens one file under two cases of
+// its name, asked of the directory itself.
+func filesystemFoldsCase(t *testing.T, dir string) bool {
+	t.Helper()
+	probe := filepath.Join(dir, "case-probe")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(probe)
+	lower, err := os.Stat(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upper, err := os.Stat(filepath.Join(dir, "CASE-PROBE"))
+	return err == nil && os.SameFile(lower, upper)
+}
+
+// THE READ BUFFER IS CLEARED ONCE A RECORD IS DECODED (LRI R84 item 13; review L-7): a record read off
+// its file leaves its parts, the decoder's own copies, and nothing in the buffer the file was read
+// into. A phrase key's seed has one copy for its reader to erase, and not a second.
+//
+// THE CONTROL: the parts are intact after the buffer is cleared, so they are copies and not windows
+// onto it.
+func TestTheRecordReadBufferIsClearedOnceDecoded(t *testing.T) {
+	identityKey := bytes.Repeat([]byte{0x5c}, 32)
+	keyNumber := []byte{0, 0, 0, 1}
+	seed := bytes.Repeat([]byte{0x7e}, 32)
+	raw, err := encodeStateRecord(stateKindPhraseKey, identityKey, keyNumber, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, err := decodeStateRecordClearing(raw, stateKindPhraseKey)
+	if err != nil {
+		t.Fatalf("the record does not decode: %v", err)
+	}
+	if !allZero(raw) {
+		t.Errorf("the buffer the record was read into still holds it after the decode")
+	}
+	if len(parts) != 3 || !bytes.Equal(parts[0], identityKey) || !bytes.Equal(parts[1], keyNumber) || !bytes.Equal(parts[2], seed) {
+		t.Fatalf("CONTROL FAILED: the parts are not intact after the buffer was cleared")
 	}
 }

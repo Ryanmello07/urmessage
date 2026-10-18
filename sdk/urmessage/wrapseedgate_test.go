@@ -261,14 +261,16 @@ var wrapSeedSinks = map[string]wrapSeedSink{
 			"nothing else taints -- and the caller is [NewDevice], whose own sites are below.",
 	},
 	"NewDevice|call zeroizeState": {
-		carries: []string{"wrapSeed"},
-		occurs:  []string{"wrapSeed"},
+		carries: []string{"signer", "wrapSeed"},
+		occurs:  []string{"signer", "wrapSeed"},
 		why: "THE ERASE ON THE WAY IN, inside the deferred closure that covers every exit of " +
 			"[NewDevice] below the binding but the one that hands the seed to the field. It is the " +
 			"same [zeroizeState] over the same array [Device.Close] clears at the other end of the " +
 			"device's life, and it is here because a device whose engine refused is a device " +
 			"nothing will ever Close. See TestEveryPathThatDropsTheDeviceErasesItsWrapSeed, which " +
-			"asserts the COVER rather than this call.",
+			"asserts the COVER rather than this call. The same closure erases the device's signing " +
+			"key, which the Device holds beside the seed (LRI R84 item 12; review L-5), and " +
+			"TestNewDevicesRefusalErasesTheSigningKeyItRead drives it.",
 	},
 	"deviceIdentity|call zeroizeState": {
 		carries: []string{"wrapSeed"},

@@ -467,10 +467,15 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	// analysis a reader has to redo after each new return -- which is the whole of what
 	// TestEveryPathThatDropsTheDeviceErasesItsWrapSeed asserts, over this function and not over a
 	// list of its exits.
+	//
+	// AND THE SIGNING KEY, BY THE SAME COVER (LRI R84 item 12; review L-5). The Device holds it from
+	// identity phase 1's Task 12, and Close erases it there; an exit that builds no Device drops it
+	// here, so the refusals below -- the identity that does not read back, and the engine -- erase it.
 	held := false
 	defer func() {
 		if !held {
 			zeroizeState(wrapSeed)
+			zeroizeState(signer)
 		}
 	}()
 	if err != nil {
@@ -773,9 +778,17 @@ func (self *Device) pause(ctx context.Context, howLong time.Duration) error {
 	}
 }
 
-// rebindAll moves every live session onto the nonce this transport now holds.
+// rebindAll moves every live session onto the nonce this transport now holds: every group this
+// device holds, its system groups included (LRI R84 item 11). Groups answers conversations only, so a
+// rebind that walked it left the self group's sessions bound to a nonce the server had dropped.
 func (self *Device) rebindAll() error {
-	for _, group := range self.Groups() {
+	self.mutex.Lock()
+	held := make([]*Group, 0, len(self.groups))
+	for _, group := range self.groups {
+		held = append(held, group)
+	}
+	self.mutex.Unlock()
+	for _, group := range held {
 		if err := group.rebind(); err != nil {
 			return err
 		}

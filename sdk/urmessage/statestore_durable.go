@@ -1219,11 +1219,16 @@ var stateRootNames = []string{
 }
 
 // stateRootNamesHeld answers which of the store's own root names a data directory holds, each
-// matched whole and without regard to case, as the group folder's reader matches its own. A STRAY
-// IS NEVER READ AS ONE (Property 5): a file another program left, a name that only begins like one
-// of the store's, and an unfinished write (`.writing-*`) are not among them. A directory that
-// cannot be listed is an error rather than an empty answer: what cannot be asked about is never
-// "nothing is here".
+// matched whole. A STRAY IS NEVER READ AS ONE (Property 5): a file another program left, a name that
+// only begins like one of the store's, and an unfinished write (`.writing-*`) are not among them. A
+// directory that cannot be listed is an error rather than an empty answer: what cannot be asked
+// about is never "nothing is here".
+//
+// A NAME IN ANOTHER CASE IS THE STORE'S OWN ONLY WHERE THE FILESYSTEM SAYS IT IS (LRI R84 item 13;
+// review L-6): where case is folded, "DEVICE" opens the file "device" opens, and it is that file;
+// where case is kept, they are two names, "DEVICE" is a stray, and reading it as the device record
+// would let PutDeviceIdentity mint a key beside identity records that do not name it. The filesystem
+// is asked, file by file, rather than guessed from the platform.
 func stateRootNamesHeld(dataDir string) ([]string, error) {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
@@ -1232,12 +1237,26 @@ func stateRootNamesHeld(dataDir string) ([]string, error) {
 	held := []string{}
 	for _, entry := range entries {
 		for _, own := range stateRootNames {
-			if strings.EqualFold(entry.Name(), own) {
+			if entry.Name() == own || (strings.EqualFold(entry.Name(), own) && sameFileIn(dataDir, entry.Name(), own)) {
 				held = append(held, own)
 			}
 		}
 	}
 	return held, nil
+}
+
+// sameFileIn answers whether two spellings of one name open one file in a directory: they do where
+// the filesystem folds case, and do not where it keeps it.
+func sameFileIn(dir string, spelling string, own string) bool {
+	variant, err := os.Stat(filepath.Join(dir, spelling))
+	if err != nil {
+		return false
+	}
+	exact, err := os.Stat(filepath.Join(dir, own))
+	if err != nil {
+		return false
+	}
+	return os.SameFile(variant, exact)
 }
 
 func (self *DurableStateStore) privatePath(pub []byte) string {
@@ -1471,6 +1490,15 @@ func (self *DurableStateStore) readRecord(path string, kind byte) ([][]byte, err
 		// name beside it (R36, item 4)
 		return nil, fmt.Errorf("%w: %s could not be read: %w", ErrStateStoreState, path, self.confirmWrongType(path, false, err))
 	}
+	return decodeStateRecordClearing(raw, kind)
+}
+
+// decodeStateRecordClearing decodes a record as it was read off its file, and CLEARS THE READ BUFFER
+// once its parts are copied out of it (LRI R84 item 13; review L-7). The parts are decodeStateRecord's
+// own copies, so a secret record -- the device's keys, a phrase key -- leaves one copy for its reader
+// to erase, and not a second in the file's buffer, which nothing else erases.
+func decodeStateRecordClearing(raw []byte, kind byte) ([][]byte, error) {
+	defer zeroizeState(raw)
 	return decodeStateRecord(raw, kind)
 }
 
@@ -3556,7 +3584,8 @@ func (self *DurableStateStore) PutPhraseKey(record *PhraseKeyRecord) error {
 
 // PhraseKey reads the phrase key back. A store with none -- every device that is not a phrase
 // device -- answers [ErrStateNotFound]. Its parts are the read's own, answered as GetDeviceIdentity
-// answers the device's, so that the seed has one copy for the caller to erase rather than two.
+// answers the device's, and the file's buffer is cleared once they are copied out of it
+// ([decodeStateRecordClearing]), so that the seed has one copy for the caller to erase.
 func (self *DurableStateStore) PhraseKey() (*PhraseKeyRecord, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
