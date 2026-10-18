@@ -502,6 +502,13 @@ func (self *crossProcessDevice) close() {
 // two members that encoded it differently would export different secrets.
 func (self *crossProcessDevice) createGroup(t *testing.T, groupId []byte) messagegroup.GroupHandle {
 	t.Helper()
+	return self.createGroupWith(t, groupId, nil)
+}
+
+// createGroupWith is [crossProcessDevice.createGroup] with a founding context beside the policy: 0xF006
+// for a system group (identity phase 1's Task 13), nil for a conversation.
+func (self *crossProcessDevice) createGroupWith(t *testing.T, groupId []byte, context []messagegroup.ExtensionBytes) messagegroup.GroupHandle {
+	t.Helper()
 	policy := &mls.GroupPolicyExtension{
 		Roles: []mls.RoleEntry{{MemberId: self.identityPub, Role: mls.RoleOwner}},
 	}
@@ -513,7 +520,7 @@ func (self *crossProcessDevice) createGroup(t *testing.T, groupId []byte) messag
 		t.Fatalf("the group policy: %v", err)
 	}
 	handle, err := self.engine.CreateBoundGroup(groupId, encoded.ExtensionData, self.leafKeys,
-		[]messagegroup.ExtensionBytes{self.extension}, nil)
+		[]messagegroup.ExtensionBytes{self.extension}, context)
 	if err != nil {
 		t.Fatalf("CreateBoundGroup: %v", err)
 	}

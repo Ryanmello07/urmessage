@@ -249,6 +249,9 @@ type Device struct {
 	identity     *deviceIdentityState
 	offered      *messagegroup.RecoveryPhrase
 	heads        map[string][]byte
+	// whether the last write of the heads failed, so that the next raise writes them whether or not a
+	// head rose (identity phase 1's Task 13; heads.go)
+	headsUnwritten bool
 
 	// signer is this device's own signing key, device_sig, and devicePub its public half: the key
 	// every leaf this device makes is signed with, and the author's key of every list this device

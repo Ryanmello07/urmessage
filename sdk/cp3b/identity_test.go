@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,10 @@ type worldIdentity struct {
 	words     string
 	// the identity key, derived from the words when a seam member first claims it
 	key []byte
+	// the newest list a seam member of this identity carries, once one does: the next seam device of
+	// the identity takes the base after it (identity phase 1's Task 13), since two lists of one base
+	// that name different devices are a fork, which R8-EQ refuses in any tree they meet in
+	newest *messagegroup.UrmessageIdentity
 }
 
 // identifyDevice gives a device its identity as a person sets one up, connected, and answers the
@@ -196,6 +201,29 @@ func seamIdentity(t *testing.T, name string, words string, signer mls.SignatureP
 	return identityKey, extension
 }
 
+// newestList is the newest list a seam device of this identity took, or nil before any did.
+func (self *worldIdentity) newestList() *messagegroup.UrmessageIdentity {
+	worldIdentities.Lock()
+	defer worldIdentities.Unlock()
+	return self.newest
+}
+
+// tookList records the list a seam device of this identity took, which the next one builds on.
+func (self *worldIdentity) tookList(t *testing.T, extension messagegroup.ExtensionBytes) {
+	t.Helper()
+	parsed, err := messagegroup.ParseUrmessageIdentity(extension)
+	if err != nil {
+		t.Fatalf("a seam device's list does not read back: %v", err)
+	}
+	worldIdentities.Lock()
+	defer worldIdentities.Unlock()
+	self.newest = parsed
+}
+
+// worldIdentities guards every world identity's newest list, which seam members of one identity in
+// one world take in turn.
+var worldIdentities sync.Mutex
+
 // newWords are the words of a new identity, for a seam member of its own.
 func newWords(t *testing.T) string {
 	t.Helper()
@@ -209,10 +237,14 @@ func newWords(t *testing.T) string {
 	return strings.Join(words, " ")
 }
 
-// siblingIdentity is the claimed identity's list as one of its devices publishes it: read off a key
-// package that device makes, which is the one place outside urmessage a device's 0xF005 is public.
+// siblingIdentity is the claimed identity's newest list this world knows: the one a seam device of it
+// last took, or, before any did, its list as one of its devices publishes it -- read off a key package
+// that device makes, which is the one place outside urmessage a device's 0xF005 is public.
 func siblingIdentity(t *testing.T, claimed *worldIdentity) *messagegroup.UrmessageIdentity {
 	t.Helper()
+	if newest := claimed.newestList(); newest != nil {
+		return newest
+	}
 	keyPackage, err := claimed.device.KeyPackage()
 	if err != nil {
 		t.Fatalf("%s's KeyPackage, for its list: %v", claimed.name, err)

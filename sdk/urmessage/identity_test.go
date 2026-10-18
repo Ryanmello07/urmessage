@@ -46,6 +46,8 @@ func testIdentify(t testing.TB, device *Device) {
 	if err := device.makeIdentity(phrase); err != nil {
 		t.Fatalf("the device's identity: %v", err)
 	}
+	// the words are kept, so that a test can sign this identity's next list (identity phase 1's Task 13)
+	testRememberIdentity(device.identity.record.Root, phrase, device.devicePub)
 }
 
 // testFixtureIdentity gives a fixture that drives the engine without a Device -- the cross-process
@@ -648,6 +650,10 @@ func TestARestartOffersNewWords(t *testing.T) {
 // the older list is the last one read. After the restore the store's heads hold that root at base 2
 // -- the newest list, not the last one -- beside this device's own root, at its own list.
 //
+// AND THIS IDENTITY'S OWN HEAD MOVES ONLY FROM ITS SELF GROUP (Task 13; REDTEAM M4): the group also
+// holds a further device of this device's own identity under that identity's base 2, and the group is
+// a conversation, so the own root's head stays this device's own list through the restore.
+//
 // THE CONTROL: before the restore the store holds this device's own root alone.
 func TestARestoreRaisesTheHeadsToTheNewestListOfEachRoot(t *testing.T) {
 	dir := t.TempDir()
@@ -690,6 +696,29 @@ func TestARestoreRaisesTheHeadsToTheNewestListOfEachRoot(t *testing.T) {
 	if bytes.Equal(newerList.Data, olderList.Data) {
 		t.Fatal("the two lists are one list")
 	}
+	// a further device of this device's own identity, under its base 2
+	siblingStore := openTestStore(t, filepath.Join(dir, "alice-tablet"))
+	siblingCrypto, err := mls.NewCryptoProvider(deviceCipherSuite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siblingSigner, siblingPub, siblingLeafKeys, _, err := deviceIdentity(siblingCrypto, siblingStore, rand.Reader)
+	if err != nil {
+		t.Fatalf("the tablet's device identity: %v", err)
+	}
+	siblingList, known := testSiblingList(t, own.record.Root, siblingSigner, siblingPub)
+	if !known {
+		t.Fatal("this device's words are not kept")
+	}
+	siblingEngine, err := messagegroup.NewConnectMlsEngine(siblingCrypto, siblingStore, siblingSigner,
+		mls.BasicCredential(own.record.Root), siblingLeafKeys)
+	if err != nil {
+		t.Fatalf("the tablet's engine: %v", err)
+	}
+	sibling, err := siblingEngine.NewBoundKeyPackage([]messagegroup.ExtensionBytes{siblingList})
+	if err != nil {
+		t.Fatalf("the tablet's key package: %v", err)
+	}
 
 	handle, err := alice.device.createMlsGroup(groupId, false)
 	if err != nil {
@@ -703,7 +732,7 @@ func TestARestoreRaisesTheHeadsToTheNewestListOfEachRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := handle.CommitAdd([][]byte{newer, older}); err != nil {
+	if _, _, _, err := handle.CommitAdd([][]byte{newer, older, sibling}); err != nil {
 		t.Fatalf("CommitAdd: %v", err)
 	}
 	if err := handle.MergePendingCommit(); err != nil {

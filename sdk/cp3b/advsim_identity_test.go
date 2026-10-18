@@ -793,6 +793,10 @@ func seamIdentityAt(t *testing.T, member *seamMember, leaf uint32) []byte {
 // package, a real device's, and both receivers admit it. On this tree that package is bound to
 // nothing either. From the commit that makes every device's key package carry the identity
 // extension (Task 12) it is a bound one, so this arm is the plan's control there with no edit here.
+//
+// CLOSED BY TASK 13, WITH R6e. The stranger's key package is built without 0xF005 on purpose, by the
+// engine's unbound door, and is asserted to carry none before the add, so that the refusal is R6e's
+// and the control's admission is a bound package's (LRI R62).
 func TestAdvSimAnUnboundKeyPackageIsAdmittedByEveryReceiver(t *testing.T) {
 	world := newWorld(t)
 	ctx := context.Background()
@@ -839,10 +843,18 @@ func TestAdvSimAnUnboundKeyPackageIsAdmittedByEveryReceiver(t *testing.T) {
 	t.Logf("CONTROL: the attacker's addition of carol's key package was admitted by Alice's first device and by Bob")
 
 	// THE SCENARIO: the attacker adds a key package that names no identity. From identity phase 1's
-	// Task 12 every seam member's package is bound, this one included, and Task 13 builds it without
-	// 0xF005 on purpose and asserts so before the add (LRI R62)
+	// Task 12 every seam member's package is bound, so this one is built without 0xF005 on purpose,
+	// through the engine's unbound door, and is asserted to carry none before the add (LRI R62)
 	stranger := world.seamMember(t, ctx, "stranger")
-	commit, _, _, err = attacker.handle.CommitAdd([][]byte{stranger.keyPackage(t)})
+	strangerKeyPackage, err := stranger.engine.NewKeyPackage()
+	if err != nil {
+		advHarness(t, "the stranger's unbound key package: %v", err)
+	}
+	strangerDecoded, _, bindErr := keyPackageIdentity(t, strangerKeyPackage)
+	if _, carried, _ := mls.FindExtension(strangerDecoded.LeafNode.Extensions, mls.ExtensionTypeUrmessageIdentity); carried || bindErr == nil {
+		advHarness(t, "the stranger's key package carries 0xF005 (%v) or binds (%v), and the scenario is an unbound one", carried, bindErr)
+	}
+	commit, _, _, err = attacker.handle.CommitAdd([][]byte{strangerKeyPackage})
 	if err != nil {
 		advHarness(t, "the attacker's CommitAdd of the stranger's key package: %v", err)
 	}

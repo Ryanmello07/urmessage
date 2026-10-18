@@ -88,6 +88,10 @@ type worldOptions struct {
 	// clause 5 for why the alternative -- replaying a recorded request -- measures the front's
 	// replay refusal instead of §5.4's acceptance window.
 	stripEpochKeys bool
+
+	// A handler of the scenario's own in front of the server's, outermost: a hostile server, such as
+	// one that forks a group (identity phase 1's Task 13). Nil is the server as it ships.
+	wrapHandler func(peer.Handler) peer.Handler
 }
 
 func newWorld(t *testing.T) *world {
@@ -136,6 +140,9 @@ func newWorldWith(t *testing.T, options worldOptions) *world {
 		dispatched = wire
 	} else if options.stripEpochKeys {
 		t.Fatal("worldOptions.stripEpochKeys needs recordWire: the tap is what strips")
+	}
+	if options.wrapHandler != nil {
+		dispatched = options.wrapHandler(dispatched)
 	}
 	served, err := peer.New(peer.Config{
 		Client:      serverClient,

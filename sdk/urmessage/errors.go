@@ -371,6 +371,24 @@ var (
 	// receiving side's twin of that refusal, over the seam's HasLeafKeys.
 	ErrCommitLeafWithoutKeys = errors.New("urmessage: a leaf of the post-commit tree carries no urmessage_leaf_keys, so no epoch wrap could reach it")
 
+	// THE IDENTITY LAYER'S BINDING RULES (identity phase 1's Task 13; MASTER §11 at Revision 10),
+	// each its own refusal. See identityrules.go.
+	//
+	// R6e: a leaf the commit adds or updates, or the committer's own post-commit leaf, carries no
+	// urmessage_identity that binds it, and it is not the one profile-1 leaf a link group may hold.
+	ErrCommitIdentityUnbound = errors.New("urmessage: a commit brings in a leaf that no identity binds")
+	// R6c-sig: a leaf the commit keeps, the committer's included, changed its signature key.
+	ErrCommitSignatureKeyChanged = errors.New("urmessage: a commit changes the signature key of a leaf it keeps")
+	// R8-EQ: two lists of one identity in the tree the commit enters fork.
+	ErrDeviceListEquivocation = errors.New("urmessage: two device lists of one identity in this group fork")
+	// R8-CUR: a leaf the newest list of its identity does not name stands after the commit that
+	// brings that list, or the commit adds, updates or is made from one.
+	ErrDeviceNotCurrent = errors.New("urmessage: a leaf the newest list of its identity does not name stands after the commit")
+	// R9: a commit breaks a system group's rule: a self group admits its own identity's leaves
+	// only, and a link group one leaf of each profile, commits from its identity's leaf, and takes
+	// no commit at epoch 1 or above.
+	ErrSystemGroupViolation = errors.New("urmessage: a commit breaks a system group's rule")
+
 	// R1: an Add of a NEW identity by a committer who is neither ADMIN nor OWNER (ruling 1).
 	ErrCommitAddByNonAdmin = errors.New("urmessage: only an admin or the owner may add a new identity to the group")
 
@@ -900,6 +918,14 @@ var (
 	// invitation that was made and never opened. A group holds one leaf per identity it admits
 	// this way, so the leaf that stands is removed first.
 	ErrJoinerAlreadyHasALeaf = errors.New("urmessage: this identity already has an entry in this group, perhaps from an invitation that was never opened; remove that entry, then add the new join code")
+	// THE ADD DOOR'S TWO IDENTITY REFUSALS (identity phase 1's Task 13), each before anything is
+	// staged. Unbound: the join code's leaf carries no urmessage_identity that binds its key to the
+	// identity it names.
+	ErrKeyPackageUnbound = errors.New("urmessage: this join code is bound to no identity, so it cannot be added; ask for a join code from an updated URmessage")
+	// Stale: the join code carries a list of its identity that is older than the one this device
+	// holds, and that list does not name the join code's device: a device its own person has since
+	// removed, or a code made before that.
+	ErrKeyPackageListStale = errors.New("urmessage: this join code is from a device its own account no longer lists; ask the person for a new join code")
 
 	// [Group.Open] found that the digest of the keys it is about to publish epoch one with is not
 	// the digest [Group.AddMember] sealed into the invite. The joiner would refuse that invite, so

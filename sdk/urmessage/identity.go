@@ -463,66 +463,19 @@ func groupContextExtensions(handle messagegroup.GroupHandle) ([]mls.Extension, e
 	return context.Extensions, nil
 }
 
-// verifyEveryLeaf runs the binding check over every leaf of a group, as the current tree holds it, and
-// answers what each verified: the restore's re-verification (Task 12). A leaf that does not bind is
-// [ErrGroupLeafUnbound], and the group is not restored.
+// verifyEveryLeaf reads a group's whole tree as it stands, as the Join door and the restore read one
+// (identity phase 1's Tasks 12 and 13): every leaf binds, or is the one profile-1 leaf a link group may
+// hold ([ErrGroupLeafUnbound]); no two lists of one identity fork ([ErrDeviceListEquivocation]); and
+// where the context carries 0xF006, R9's membership holds ([ErrSystemGroupViolation]). It answers the
+// lists the leaves carry, verified, for the heads.
 func verifyEveryLeaf(handle messagegroup.GroupHandle) ([]*messagegroup.VerifiedIdentity, error) {
-	verified := []*messagegroup.VerifiedIdentity{}
-	for at := 0; at < handle.MemberCount(); at++ {
-		leaf, _, _, err := handle.MemberAt(at)
-		if err != nil {
-			return nil, err
-		}
-		view, err := handle.LeafAt(leaf)
-		if err != nil {
-			return nil, err
-		}
-		one, err := messagegroup.VerifyLeafBinding(view.Credential, view.SignatureKey, view.Extensions)
-		if err != nil {
-			return nil, fmt.Errorf("%w: leaf %d: %w", ErrGroupLeafUnbound, leaf, err)
-		}
-		verified = append(verified, one)
+	members, err := treeMembersOf(handle)
+	if err != nil {
+		return nil, err
 	}
-	return verified, nil
-}
-
-// raiseHeads takes the newest list of each root among what a re-verification answered, and writes the
-// heads when one rose. A head only rises: a list that is older than the stored one, the same, or a fork
-// of it, leaves the stored one where it is (the rules of Task 13 decide what a fork does).
-func (self *Device) raiseHeads(verified []*messagegroup.VerifiedIdentity) error {
-	self.identityLock.Lock()
-	defer self.identityLock.Unlock()
-	raised := false
-	for _, one := range verified {
-		candidate, err := one.Identity.Encode()
-		if err != nil {
-			return err
-		}
-		stored, found := self.heads[string(one.Root)]
-		if found {
-			current, err := messagegroup.ParseUrmessageIdentity(messagegroup.ExtensionBytes{Type: candidate.Type, Data: stored})
-			if err != nil {
-				return fmt.Errorf("urmessage: the stored head of root %x: %w", one.Root, err)
-			}
-			order, err := messagegroup.VerifyDeviceList(current, one.Identity)
-			if err != nil || order != messagegroup.ListNewer {
-				continue
-			}
-		}
-		self.heads[string(one.Root)] = candidate.Data
-		raised = true
+	extensions, err := groupContextExtensions(handle)
+	if err != nil {
+		return nil, err
 	}
-	if !raised {
-		return nil
-	}
-	store, durable := self.stateStore.(DeviceStore)
-	if !durable {
-		return nil
-	}
-	rows := make([]IdentityHead, 0, len(self.heads))
-	for root, body := range self.heads {
-		rows = append(rows, IdentityHead{Root: []byte(root), Identity: body})
-	}
-	slices.SortFunc(rows, func(left IdentityHead, right IdentityHead) int { return bytes.Compare(left.Root, right.Root) })
-	return store.PutIdentityHeads(rows)
+	return checkTreeBinding(members, seamExtensionsOf(extensions))
 }

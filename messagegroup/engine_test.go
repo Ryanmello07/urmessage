@@ -109,6 +109,9 @@ var sectionSixGroupHandle = map[string]string{
 	// TestNoMethodOfEitherEngineInterfaceNamesAConnectMlsType errors on any qualified type in
 	// either interface's signature, which is what refuses a general CommitProposals outright.
 	"CommitRemoveWithExtensions": "func(leaves []uint32, extensions []ExtensionBytes) (commit []byte, welcome []byte, ratchetTree []byte, err error)",
+	// Spec A A-36's fourth, transcribed (identity phase 1's Task 13): a commit with a path that
+	// removes leaves and patches the committer's own leaf.
+	"CommitOwnLeaf": "func(patch OwnLeafPatch, removeLeaves []uint32, contextExtensions []ExtensionBytes) (commit []byte, welcome []byte, ratchetTree []byte, err error)",
 	// AMENDED 2026-09-22 for ledger item 242's R2, the role model's committing arm: the two
 	// reads that let a committer submit before it merges. The record that announces an epoch
 	// carries that epoch's facts -- write and read keys through its exporter, a hash of its
@@ -312,11 +315,13 @@ func TestTheEngineInterfacesAreExactlySectionSixsBlock(t *testing.T) {
 	//
 	// AND IT IS 8 AND 36 FROM IDENTITY PHASE 1's TASK 12 (Spec A A-36; LRI R64), three of the four
 	// methods section 6 designs for the identity layer, transcribed as it writes them: the ENGINE half
-	// gains NewBoundKeyPackage and CreateBoundGroup, and the HANDLE half LeafAt. CommitOwnLeaf and
-	// ProcessedMember's two fields are the library's Tasks 13 and 42, and section 6's block takes
-	// 8 and 37 when they land, as A-36 says.
-	if len(sectionSixGroupEngine) != 8 || len(sectionSixGroupHandle) != 36 {
-		t.Errorf("section 6's block is transcribed as %d and %d methods; it was measured at 8 and 36, and a change to either is a change to the seam",
+	// gains NewBoundKeyPackage and CreateBoundGroup, and the HANDLE half LeafAt.
+	//
+	// AND 8 AND 37 FROM ITS TASK 13: the HANDLE half gains CommitOwnLeaf, the fourth, and
+	// ProcessedMember its two fields, SignatureKey and Extensions, which is the whole of what A-36
+	// designs; section 6's block takes 8 and 37, as A-36 says.
+	if len(sectionSixGroupEngine) != 8 || len(sectionSixGroupHandle) != 37 {
+		t.Errorf("section 6's block is transcribed as %d and %d methods; it was measured at 8 and 37, and a change to either is a change to the seam",
 			len(sectionSixGroupEngine), len(sectionSixGroupHandle))
 	}
 }

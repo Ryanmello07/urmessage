@@ -411,7 +411,13 @@ func (self *Device) restoreOne(store DeviceStore, record *GroupRecord, nonce []b
 		handle.Close()
 		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
 	}
-	if err := self.raiseHeads(verified); err != nil {
+	contextExtensions, err := groupContextExtensions(handle)
+	if err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	// THIS IDENTITY'S OWN HEAD MOVES ONLY FROM ITS SELF GROUP (identity phase 1's Task 13): see heads.go
+	if err := self.raiseHeadsFrom(verified, self.isOwnSelfGroup(seamExtensionsOf(contextExtensions))); err != nil {
 		handle.Close()
 		return nil, fmt.Errorf("%w: group %x at epoch %d: the heads: %w", ErrRestore, record.GroupId, record.Epoch, err)
 	}

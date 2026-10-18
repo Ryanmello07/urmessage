@@ -78,6 +78,12 @@ func sameDecision(t *testing.T, what string, sent *CommitAuthorization, received
 				a[at].HasLeafKeys != b[at].HasLeafKeys {
 				t.Errorf("%s: %s[%d] is %+v on the send side and %+v at the receiver", what, field, at, a[at], b[at])
 			}
+			// AND THE LEAF AS THE BINDING RULES READ IT (identity phase 1's Task 13): its signature key
+			// and its extensions, the committer's patched leaf included
+			if !bytes.Equal(a[at].SignatureKey, b[at].SignatureKey) || !extensionsEqual(a[at].Extensions, b[at].Extensions) {
+				t.Errorf("%s: %s[%d] at leaf %d carries another signature key or other extensions on the send side than at the receiver",
+					what, field, at, a[at].Leaf)
+			}
 		}
 	}
 	if !bytes.Equal(sent.GroupId, received.GroupId) {
@@ -198,6 +204,24 @@ func TestTheSendSideJudgesTheSameValueEveryReceiverWillJudge(t *testing.T) {
 				commit, _, _, err := owner.handle.CommitAdd(intent.addKeyPackages)
 				if err != nil {
 					t.Fatalf("CommitAdd: %v", err)
+				}
+				return commit
+			},
+		},
+		{
+			// THE COMMITTER'S OWN-LEAF PATCH (identity phase 1's Task 13; REDTEAM H1): the would-be
+			// tree's committer is its post-commit leaf, the patch applied, as the receiver stages it
+			name: "the committer's own leaf, patched with its next list",
+			intent: func(t *testing.T, world *roleWorld, owner *roleMember) *outgoingCommit {
+				ownerPub := testPublicOf(owner.dev.signer)
+				next := testNextList(t, owner.dev.identityPub, owner.dev.signer, ownerPub, ownerPub)
+				return &outgoingCommit{ownLeafPatch: &messagegroup.OwnLeafPatch{Extensions: []messagegroup.ExtensionBytes{next}}}
+			},
+			build: func(t *testing.T, world *roleWorld, owner *roleMember, intent *outgoingCommit,
+				_ *CommitAuthorization) []byte {
+				commit, _, _, err := owner.handle.CommitOwnLeaf(*intent.ownLeafPatch, nil, nil)
+				if err != nil {
+					t.Fatalf("CommitOwnLeaf: %v", err)
 				}
 				return commit
 			},

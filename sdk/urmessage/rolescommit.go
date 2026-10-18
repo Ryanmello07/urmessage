@@ -51,6 +51,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -186,6 +187,10 @@ type outgoingCommit struct {
 	addKeyPackages [][]byte
 	removeLeaves   []uint32
 	policy         []byte
+	// the patch this device's own path leaf carries, for a commit that makes one (identity phase
+	// 1's Task 13): its credential when not nil, and extension bodies set by type. The would-be
+	// tree's committer is that leaf, so every rule runs over what receivers will see.
+	ownLeafPatch *messagegroup.OwnLeafPatch
 }
 
 // authorizeOutgoingLocked is the committing-client decision on a commit this device is about to
@@ -269,7 +274,17 @@ func (self *Group) outgoingAuthorizationLocked(intent *outgoingCommit) (*CommitA
 			continue
 		}
 		occupied[member.Leaf] = true
-		after = append(after, self.commitMemberLocked(member.Leaf, member.IdentityPub, member.HasLeafKeys, policyAfter))
+		identity, extensions := member.IdentityPub, member.Extensions
+		// THE COMMITTER'S POST-COMMIT LEAF, THE OWN-LEAF PATCH INCLUDED (identity phase 1's Task 13;
+		// REDTEAM H1). A commit with a path makes the committer a new leaf, and a patch changes its
+		// credential and the extensions it names; the signature key a path keeps. Judged as the
+		// pre-commit leaf, a patch every receiver refuses would be published, and the group would
+		// halt for every member.
+		if member.Leaf == ownLeaf && intent.ownLeafPatch != nil {
+			identity, extensions = patchedLeaf(member.IdentityPub, member.Extensions, intent.ownLeafPatch)
+		}
+		after = append(after, self.commitMemberLocked(member.Leaf, identity, member.HasLeafKeys,
+			member.SignatureKey, extensions, policyAfter))
 	}
 	added := make([]uint32, 0, len(intent.addKeyPackages))
 	next := uint32(0)
@@ -283,7 +298,8 @@ func (self *Group) outgoingAuthorizationLocked(intent *outgoingCommit) (*CommitA
 		}
 		occupied[next] = true
 		_, keysErr := mls.LeafKeysOf(&keyPackage.LeafNode)
-		after = append(after, self.commitMemberLocked(next, keyPackage.LeafNode.Credential.Identity, keysErr == nil, policyAfter))
+		after = append(after, self.commitMemberLocked(next, keyPackage.LeafNode.Credential.Identity, keysErr == nil,
+			keyPackage.LeafNode.SignatureKey, seamExtensionsOf(keyPackage.LeafNode.Extensions), policyAfter))
 		added = append(added, next)
 	}
 	slices.SortFunc(after, func(a CommitMember, b CommitMember) int {
@@ -308,6 +324,136 @@ func (self *Group) outgoingAuthorizationLocked(intent *outgoingCommit) (*CommitA
 		ExtensionsBefore:  extensionsBefore,
 		ExtensionsAfter:   extensionsAfter,
 	}, nil
+}
+
+// patchedLeaf is a leaf's credential identity and extensions with an own-leaf patch applied, as mls
+// applies it (CommitOptions.OwnLeafPatch): a credential that is not nil replaces the leaf's, and each
+// extension of the patch replaces the leaf's entry of its type in place, or is appended where the
+// leaf carries none.
+func patchedLeaf(identity []byte, extensions []messagegroup.ExtensionBytes, patch *messagegroup.OwnLeafPatch) ([]byte, []messagegroup.ExtensionBytes) {
+	if patch.Credential != nil {
+		identity = patch.Credential
+	}
+	patched := cloneExtensionBytes(extensions)
+	for _, entry := range patch.Extensions {
+		replaced := false
+		for at := range patched {
+			if patched[at].Type == entry.Type {
+				patched[at] = messagegroup.ExtensionBytes{Type: entry.Type, Data: append([]byte(nil), entry.Data...)}
+				replaced = true
+			}
+		}
+		if !replaced {
+			patched = append(patched, messagegroup.ExtensionBytes{Type: entry.Type, Data: append([]byte(nil), entry.Data...)})
+		}
+	}
+	return identity, patched
+}
+
+// addDoorLocked is the Add door's identity half (identity phase 1's Task 13; Property 5), and it runs
+// BEFORE ANYTHING IS STAGED, at [Group.AddMember] and [Group.AddMemberAndPublish] alike:
+//
+//   - A JOIN CODE BOUND TO NO IDENTITY IS REFUSED ([ErrKeyPackageUnbound]): its leaf carries no
+//     urmessage_identity that verifies, as R6e reads one, or it is a profile-1 leaf outside a link
+//     group, the one place one may stand.
+//   - A JOIN CODE WHOSE LIST THIS DEVICE KNOWS IS OLDER IS REFUSED ([ErrKeyPackageListStale]): its
+//     list is older than this device's head for its identity, and that head no longer names its key.
+//     It is a device its own person has removed, or a code made before that.
+//
+// THE SECOND READS THIS DEVICE'S HEADS, WHICH VALIDITY NEVER DOES: the door is this device's own
+// knowledge, used to stop it adding what it knows to be stale. Every receiver judges the commit by
+// the trees alone. A list that forks this device's head is not the door's: R8-EQ refuses it in any
+// tree where the two meet.
+func (self *Group) addDoorLocked(keyPackage []byte) error {
+	decoded := &mls.KeyPackage{}
+	if err := syntax.Unmarshal(keyPackage, decoded); err != nil {
+		return fmt.Errorf("%w: it does not decode: %w", ErrKeyPackageInvalid, err)
+	}
+	leaf := &decoded.LeafNode
+	one := bindingOf(0, leaf.Credential.Identity, leaf.SignatureKey, seamExtensionsOf(leaf.Extensions))
+	if one.unbound != nil {
+		return fmt.Errorf("%w: %w", ErrKeyPackageUnbound, one.unbound)
+	}
+	if one.profileOne() {
+		extensions, err := self.contextExtensionsLocked()
+		if err != nil {
+			return err
+		}
+		if purpose, err := groupPurposeIn(extensions); err != nil || purpose == nil || purpose.Purpose != groupPurposeLink {
+			return fmt.Errorf("%w: it carries no urmessage_identity, and a profile-1 leaf stands only in a link group", ErrKeyPackageUnbound)
+		}
+		return nil
+	}
+	// THE LIST, AGAINST THIS DEVICE'S HEAD FOR ITS IDENTITY
+	head := self.device.headOf(one.verified.Root)
+	if head == nil {
+		return nil
+	}
+	order, err := messagegroup.VerifyDeviceList(head, one.verified.Identity)
+	if err != nil || order != messagegroup.ListOlder {
+		return nil
+	}
+	if headNames(head, leaf.SignatureKey) {
+		return nil
+	}
+	return fmt.Errorf("%w: its list is version %+v, and this device holds version %+v of that identity's, which does not name its key",
+		ErrKeyPackageListStale, one.verified.Version, head.Version())
+}
+
+// joinCodeUnbound gives R6e's refusal of the leaf an add brings in the Add door's own name,
+// [ErrKeyPackageUnbound], beside the rule's: the role model meets a join code before the door does
+// ([Group.AddMemberAndPublish]), and a person is told what to do about the join code either way.
+// Every other refusal is handed back as it came.
+func joinCodeUnbound(err error) error {
+	if errors.Is(err, ErrCommitIdentityUnbound) {
+		return fmt.Errorf("%w: %w", ErrKeyPackageUnbound, err)
+	}
+	return err
+}
+
+// headNames answers whether a head names a device key: whether the binding check, over the head as a
+// leaf of that key would carry it, finds the key among the devices the head names after its amendments.
+func headNames(head *messagegroup.UrmessageIdentity, key []byte) bool {
+	body, err := head.Encode()
+	if err != nil {
+		return false
+	}
+	_, err = messagegroup.VerifyLeafBinding(head.IskCert.IdentityKey, key, []messagegroup.ExtensionBytes{body})
+	return err == nil
+}
+
+// commitOwnLeaf makes a commit with a path that patches this device's own leaf, removes removeLeaves
+// in the same commit, and publishes the epoch it opens (identity phase 1's Task 13): Spec A A-36's
+// CommitOwnLeaf, behind the sending side's rules like every verb's commit.
+//
+// THE RULES RUN OVER THE WOULD-BE TREE, WITH THE COMMITTER'S POST-COMMIT LEAF, THE PATCH INCLUDED
+// (Property 8; REDTEAM H1): [Group.outgoingAuthorizationLocked] builds that leaf from the patch, so a
+// patch every receiver would refuse -- a list of another root, a list that takes a device off the tree's
+// newest -- is refused here with the receivers' own sentence, counted in [Stats.CommitRefusedOwn], and
+// nothing is built or sent. Once the server had taken it, it would halt the group for every member.
+//
+// NO VERB OF THIS BUILD CALLS IT YET. It is the commit Tasks 24 and 25 bring a new list into a
+// conversation with, the leaves that list no longer names removed in the same commit (R8-CUR), and
+// Task 42's move in place; until then it is how the sending side's post-commit leaf is driven. It
+// carries no policy, so the leaves it removes are this identity's own: a removal that left a policy
+// entry naming an identity with no leaf is refused here by R0c, as by every receiver.
+func (self *Group) commitOwnLeaf(ctx context.Context, patch messagegroup.OwnLeafPatch, removeLeaves []uint32) error {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	if err := self.committableLocked(); err != nil {
+		return err
+	}
+	if _, err := self.authorizeOutgoingLocked(&outgoingCommit{removeLeaves: removeLeaves, ownLeafPatch: &patch}); err != nil {
+		return err
+	}
+	if err := self.rebindLocked(); err != nil {
+		return err
+	}
+	commit, _, _, err := self.handle.CommitOwnLeaf(patch, removeLeaves, nil)
+	if err != nil {
+		return fmt.Errorf("urmessage: CommitOwnLeaf: %w", err)
+	}
+	return self.publishCommitLocked(ctx, commit, nil)
 }
 
 // seamExtensionsOf is an mls extension list as the seam spells it, every body cloned: the inverse

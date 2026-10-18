@@ -1,6 +1,7 @@
 package urmessage
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"path/filepath"
@@ -60,6 +61,20 @@ type roleWorld struct {
 // every live group has (item 242: "every non-founder in every live group is UNNAMED").
 func newRoleWorld(t *testing.T, names ...string) *roleWorld {
 	t.Helper()
+	return newRoleWorldWith(t, roleWorldOptions{}, names...)
+}
+
+// roleWorldOptions are what a world of the identity layer's cases asks of its founding (identity phase
+// 1's Task 13): a device prepared before it founds or makes its key package -- a further device of
+// another member's identity -- and a founding context, 0xF006 for a system group.
+type roleWorldOptions struct {
+	prepare func(name string, dev *crossProcessDevice)
+	context func(founder *crossProcessDevice) []messagegroup.ExtensionBytes
+}
+
+// newRoleWorldWith is [newRoleWorld] with its options.
+func newRoleWorldWith(t *testing.T, options roleWorldOptions, names ...string) *roleWorld {
+	t.Helper()
 	world := &roleWorld{
 		t:            t,
 		root:         t.TempDir(),
@@ -77,7 +92,14 @@ func newRoleWorld(t *testing.T, names ...string) *roleWorld {
 	world.pqSecret = pqSecret
 
 	founder := world.device(names[0])
-	founderHandle := founder.createGroup(t, world.groupId)
+	if options.prepare != nil {
+		options.prepare(names[0], founder)
+	}
+	var context []messagegroup.ExtensionBytes
+	if options.context != nil {
+		context = options.context(founder)
+	}
+	founderHandle := founder.createGroupWith(t, world.groupId, context)
 	t.Cleanup(func() { founderHandle.Close() })
 	mlsSecret, err := founderHandle.Export(storageExporterLabel, nil, storageExporterBytes)
 	if err != nil {
@@ -89,6 +111,9 @@ func newRoleWorld(t *testing.T, names ...string) *roleWorld {
 	keyPackages := [][]byte{}
 	for _, name := range names[1:] {
 		joiner := world.device(name)
+		if options.prepare != nil {
+			options.prepare(name, joiner)
+		}
 		keyPackage, err := joiner.keyPackage()
 		if err != nil {
 			t.Fatalf("%s's key package: %v", name, err)
@@ -516,6 +541,11 @@ func TestAnOwnersPromotionIsAllowedAndOnlyTheAdminMayThenAdd(t *testing.T) {
 // a fresh signer under another member's identity, which nothing in mls refuses (item 242's M7).
 // It is also, with the claimed identity's own device committing it, what a second device of that
 // identity looks like in this build.
+//
+// AND IT IS BOUND, WHERE THE CLAIMED IDENTITY IS ONE THE TESTS MADE (identity phase 1's Task 13):
+// its leaf carries that identity's next list, naming every device the identity's list names and this
+// one, so that R6e and R8-CUR find it a device of that identity and every row measures the rule it
+// was written for. A claim of an identity no test made stays unbound.
 func claimingKeyPackage(t *testing.T, root string, claimed []byte) []byte {
 	t.Helper()
 	store, err := OpenDurableStateStore(filepath.Join(root, "state"))
@@ -527,13 +557,20 @@ func claimingKeyPackage(t *testing.T, root string, claimed []byte) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, _, leafKeys, _, err := deviceIdentity(crypto, store, rand.Reader)
+	signer, signerPub, leafKeys, _, err := deviceIdentity(crypto, store, rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	engine, err := messagegroup.NewConnectMlsEngine(crypto, store, signer, mls.BasicCredential(claimed), leafKeys)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if list, bound := testSiblingList(t, claimed, signer, signerPub); bound {
+		keyPackage, err := engine.NewBoundKeyPackage([]messagegroup.ExtensionBytes{list})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return keyPackage
 	}
 	keyPackage, err := engine.NewKeyPackage()
 	if err != nil {
@@ -908,8 +945,11 @@ func keylessKeyPackage(t *testing.T, dev *crossProcessDevice) []byte {
 		Proposals:   []mls.ProposalType{},
 		Credentials: []mls.CredentialType{mls.CredentialTypeBasic},
 	}
+	// IT IS BOUND (identity phase 1's Task 13): it carries the device's own 0xF005, so that R6e, which
+	// runs before R6d, finds the leaf bound and the refusal is R6d's alone
 	keyPackage, initPrivate, encryptPrivate, err := mls.NewKeyPackageWithSigner(dev.crypto, dev.crypto.Suite(),
-		dev.signer, mls.BasicCredential(dev.identityPub), capabilities, nil)
+		dev.signer, mls.BasicCredential(dev.identityPub), capabilities,
+		[]mls.Extension{{ExtensionType: mls.ExtensionTypeUrmessageIdentity, ExtensionData: bytes.Clone(dev.extension.Data)}})
 	if err != nil {
 		t.Fatalf("a key package with no leaf keys: %v", err)
 	}

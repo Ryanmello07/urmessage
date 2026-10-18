@@ -307,6 +307,16 @@ type GroupHandle interface {
 	// site is two signed commits for one removal.
 	CommitRemoveWithExtensions(leaves []uint32, extensions []ExtensionBytes) (commit []byte, welcome []byte, ratchetTree []byte, err error)
 
+	// CommitOwnLeaf is the fourth method Spec A A-36 designs for the identity layer, transcribed as
+	// section 6 has it (identity phase 1's Task 13): a commit with a path that removes removeLeaves
+	// and patches the committer's own leaf, as mls's CommitOptions.OwnLeafPatch does, before that
+	// leaf is signed and the tree is hashed. A nil contextExtensions changes no extension of the
+	// context; any other is the full post-commit list, as CommitContextExtensions takes it, with the
+	// Removes first and the GroupContextExtensions last, as in CommitRemoveWithExtensions. It brings
+	// a new list into a tree, with the leaves that list no longer names removed in the same commit
+	// (R8-CUR), and it makes the move in place (R6s, Task 42).
+	CommitOwnLeaf(patch OwnLeafPatch, removeLeaves []uint32, contextExtensions []ExtensionBytes) (commit []byte, welcome []byte, ratchetTree []byte, err error)
+
 	// PendingEpoch and PendingExport are the two reads that let a committer SUBMIT BEFORE IT
 	// MERGES, added 2026-09-22 for ledger item 242's R2. Commit's own contract says the staged
 	// epoch is staged and not merged because the delivery service accepts at most one commit per
@@ -422,10 +432,27 @@ const (
 // skips -- the first symptom is MemberAt refusing that ordinal one commit later, and the second
 // is that member reading nothing. The authorizer refuses an Add whose leaf reads false; nothing
 // below it does. A bool and not the body, because no caller of that decision wraps anything.
+//
+// SignatureKey and Extensions are Spec A A-36 section 6's two fields (identity phase 1's Task 13):
+// the staged tree's leaf's signature key and its extensions, so that the receiving side runs the
+// identity layer's binding rules before ApplyCommit. Both are copies, read off the staged tree by
+// (*mls.StagedCommit).LeafNodeAfter, so a caller that keeps them keeps nothing of the epoch
+// ApplyCommit installs.
 type ProcessedMember struct {
-	Leaf        uint32
-	Identity    []byte
-	HasLeafKeys bool
+	Leaf         uint32
+	Identity     []byte
+	HasLeafKeys  bool
+	SignatureKey []byte
+	Extensions   []ExtensionBytes
+}
+
+// OwnLeafPatch is a committer's change to its own leaf, made in the path leaf of the commit
+// CommitOwnLeaf builds (Spec A A-36 section 6): a new credential identity when Credential is not
+// nil, and extension bodies set by type -- an entry replaces the leaf's entry of its type, and a
+// type the leaf does not carry is added.
+type OwnLeafPatch struct {
+	Credential []byte
+	Extensions []ExtensionBytes
 }
 
 // ExtensionBytes is one group-context extension as octets: the RFC 9420 extension type and its
@@ -1500,6 +1527,34 @@ func (self *connectMlsHandle) CommitRemoveWithExtensions(leaves []uint32,
 	return result.Commit, result.Welcome, result.RatchetTree, nil
 }
 
+// CommitOwnLeaf builds a commit with a path that removes removeLeaves and makes patch in the
+// committer's own path leaf, and stages it: the by-value vector is every Remove, then, for a
+// contextExtensions that is not nil, the one GroupContextExtensions, as the combining arm builds
+// it. The path is forced, since a patch is made in the path leaf and mls refuses one on a commit
+// with none. Every body of the patch is cloned on the way in.
+func (self *connectMlsHandle) CommitOwnLeaf(patch OwnLeafPatch, removeLeaves []uint32,
+	contextExtensions []ExtensionBytes) ([]byte, []byte, []byte, error) {
+
+	byValue := removeProposals(removeLeaves)
+	if contextExtensions != nil {
+		if len(contextExtensions) == 0 {
+			return nil, nil, nil, fmt.Errorf("%w: CommitOwnLeaf takes nil for an unchanged context and the full list otherwise",
+				ErrEngineCommitContextExtensionsEmpty)
+		}
+		byValue = removeWithExtensionsProposals(removeLeaves, contextExtensions)
+	}
+	ownLeafPatch := &mls.OwnLeafPatch{Extensions: mlsExtensionsOf(patch.Extensions)}
+	if patch.Credential != nil {
+		credential := mls.BasicCredential(patch.Credential)
+		ownLeafPatch.Credential = &credential
+	}
+	result, err := self.group.CreateCommit([][]byte{}, byValue, &mls.CommitOptions{Force: true, OwnLeafPatch: ownLeafPatch})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return result.Commit, result.Welcome, result.RatchetTree, nil
+}
+
 // removeWithExtensionsProposals is the combining arm's by-value vector: every Remove, then the
 // one GroupContextExtensions.
 //
@@ -1729,11 +1784,18 @@ func processedMembersOf(staged *mls.StagedCommit) []ProcessedMember {
 		if !held {
 			continue
 		}
-		out = append(out, ProcessedMember{
+		member := ProcessedMember{
 			Leaf:        uint32(leaf),
 			Identity:    identity,
 			HasLeafKeys: staged.LeafHasKeysAfter(leaf),
-		})
+		}
+		// the binding rules' two fields, off the same staged tree, as copies (identity phase 1's
+		// Task 13; Spec A A-36 section 6)
+		if node := staged.LeafNodeAfter(leaf); node != nil {
+			member.SignatureKey = append([]byte(nil), node.SignatureKey...)
+			member.Extensions = extensionBytesOf(node.Extensions)
+		}
+		out = append(out, member)
 	}
 	return out
 }
