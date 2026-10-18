@@ -10,6 +10,55 @@ import (
 	"testing"
 )
 
+// THE LOOPBACK HARNESS HAS NO IDENTITY DOOR OF ITS OWN (LRI R76 item 8; identity phase 1's Task 14).
+// Until the shipping library exported the identity, the harness carried
+// urnet_message_loopback_device_identify, so that the C consumer's devices could have one. The
+// identity exports ship now, and the C consumer makes its devices' identities through them, as a C
+// caller does: the door is gone from the harness and from the C consumer, and the C consumer calls
+// urnet_message_device_create_identity and urnet_message_device_confirm_words.
+//
+// THE CONTROL: the reader finds the name where it is, in this file.
+func TestTheLoopbackHarnessHasNoIdentityDoorOfItsOwn(t *testing.T) {
+	cgoDirectory := filepath.Dir(testingGenDir(t))
+	const door = "urnet_message_loopback_" + "device_identify"
+	self, err := os.ReadFile(filepath.Join(cgoDirectory, "gen", "loopback_module_test.go"))
+	if err != nil || !strings.Contains(string(self), "urnet_message_loopback_device_identify") {
+		t.Fatalf("CONTROL FAILED: the reader does not find the door's name in this file (%v)", err)
+	}
+	read := 0
+	for _, pattern := range []string{"ctest/*.c", "ctest/*.sh", "ctest/*.json", "ctest/testdata/*.go", "*.go", "include/*.h", "include/*.def"} {
+		matches, err := filepath.Glob(filepath.Join(cgoDirectory, filepath.FromSlash(pattern)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range matches {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			read += 1
+			if strings.Contains(string(contents), door) {
+				t.Errorf("%s names %s, the loopback harness's identity door, which the identity exports replace", path, door)
+			}
+		}
+	}
+	if read < 5 {
+		t.Fatalf("the reader read %d files, so it read almost nothing", read)
+	}
+	consumer, err := os.ReadFile(filepath.Join(cgoDirectory, "ctest", "message_abi_test.c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, export := range []string{"urnet_message_device_create_identity(", "urnet_message_device_confirm_words("} {
+		if !strings.Contains(string(consumer), export) {
+			t.Errorf("the C consumer does not call %s: its devices' identities are not made through the shipping exports", export)
+		}
+	}
+}
+
 // Release preparation runs tidy and get with the shipping module. Custom build
 // tags are enabled by tidy, so the fixture's testdata boundary must exclude its
 // server dependencies even on a host with no message-server checkout or network.

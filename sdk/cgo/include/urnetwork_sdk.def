@@ -829,11 +829,15 @@ EXPORTS
 	urnet_message_client_platform_url
 	urnet_message_context_cancel
 	urnet_message_context_new
+	urnet_message_device_check_word
 	urnet_message_device_close
+	urnet_message_device_confirm_words
 	urnet_message_device_connect
 	urnet_message_device_create_group
+	urnet_message_device_create_identity
 	urnet_message_device_forget_group
 	urnet_message_device_groups
+	urnet_message_device_identity
 	urnet_message_device_join
 	urnet_message_device_key_package
 	urnet_message_device_new

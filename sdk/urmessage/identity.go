@@ -149,7 +149,7 @@ func (self *Device) ConfirmWords(ctx context.Context, phraseTyped string) error 
 	// THE WORDS SHOWN, COMPARED POSITION BY POSITION: the parser cannot name a list word whose checksum
 	// fails, and this device, which showed the words, can
 	if differing := offered.WordsDiffering(phraseTyped); len(differing) != 0 {
-		return fmt.Errorf("%w: the words at positions %v", ErrWordsDoNotMatch, differing)
+		return &WrongWords{Positions: differing}
 	}
 	parsed, _, err := messagegroup.ParseRecoveryPhrase(phraseTyped)
 	if err != nil {
@@ -177,6 +177,23 @@ func (self *Device) ConfirmWords(ctx context.Context, phraseTyped string) error 
 
 	// THE SELF GROUP
 	return self.foundSelfGroupLocked(ctx, nonce, nonceEpoch)
+}
+
+// WrongWords is ConfirmWords' answer when the words typed back are not the words shown (Spec A A-36
+// section 7.2: "a wrong word is named by its position and nothing is corrected"): the positions, from
+// 1, of the words that differ, a missing word and an extra one among them, as data a screen marks
+// its fields by. It carries no word. It is [ErrWordsDoNotMatch], and says the positions.
+type WrongWords struct {
+	Positions []int
+}
+
+func (self *WrongWords) Error() string {
+	return fmt.Sprintf("%s: the words at positions %v", ErrWordsDoNotMatch.Error(), self.Positions)
+}
+
+// Unwrap answers [ErrWordsDoNotMatch], so that errors.Is reads a WrongWords as that refusal.
+func (self *WrongWords) Unwrap() error {
+	return ErrWordsDoNotMatch
 }
 
 // makeIdentity is the identity's making, from the phrase typed back, and everything of it but the self

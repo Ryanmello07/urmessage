@@ -197,6 +197,27 @@ extern "C" {
 #define URNET_MESSAGE_FORGET_UNFINISHED 2
 #define URNET_MESSAGE_FORGET_FAILED     3
 
+/* urnet_message_device_confirm_words answers one of these KINDS:
+ *
+ * OK: the identity is made -- the words matched, the identity's records are written and its self
+ * group is founded -- and the words have left this device's memory.
+ * WRONG: a word typed back is not the word shown. its position, from 1, is among the positions
+ * handed back; a missing word, an extra one, and one not on the list are each named the same way.
+ * nothing is corrected and nothing is made: type the named words again and confirm again.
+ * NOT_OFFERED: no words were offered on this device: call urnet_message_device_create_identity first.
+ * IDENTITY_EXISTS: this device already has an identity.
+ * FAILED: everything else -- a device that is not connected, the store, the self group's founding.
+ * out_error says what. a FAILED after the identity's records were written leaves the identity
+ * standing, and its self group is founded at the next urnet_message_device_restore; a further
+ * confirm answers IDENTITY_EXISTS. FAILED with out_error left NULL is an unknown self or ctx handle.
+ *
+ * a go test holds these equal, by name and value, to the library's own constants. */
+#define URNET_MESSAGE_WORDS_OK              0
+#define URNET_MESSAGE_WORDS_WRONG           1
+#define URNET_MESSAGE_WORDS_NOT_OFFERED     2
+#define URNET_MESSAGE_WORDS_IDENTITY_EXISTS 3
+#define URNET_MESSAGE_WORDS_FAILED          4
+
 /* ----- callback types ----- */
 
 /* one Hello that did not connect. fires on the thread inside urnet_message_device_connect --
@@ -342,8 +363,48 @@ uint64_t urnet_message_device_new(uint64_t transport, uint64_t reserver, uint64_
  * sixty seconds. showing a user "could not connect" here tells them something false. */
 bool urnet_message_device_connect(uint64_t self, uint64_t ctx, char** out_error);
 bool urnet_message_device_close(uint64_t self, char** out_error);
-/* buffer-out. the key package another device's urnet_message_group_add_member takes. */
+/* buffer-out. the key package another device's urnet_message_group_add_member takes. a device
+ * with no identity has none: out_error says to make the identity first. */
 bool urnet_message_device_key_package(uint64_t self, uint8_t* out, int32_t* inout_len, char** out_error);
+
+/* ----- the identity (identity phase 1; Spec A section 9.3a) ----- */
+
+/* this device's identity as json:
+ *   {"has_identity":bool,"account_id":"<36>","device_id":"<19>","phrase_device":bool,"devices":[...]}
+ * has_identity is false, and every other value empty, until urnet_message_device_confirm_words has
+ * made the identity: it is how a first run is told. account_id is "Your ID", 36 characters, the
+ * same on every device of the identity. device_id is this device's own, 19 characters. phrase_device
+ * is whether this device holds the recovery phrase's key. devices is the newest list's devices, each
+ *   {"device_id":"<19>","phrase_device":bool,"this_device":bool}
+ * NO PHRASE SECRET IS EVER IN IT: not the words, nor anything made from them but the public IDs.
+ * the notices, the alarm, the number of phrase changes and the removed state join it in the builds
+ * that make them (Spec A section 9.3a). NULL with out_error set when it cannot be read. free with
+ * urnet_free_string.
+ *
+ * THE KEY LISTS ABOVE ARE THE JSON'S OWN, IN THEIR ORDER, and a go test in this directory holds
+ * them so. */
+char* urnet_message_device_identity(uint64_t self, char** out_error);
+/* buffer-out. THE 25 WORDS OF A NEW RECOVERY PHRASE, AND NOTHING IS MADE YET: they are UTF-8,
+ * lower case, separated by single spaces, and carry no terminating NUL. asked again before the
+ * identity is made it answers the SAME words (Back); a restart offers new ones, since the words are
+ * never stored. THEY ARE THE ACCOUNT: show them once, keep them out of logs, the clipboard and screen
+ * capture, and overwrite the buffer when they are off the screen -- this library erases its own copy
+ * and cannot erase yours. no other export ever answers them. false with out_error set once the
+ * device has an identity. */
+bool urnet_message_device_create_identity(uint64_t self, uint8_t* out, int32_t* inout_len, char** out_error);
+/* the 25 words typed back, as counted UTF-8 octets, read with the list's own fold (case, spacing).
+ * BLOCKS: when they match, the identity is made and its self group founded under the device's
+ * connection, so connect first. answers a URNET_MESSAGE_WORDS_* KIND. on WRONG the positions, from
+ * 1, of every word that is not the word shown are handed back by the buffer-out pattern over int32s:
+ * *inout_count is ALWAYS set to how many there are, and they are copied when out_positions is not
+ * NULL and the capacity passed in was enough -- 25 always is. overwrite the typed buffer once this
+ * returns. */
+int32_t urnet_message_device_confirm_words(uint64_t self, uint64_t ctx, const uint8_t* typed, int32_t typed_len, int32_t* out_positions, int32_t* inout_count, char** out_error);
+/* whether one typed word is a word of the recovery phrase's list, read with the list's own fold, so
+ * that a screen can mark each word as it is typed. it takes no device and makes nothing; two words,
+ * or none, answer false. */
+bool urnet_message_device_check_word(const uint8_t* word, int32_t word_len);
+
 /* a group list handle, or 0 when there are none. */
 uint64_t urnet_message_device_groups(uint64_t self);
 /* rebuild every group a DURABLE state store holds. a restored group will not seal until
@@ -669,13 +730,17 @@ char* urnet_message_list_reaction_info(uint64_t self, int32_t index, int32_t rea
 
 /* the roster's list handle, from urnet_message_group_members: the message list's shape over
  * members. one member as json:
- *   {"leaf_index":u32,"sender_handle":"<32 hex>","identity_pub":"<hex>","role":"owner","mine":bool}
+ *   {"leaf_index":u32,"sender_handle":"<32 hex>","identity_pub":"<hex>","role":"owner","mine":bool,"device_id":"<19>","identity":"<64 hex>"}
  * leaf_index is the member's leaf in the ratchet tree. sender_handle is the same value a message
  * info carries, so a line joins to its roster row on it. identity_pub is the member's identity
  * public key, lower case hex, and IS THE VALUE THE TWO VERBS TAKE as identity_pub_hex; one
  * identity with several devices appears once per leaf with the same role on each. role is one of
  * "owner", "admin", "member", "observer", and a member the policy does not name is "member". mine
- * is true on this device's own leaf, and on exactly one row.
+ * is true on this device's own leaf, and on exactly one row. device_id is the leaf's device ID,
+ * 19 characters, the ID a person reads for a device. identity is the root of the identity the leaf
+ * binds to, lower case hex: rows with one identity are one person's devices, and a roster is told
+ * direct or a group by how many identities it holds, not leaves. both are empty for a leaf no
+ * identity binds.
  *
  * THE KEY LIST ABOVE IS THE JSON'S OWN, IN ITS ORDER, and a go test in this directory holds it so.
  * _info answers NULL for an index out of range; free it with urnet_free_string. */

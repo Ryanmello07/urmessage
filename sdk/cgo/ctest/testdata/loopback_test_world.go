@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"strings"
 	"sync"
 	"time"
 
@@ -317,39 +316,6 @@ func urnet_message_loopback_gap_list() C.uint64_t {
 			SenderRoleAtSend: "",
 		},
 	}))
-}
-
-// urnet_message_loopback_device_identify gives a connected device the identity a person sets up: the
-// words offered, typed back, and the identity made under the device's connection, its self group
-// founded there (identity phase 1's Task 12). The words never leave Go. From that task every group
-// this build founds requires an identity of each member, and a device with none publishes no key
-// package; the shipping library's identity exports come with the slice's C exports (the plan's Task
-// 14), and until they do this is how the C consumer's devices get one. It is in this file, and so in
-// no shipping library.
-//
-//export urnet_message_loopback_device_identify
-func urnet_message_loopback_device_identify(device C.uint64_t, ctx C.uint64_t, outError **C.char) C.bool {
-	defer cgoGuard("urnet_message_loopback_device_identify")
-	device_, ok := resolveHandle[*urmessage.Device](uint64(device), "urnet_message_loopback_device_identify")
-	if !ok || device_ == nil {
-		return C.bool(false)
-	}
-	ctx_, ok := messageCtx(ctx, "urnet_message_loopback_device_identify")
-	if !ok {
-		return C.bool(false)
-	}
-	words, err := device_.CreateIdentity()
-	if err != nil {
-		setErrorOut(outError, err)
-		return C.bool(false)
-	}
-	typed := strings.Join(words, " ")
-	clear(words)
-	if err := device_.ConfirmWords(ctx_, typed); err != nil {
-		setErrorOut(outError, err)
-		return C.bool(false)
-	}
-	return C.bool(true)
 }
 
 //export urnet_message_loopback_world_close

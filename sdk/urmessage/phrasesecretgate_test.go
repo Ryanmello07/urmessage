@@ -83,12 +83,11 @@ type sdkPhraseSecretSink struct {
 }
 
 var sdkPhraseSecretSinks = map[string]sdkPhraseSecretSink{
-	"ConfirmWords|call fmt.Errorf":                       {carries: []string{"differing"}, occurs: []string{"differing"}, why: "THE POSITIONS of the words that differ, from 1, in the refusal: numbers and never a word (Spec A A-36 section 7.2). The walk follows them because WordsDiffering was handed the typed words"},
+	"ConfirmWords|literal WrongWords.Positions":          {carries: []string{"differing"}, occurs: []string{"differing"}, why: "THE POSITIONS of the words that differ, from 1, in the refusal, as data a screen marks its fields by (identity phase 1's Task 14): numbers and never a word (Spec A A-36 section 7.2). The walk follows them because WordsDiffering was handed the typed words"},
 	"ConfirmWords|call messagegroup.ParseRecoveryPhrase": {carries: []string{"phraseTyped"}, occurs: []string{"phraseTyped"}, why: "the typed words read into a phrase"},
 	"ConfirmWords|call offered.WordsDiffering":           {carries: []string{"phraseTyped"}, occurs: []string{"phraseTyped"}, why: "the typed words compared, position by position, with the words shown"},
 	"ConfirmWords|call parsed.Equal":                     {carries: []string{"offered"}, occurs: []string{"offered"}, why: "the parsed phrase compared with the offered one, in constant time"},
 	"ConfirmWords|call self.makeIdentity":                {carries: []string{"parsed"}, occurs: []string{"parsed"}, why: "the parsed phrase into the making, which hands it to the ceremony and keeps it nowhere"},
-	"ConfirmWords|return":                                {carries: []string{"differing"}, occurs: []string{"fmt.Errorf(...)"}, why: "the refusal naming the positions"},
 	"CreateIdentity|assign self.offered":                 {carries: []string{"phrase"}, occurs: []string{"phrase"}, why: "THE OFFERED PHRASE, HELD IN A FIELD until it is typed back or the device closes: the one phrase secret this package keeps past a call, never stored, and erased at ConfirmWords and at Close (TestTheWordsLeaveTheDeviceOnceTheIdentityStandsAndAtClose)"},
 	"CreateIdentity|return":                              {carries: []string{"self.offered.Words"}, occurs: []string{"self.offered.Words(...)"}, why: "THE WORDS, to the screen that shows them; the caller clears the slice once they are off the screen"},
 	"PutPhraseKey|call binary.BigEndian.PutUint32":       {carries: []string{"record"}, occurs: []string{"record.KeyNumber"}, why: "the key number into its part: a number"},

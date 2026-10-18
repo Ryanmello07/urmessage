@@ -717,6 +717,221 @@ func urnet_message_device_key_package(self C.uint64_t, out *C.uint8_t, inoutLen 
 	return copyOut(out, inoutLen, keyPackage)
 }
 
+// ── the identity (identity phase 1's Task 14; Spec A section 9.3a) ─────────────────────────
+//
+// FOUR EXPORTS, AND THE WORDS LEAVE BY ONE OF THEM (Property 2). urnet_message_device_create_identity
+// answers the 25 words, straight into the caller's buffer: no joined copy of them is made in Go's
+// memory, which this library cannot erase, and the slice that ordered them is cleared. No other
+// export answers them, or anything made from them but the public IDs, and no out_error names one:
+// a wrong word is named by its position. urnet_message_device_confirm_words takes them back,
+// urnet_message_device_check_word marks one word as it is typed, and urnet_message_device_identity
+// answers what the identity is.
+//
+// NO EXPORT ANSWERS A SYSTEM GROUP (Property 1): urnet_message_device_groups and _restore answer
+// urmessage's Groups and Restore, which answer conversations only, and the self group, a system
+// group, is held and answered by nothing.
+
+// The kinds urnet_message_device_confirm_words answers. THE HEADER'S URNET_MESSAGE_WORDS_* DEFINES
+// ARE THESE, by name and by value, and TestTheHeaderDefinesExactlyTheWordsKinds holds them equal.
+const (
+	messageWordsOk             int32 = 0
+	messageWordsWrong          int32 = 1
+	messageWordsNotOffered     int32 = 2
+	messageWordsIdentityExists int32 = 3
+	messageWordsFailed         int32 = 4
+)
+
+// deviceIdentityInfo is this device's identity as json: urmessage.Identity, with has_identity
+// telling a device that has none. THE FIELD SET IS urmessage.Identity's, and the header documents
+// its keys, held by TestTheHeaderDocumentsExactlyTheIdentityJsonKeys.
+type deviceIdentityInfo struct {
+	HasIdentity  bool                   `json:"has_identity"`
+	AccountId    string                 `json:"account_id"`
+	DeviceId     string                 `json:"device_id"`
+	PhraseDevice bool                   `json:"phrase_device"`
+	Devices      []deviceIdentityDevice `json:"devices"`
+}
+
+// deviceIdentityDevice is one device of the newest list, as json.
+type deviceIdentityDevice struct {
+	DeviceId     string `json:"device_id"`
+	PhraseDevice bool   `json:"phrase_device"`
+	ThisDevice   bool   `json:"this_device"`
+}
+
+// deviceIdentityInfoOf is the json of one identity.
+func deviceIdentityInfoOf(identity *urmessage.Identity) *deviceIdentityInfo {
+	info := &deviceIdentityInfo{
+		HasIdentity:  true,
+		AccountId:    identity.AccountId,
+		DeviceId:     identity.DeviceId,
+		PhraseDevice: identity.PhraseDevice,
+		Devices:      []deviceIdentityDevice{},
+	}
+	for _, device := range identity.Devices {
+		info.Devices = append(info.Devices, deviceIdentityDevice{
+			DeviceId:     device.DeviceId,
+			PhraseDevice: device.PhraseDevice,
+			ThisDevice:   device.ThisDevice,
+		})
+	}
+	return info
+}
+
+// urnet_message_device_identity answers this device's identity as json, and a json with has_identity
+// false before it has one, which is how a first run is told. NULL with out_error set when it cannot
+// be read; NULL with no error for an unknown handle. Free with urnet_free_string.
+//
+//export urnet_message_device_identity
+func urnet_message_device_identity(self C.uint64_t, outError **C.char) *C.char {
+	defer cgoGuard("urnet_message_device_identity")
+	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_identity")
+	if !ok || self_ == nil {
+		return nil
+	}
+	identity, err := self_.Identity()
+	if errors.Is(err, urmessage.ErrNoIdentity) {
+		return cJson(&deviceIdentityInfo{Devices: []deviceIdentityDevice{}}, "urnet_message_device_identity")
+	}
+	if err != nil {
+		setErrorOut(outError, err)
+		return nil
+	}
+	return cJson(deviceIdentityInfoOf(identity), "urnet_message_device_identity")
+}
+
+// urnet_message_device_create_identity answers the 25 words of a new recovery phrase by the
+// buffer-out pattern, separated by single spaces: the same words asked again before the identity is
+// made, and a refusal once it is (urmessage's CreateIdentity). Nothing is made.
+//
+//export urnet_message_device_create_identity
+func urnet_message_device_create_identity(self C.uint64_t, out *C.uint8_t, inoutLen *C.int32_t, outError **C.char) C.bool {
+	defer cgoGuard("urnet_message_device_create_identity")
+	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_create_identity")
+	if !ok || self_ == nil {
+		return C.bool(false)
+	}
+	words, err := self_.CreateIdentity()
+	if err != nil {
+		if inoutLen != nil {
+			*inoutLen = 0
+		}
+		setErrorOut(outError, err)
+		return C.bool(false)
+	}
+	defer clear(words)
+	return copyWordsOut(out, inoutLen, words)
+}
+
+// copyWordsOut is copyOut over a phrase's words, joined by single spaces and written straight into
+// the caller's buffer, so that no joined copy of the phrase is made in Go's memory, whose collector
+// this library cannot erase. *inout_len is always set to the needed size.
+func copyWordsOut(out *C.uint8_t, inoutLen *C.int32_t, words []string) C.bool {
+	if inoutLen == nil {
+		return C.bool(false)
+	}
+	capacity := int(*inoutLen)
+	needed := 0
+	for at, word := range words {
+		if 0 < at {
+			needed += 1
+		}
+		needed += len(word)
+	}
+	*inoutLen = C.int32_t(needed)
+	if out == nil || capacity < needed {
+		return C.bool(false)
+	}
+	buffer := unsafe.Slice((*byte)(unsafe.Pointer(out)), needed)
+	at := 0
+	for index, word := range words {
+		if 0 < index {
+			buffer[at] = ' '
+			at += 1
+		}
+		at += copy(buffer[at:], word)
+	}
+	return C.bool(true)
+}
+
+// urnet_message_device_confirm_words takes the words typed back and makes the identity, BLOCKING on
+// the self group's founding (urmessage's ConfirmWords). It answers a URNET_MESSAGE_WORDS_* kind; on
+// WRONG the positions of the wrong words go back by the buffer-out pattern over int32s. The copy of
+// the typed octets this side made is cleared before it returns.
+//
+//export urnet_message_device_confirm_words
+func urnet_message_device_confirm_words(self C.uint64_t, ctx C.uint64_t, typed *C.uint8_t, typedLen C.int32_t, outPositions *C.int32_t, inoutCount *C.int32_t, outError **C.char) C.int32_t {
+	defer cgoGuard("urnet_message_device_confirm_words")
+	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_confirm_words")
+	if !ok || self_ == nil {
+		copyPositionsOut(outPositions, inoutCount, nil)
+		return C.int32_t(messageWordsFailed)
+	}
+	ctx_, ok := messageCtx(ctx, "urnet_message_device_confirm_words")
+	if !ok {
+		copyPositionsOut(outPositions, inoutCount, nil)
+		return C.int32_t(messageWordsFailed)
+	}
+	octets := goBytes(typed, typedLen)
+	defer clear(octets)
+	err := self_.ConfirmWords(ctx_, string(octets))
+	var wrong *urmessage.WrongWords
+	if errors.As(err, &wrong) {
+		copyPositionsOut(outPositions, inoutCount, wrong.Positions)
+	} else {
+		copyPositionsOut(outPositions, inoutCount, nil)
+	}
+	if err != nil {
+		setErrorOut(outError, err)
+	}
+	return C.int32_t(messageWordsKindOf(err))
+}
+
+// copyPositionsOut is copyOut over int32s: *inout_count is always set to how many positions there
+// are, and they are copied only when out is not NULL and the capacity passed in is enough.
+func copyPositionsOut(out *C.int32_t, inoutCount *C.int32_t, positions []int) {
+	if inoutCount == nil {
+		return
+	}
+	capacity := int(*inoutCount)
+	*inoutCount = C.int32_t(len(positions))
+	if out == nil || capacity < len(positions) || len(positions) == 0 {
+		return
+	}
+	slots := unsafe.Slice(out, len(positions))
+	for at, position := range positions {
+		slots[at] = C.int32_t(position)
+	}
+}
+
+// messageWordsKindOf is the projection of ConfirmWords' error onto the kinds.
+func messageWordsKindOf(err error) int32 {
+	switch {
+	case err == nil:
+		return messageWordsOk
+	case errors.Is(err, urmessage.ErrWordsDoNotMatch):
+		return messageWordsWrong
+	case errors.Is(err, urmessage.ErrNoWordsOffered):
+		return messageWordsNotOffered
+	case errors.Is(err, urmessage.ErrIdentityExists):
+		return messageWordsIdentityExists
+	}
+	return messageWordsFailed
+}
+
+// urnet_message_device_check_word answers whether one typed word is a word of the recovery phrase's
+// list, through the phrase's own fold (messagegroup.CheckRecoveryPhraseWord; LRI R68's L3-10). It
+// takes no device: the list is the library's. The copy of the typed octets is cleared before it
+// returns.
+//
+//export urnet_message_device_check_word
+func urnet_message_device_check_word(word *C.uint8_t, wordLen C.int32_t) C.bool {
+	defer cgoGuard("urnet_message_device_check_word")
+	octets := goBytes(word, wordLen)
+	defer clear(octets)
+	return C.bool(messagegroup.CheckRecoveryPhraseWord(string(octets)))
+}
+
 //export urnet_message_device_groups
 func urnet_message_device_groups(self C.uint64_t) C.uint64_t {
 	defer cgoGuard("urnet_message_device_groups")
@@ -1489,6 +1704,12 @@ type memberInfo struct {
 	Role string `json:"role"`
 	// True on this device's own leaf.
 	Mine bool `json:"mine"`
+	// The leaf's device ID, 19 characters: the ID a person reads for a device (identity phase 1's
+	// Task 14; Spec A section 9.3a). Empty for a leaf no identity binds.
+	DeviceId string `json:"device_id"`
+	// The root of the identity the leaf binds to, lower case hex: what groups one person's devices
+	// in a roster. Empty for a leaf no identity binds.
+	Identity string `json:"identity"`
 }
 
 func memberInfoOf(member urmessage.Member) *memberInfo {
@@ -1498,6 +1719,8 @@ func memberInfoOf(member urmessage.Member) *memberInfo {
 		IdentityPub:  hex.EncodeToString(member.IdentityPub),
 		Role:         member.Role,
 		Mine:         member.Mine,
+		DeviceId:     member.DeviceId,
+		Identity:     hex.EncodeToString(member.Identity),
 	}
 }
 
@@ -2182,7 +2405,8 @@ func urnet_message_member_list_count(self C.uint64_t) C.int32_t {
 }
 
 // urnet_message_member_list_info is one member as json:
-// {"leaf_index":u32,"sender_handle":"<32 hex>","identity_pub":"<hex>","role":"owner","mine":bool}.
+// {"leaf_index":u32,"sender_handle":"<32 hex>","identity_pub":"<hex>","role":"owner","mine":bool,
+// "device_id":"<19>","identity":"<64 hex>"}.
 // NULL for an index out of range. Free with urnet_free_string.
 //
 //export urnet_message_member_list_info

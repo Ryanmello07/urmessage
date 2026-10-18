@@ -85,6 +85,17 @@ type Member struct {
 
 	// Mine is whether the leaf is this device's own.
 	Mine bool
+
+	// DeviceId is the leaf's device ID, the 19 characters a person reads for a device:
+	// messagegroup.DeviceIdOf over the root of the identity the leaf binds to and the leaf's
+	// signature key (identity phase 1's Task 14; Spec A section 9.3a). Empty for a leaf no
+	// identity binds, a link group's new device.
+	DeviceId string
+
+	// Identity is the root of the identity the leaf binds to, read through its 0xF005: what groups
+	// one person's devices in a roster, whichever key of the identity's chain the credential names.
+	// A copy; empty for a leaf no identity binds.
+	Identity []byte
 }
 
 // Members is this group's membership at its current epoch, in leaf order, each with the role the
@@ -137,13 +148,21 @@ func (self *Group) membersLocked() ([]Member, error) {
 	own := self.handle.OwnLeafIndex()
 	out := make([]Member, 0, len(members))
 	for _, member := range members {
-		out = append(out, Member{
+		one := Member{
 			LeafIndex:    member.Leaf,
 			SenderHandle: member.SenderHandle,
 			IdentityPub:  member.IdentityPub,
 			Role:         member.Role,
 			Mine:         member.Leaf == own,
-		})
+		}
+		// THE IDENTITY AND THE DEVICE, read through the leaf's binding as every rule reads it
+		if bound := bindingOf(member.Leaf, member.IdentityPub, member.SignatureKey, member.Extensions); bound.verified != nil {
+			one.Identity = append([]byte(nil), bound.verified.Root...)
+			if deviceId, err := messagegroup.DeviceIdOf(bound.verified.Root, member.SignatureKey); err == nil {
+				one.DeviceId = deviceId.String()
+			}
+		}
+		out = append(out, one)
 	}
 	return out, nil
 }

@@ -41,8 +41,8 @@ connect https://github.com/urnetwork/connect.git 847460bba8aa31fb2e86ce007e9d544
 # with the reviewed TCP/IP contexts of urnetwork/connect 54b5b106. Pinned to urnetwork/sdk main as
 # the removal of messaging merged there (b8209d9d, 2026-10-09 12:25 UTC). compose.sh refuses a core
 # that still carries the messaging half. The library's .def, sdk/cgo/include/urnetwork_sdk.def, is
-# generated from the core's .def at this commit and this repository's exports: 1,231 names, the
-# core's 1,172 and the 59 messaging ones. A pin move that changes the core's C ABI regenerates it in
+# generated from the core's .def at this commit and this repository's exports: 1,235 names, the
+# core's 1,172 and the 63 messaging ones. A pin move that changes the core's C ABI regenerates it in
 # the same commit, and a consumer that vendors the .def takes the new one when it moves its own pin.
 sdk https://github.com/urnetwork/sdk.git b8209d9d7f6d858b2171cd92d4203bdadb758260
 #
