@@ -711,15 +711,17 @@ func TestAPeerMakesItsIdentityAsAPersonDoes(t *testing.T) {
 	}
 	digests := "account " + digestOf([]byte(identity.AccountId)) + ", device " + digestOf([]byte(identity.DeviceId))
 	shape := regexp.MustCompile(`^an identity, made as a person makes one: account sha256:[0-9a-f]{16}, device sha256:[0-9a-f]{16}; its words typed back and cleared$`)
+	// a failure names the line by its size and digest and never prints it: a line that carried the
+	// words would put them in the log (LRI R84 item 6; review X-LIB-7)
 	if !shape.MatchString(line) || !strings.Contains(line, digests) {
-		t.Errorf("the line is %q: want exactly %q with %q", line, shape, digests)
+		t.Errorf("the line (%d octets, %s) is not exactly %q with the identity's digests", len(line), digestOf([]byte(line)), shape)
 	}
 	again, made, err := ensureIdentity(ctx, device)
 	if err != nil || made {
 		t.Fatalf("a second call answered made %v, %v: want the identity read back", made, err)
 	}
 	if want := "this peer's identity, read back: " + digests; again != want {
-		t.Errorf("the second line is %q, want %q", again, want)
+		t.Errorf("the second line (%d octets, %s) is not the read-back line with the identity's digests", len(again), digestOf([]byte(again)))
 	}
 }
 

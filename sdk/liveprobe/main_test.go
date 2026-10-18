@@ -195,16 +195,17 @@ func TestTheFailurePathReadsItsOwnLineForTheWords(t *testing.T) {
 		child := exec.Command(os.Args[0], "-test.run=^TestTheFailurePathReadsItsOwnLineForTheWords$")
 		child.Env = append(os.Environ(), "LIVEPROBE_TEST_FAIL_LINE="+c.line)
 		output, err := child.CombinedOutput()
+		// the child's output carries the planted words, so a failure names its size and never prints it
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			t.Fatalf("%s: the child answered %v, want fail's exit status 1:\n%s", c.name, err, output)
+			t.Fatalf("%s: the child answered %v, want fail's exit status 1 (%d octets of output)", c.name, err, len(output))
 		}
 		disclosed := strings.Contains(string(output), "PHRASE DISCLOSURE")
 		if disclosed != c.disclosed {
-			t.Errorf("%s: disclosed %v, want %v:\n%s", c.name, disclosed, c.disclosed, output)
+			t.Errorf("%s: disclosed %v, want %v (%d octets of output)", c.name, disclosed, c.disclosed, len(output))
 		}
 		if disclosed && !strings.Contains(string(output), "the words of A") {
-			t.Errorf("%s: the disclosure does not name the party:\n%s", c.name, output)
+			t.Errorf("%s: the disclosure does not name the party (%d octets of output)", c.name, len(output))
 		}
 	}
 }
@@ -236,14 +237,16 @@ func TestAPartysIdentityIsMadeAsAPersonMakesOne(t *testing.T) {
 		t.Fatalf("the device's own identity is %v (%v), and identify answered another", held, err)
 	}
 	line := identityLine("T-connected", identity)
+	// a failure names the line by its size and digest and never prints it, since a line that carried
+	// the words would put them in the log (LRI R84 item 6; review X-LIB-7)
 	for _, digest := range []string{digestOf([]byte(identity.AccountId)), digestOf([]byte(identity.DeviceId))} {
 		if digest == "" || !strings.Contains(line, digest) {
-			t.Errorf("the identity's line %q does not carry the digest %q", line, digest)
+			t.Errorf("the identity's line (%d octets, %s) does not carry the digest %s", len(line), digestOf([]byte(line)), digest)
 		}
 	}
-	for _, plain := range []string{identity.AccountId, identity.DeviceId} {
+	for at, plain := range []string{identity.AccountId, identity.DeviceId} {
 		if strings.Contains(line, plain) {
-			t.Errorf("the identity's line %q carries %q itself, and not its digest", line, plain)
+			t.Errorf("the identity's line (%d octets) carries its ID %d itself, and not its digest", len(line), at)
 		}
 	}
 	if how := phraseHeld(words, line); how != "" {
@@ -448,4 +451,53 @@ func probeDevice(t *testing.T, client sdk.MessageTransportClient) *urmessage.Dev
 		transport.Close()
 	})
 	return device
+}
+
+// EVERY IDENTITY KEY IS A NEEDLE OF THE TRANSCRIPT (LRI R84 item 5; review X-LIB-3). An identity key is
+// made from its party's words, and this probe prints a SHA-256 digest of an identity and nothing
+// else of it; the library formats a refused leaf's identity in hex. A held key is found where its hex
+// is planted, in either case and whether whole or its first octets alone, and an honest transcript of
+// digests is not; the disclosure is announced once.
+func TestEveryIdentityKeyIsANeedleOfTheTranscript(t *testing.T) {
+	key := bytes.Repeat([]byte{0xC3, 0x5A, 0x91, 0x0E}, 8)
+	log := &transcriptLog{}
+	writer := log.tee(io.Discard)
+	log.holdKey("C", key)
+	fmt.Fprintf(writer, "an honest line: identity %s, epoch 4, group %x\n", digestOf(key), []byte("a group id"))
+	if found, announce := log.keysHeld(); len(found) != 0 || announce {
+		t.Fatalf("an honest transcript answered %v, %v", found, announce)
+	}
+	// THE CONTROLS: the whole key, in hex, as the library's refusal formats it
+	fmt.Fprintf(writer, "leaf 3 (%x) added by a member\n", key)
+	found, announce := log.keysHeld()
+	if !slices.Equal(found, []string{"C"}) || !announce {
+		t.Fatalf("a key printed whole answered %v, %v: want C found and announced", found, announce)
+	}
+	if _, again := log.keysHeld(); again {
+		t.Error("the disclosure was announced twice")
+	}
+	// and its first octets alone, in capitals, in a transcript of their own
+	prefix := &transcriptLog{}
+	prefix.holdKey("A", key)
+	fmt.Fprintf(prefix.tee(io.Discard), "row leaf0/%X/owner\n", key[:4])
+	if found, _ := prefix.keysHeld(); !slices.Equal(found, []string{"A"}) {
+		t.Errorf("a key's first four octets in capitals answered %v", found)
+	}
+}
+
+// A REFUSAL THE STEPS EXPECT IS PRINTED BY ITS CLASS (LRI R84 item 5; review X-LIB-3): the sentinels it
+// wraps, and never its text, which names the refused identity by its key in hex.
+func TestARefusalIsPrintedByItsClassAndNeverItsText(t *testing.T) {
+	key := bytes.Repeat([]byte{0x6D}, 32)
+	refusal := fmt.Errorf("%w: %w: leaf 2 (%x) added by a member", urmessage.ErrCommitUnauthorized, urmessage.ErrCommitAddByNonAdmin, key)
+	class := refusalClass(refusal)
+	if class != "ErrCommitUnauthorized wrapping ErrCommitAddByNonAdmin" {
+		t.Errorf("the refusal's class is %q", class)
+	}
+	if strings.Contains(strings.ToLower(class), hex.EncodeToString(key[:4])) {
+		t.Error("the class carries the refused identity's key")
+	}
+	if got := refusalClass(errors.New("a refusal of no known class")); strings.Contains(got, "a refusal of no known class") {
+		t.Errorf("a refusal of no class this probe names is printed by its text: %q", got)
+	}
 }

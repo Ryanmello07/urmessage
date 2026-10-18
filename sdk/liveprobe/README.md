@@ -289,6 +289,12 @@ row, in memory and never in the output, and both must be found. The same scan ru
 failure path, and a hit prints a **treat that party's identity as disclosed** sentence that names
 the party and the shape, never a word.
 
+**So is every identity key.** A key is made from its party's words, and a SHA-256 digest is all this
+probe prints of an identity: every identity key a roster in this run shows, and the stranger's, is a
+needle of the same read-back, as its first four octets in hex in either case, which every print of
+the key in hex begins with. The library's refusals name the refused leaf's identity in hex, so the
+steps print a refusal they expect by the sentinels it wraps and never by its text (LRI R84).
+
 **Stated limit:** it covers every print this file makes and not a library writing to the process's
 stdout by its own hand; catching those needs the file descriptor replaced by a pipe, which costs a
 drained goroutine and loses whatever is in flight when the probe exits on a failure.

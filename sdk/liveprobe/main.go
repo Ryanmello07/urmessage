@@ -118,6 +118,12 @@ type transcriptLog struct {
 	// phrasesAnnounced is whether the words' disclosure sentence has been printed, under the same
 	// lock as the octets it is about, as announced is for the credentials'.
 	phrasesAnnounced bool
+
+	// keys is every identity key this run has seen, as the needle [keyNeedle] makes of it (LRI R84
+	// item 5): a key is made from its party's words, and only its digest is ever printed
+	keys map[string]string
+	// keysAnnounced is whether the keys' disclosure sentence has been printed
+	keysAnnounced bool
 }
 
 // tee is a writer that goes to `to` AND into this transcript.
@@ -288,6 +294,96 @@ func (self *transcriptLog) phrasesHeld() (found map[string]string, announce bool
 		self.phrasesAnnounced = true
 	}
 	return found, announce
+}
+
+// keyNeedle is what the transcript reads for one identity key: the lower case hex of its first four
+// octets, which every print of the key in hex -- whole, as the library's refusals format a leaf's
+// identity, or its head, as rosters used to -- begins with. The transcript is read with its case
+// folded. Four octets of a random key stand in an honest run's hex by chance about once in two
+// million runs.
+func keyNeedle(key []byte) string {
+	return hex.EncodeToString(key[:min(4, len(key))])
+}
+
+// holdKey makes an identity key a needle of this transcript (LRI R84 item 5; review X-LIB-3).
+func (self *transcriptLog) holdKey(name string, key []byte) {
+	if len(key) == 0 {
+		return
+	}
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	if self.keys == nil {
+		self.keys = map[string]string{}
+	}
+	self.keys[name] = keyNeedle(key)
+}
+
+// keyCount is how many identity keys are needles here.
+func (self *transcriptLog) keyCount() int {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	return len(self.keys)
+}
+
+// keysHeld answers whose identity keys everything written so far carries in hex, sorted, and whether
+// THIS caller announces it: one critical section, as [transcriptLog.count]'s answers are.
+func (self *transcriptLog) keysHeld() (found []string, announce bool) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	written := strings.ToLower(string(self.held))
+	found = []string{}
+	for name, needle := range self.keys {
+		if strings.Contains(written, needle) {
+			found = append(found, name)
+		}
+	}
+	slices.Sort(found)
+	announce = 0 < len(found) && !self.keysAnnounced
+	if announce {
+		self.keysAnnounced = true
+	}
+	return found, announce
+}
+
+// scanForKeys is [scanForCredentials] for the identity keys (LRI R84 item 5): it reads everything this
+// run has written so far for any identity key in hex, announces a disclosure if it finds one, and
+// answers how many keys it found. It has the same two callers, and prints nothing of what it looks
+// for.
+func scanForKeys(about string) int {
+	found, announce := transcript.keysHeld()
+	if announce {
+		fmt.Fprintf(errOut, "\n"+
+			"IDENTITY KEY DISCLOSURE: the identity key of %s, in hex, in %s.\n"+
+			"  An identity key is made from its party's words, and a SHA-256 digest is all this probe\n"+
+			"  prints of an identity. Keep this output out of every ticket.\n", strings.Join(found, ", "), about)
+	}
+	return len(found)
+}
+
+// refusalClass is how this probe prints a refusal a step expects: by the sentinels it wraps, among
+// the ones the steps assert, and never by its text, which names the refused identity by its key in
+// hex (Property 1; LRI R84 item 5; review X-LIB-3).
+func refusalClass(err error) string {
+	names := []string{}
+	for _, one := range []struct {
+		name     string
+		sentinel error
+	}{
+		{"ErrCommitUnauthorized", urmessage.ErrCommitUnauthorized},
+		{"ErrCommitAddByNonAdmin", urmessage.ErrCommitAddByNonAdmin},
+		{"ErrCommitRemoveByNonAdmin", urmessage.ErrCommitRemoveByNonAdmin},
+		{"ErrRemoveOwner", urmessage.ErrRemoveOwner},
+		{"ErrRemoveSelf", urmessage.ErrRemoveSelf},
+		{"ErrNoSuchMember", urmessage.ErrNoSuchMember},
+	} {
+		if errors.Is(err, one.sentinel) {
+			names = append(names, one.name)
+		}
+	}
+	if len(names) == 0 {
+		return "a refusal of no class this probe names"
+	}
+	return strings.Join(names, " wrapping ")
 }
 
 // scanForPhrases is [scanForCredentials] for the parties' words (LRI R81, R83): it reads everything
@@ -1119,7 +1215,7 @@ func main() {
 	check(errors.Is(err, urmessage.ErrCommitAddByNonAdmin), "C's add was refused with %v, which does not wrap R1's ErrCommitAddByNonAdmin", err)
 	check(cGroup.Stats().CommitRefusedOwn == refusedBefore+1, "C's Stats.CommitRefusedOwn went %d -> %d over one refused add, want one more",
 		refusedBefore, cGroup.Stats().CommitRefusedOwn)
-	fmt.Fprintf(out, "  C's AddMemberAndPublish as a member was refused on the SEND side: %v\n", err)
+	fmt.Fprintf(out, "  C's AddMemberAndPublish as a member was refused on the SEND side: %s\n", refusalClass(err))
 	for _, one := range []*namedGroup{{"A", aGroup}, {"B", bGroup}} {
 		got := receive(one.group, ctx, one.name)
 		check(len(got) == 0, "%s fetched %d entries after C's refused add; something was published: %s", one.name, len(got), texts(got))
@@ -1352,7 +1448,7 @@ func main() {
 	check(aGroup.Stats().CommitRefusedOwn == ownRefusedBefore+1,
 		"A's Stats.CommitRefusedOwn went %d -> %d over one rule refusal, want one more",
 		ownRefusedBefore, aGroup.Stats().CommitRefusedOwn)
-	fmt.Fprintf(out, "  A's RemoveMember as a MEMBER was refused on the SEND side: %v\n", refusal)
+	fmt.Fprintf(out, "  A's RemoveMember as a MEMBER was refused on the SEND side: %s\n", refusalClass(refusal))
 
 	// AND THE THREE BY-NAME DOORS, which are about the SUBJECT and are true whoever asks
 	refusal = aGroup.RemoveMember(ctx, bId)
@@ -1739,6 +1835,13 @@ func main() {
 		check(phraseHeld(words, "a planted line, "+words[11]+", "+words[12]+", and the rest of it") != "",
 			"CONTROL FAILED: the reader does not find two of %s's words in a row where they are planted", name)
 	}
+	// AND EVERY IDENTITY KEY (LRI R84 item 5): the needle is a key's first four octets in hex
+	check(transcript.keyCount() != 0,
+		"CONTROL FAILED: the transcript holds no identity key as a needle, and every roster this run read holds some")
+	keysInTheLog := scanForKeys("this run's output")
+	check(keysInTheLog == 0,
+		"THIS RUN'S OWN OUTPUT CARRIES %d IDENTITY KEY(S) IN HEX, and the disclosure sentence above says what "+
+			"to do about it", keysInTheLog)
 	wordsInTheLog := scanForPhrases("this run's output")
 	check(wordsInTheLog == 0,
 		"THIS RUN'S OWN OUTPUT CARRIES THE WORDS OF %d PART(IES), and the disclosure sentence above says what "+
@@ -2439,6 +2542,12 @@ func strangerPackage() []byte {
 	if err != nil {
 		fail("the stranger's key package: %v", err)
 	}
+	// the stranger's identity key is a needle too: a refusal of its add names it
+	if _, credential, err := keyPackageList(keyPackage); err == nil {
+		transcript.holdKey("the stranger", credential)
+	} else {
+		fail("the stranger's key package does not read back: %v", err)
+	}
 	return keyPackage
 }
 
@@ -2481,6 +2590,9 @@ func boundRoster(group *urmessage.Group, who string, rows int, identities int) {
 	}
 	roots, devices := map[string]bool{}, map[string]bool{}
 	for _, member := range members {
+		// EVERY IDENTITY KEY A ROSTER SHOWS IS A NEEDLE, the credential's and the root's
+		transcript.holdKey(fmt.Sprintf("the identity at leaf %d of %s's roster", member.LeafIndex, who), member.IdentityPub)
+		transcript.holdKey(fmt.Sprintf("the root at leaf %d of %s's roster", member.LeafIndex, who), member.Identity)
 		check(len(member.Identity) == ed25519.PublicKeySize && len(member.DeviceId) == 19,
 			"%s's roster row at leaf %d carries an identity of %d octets and a device ID of %d characters: every "+
 				"leaf of a group this build founds is bound", who, member.LeafIndex, len(member.Identity), len(member.DeviceId))
@@ -2696,5 +2808,6 @@ func fail(format string, args ...any) {
 	// no duplicated formatting -- and why deleting the tee on `errOut` would silently narrow it.
 	scanForCredentials("this run's output, including the FAIL line above")
 	scanForPhrases("this run's output, including the FAIL line above")
+	scanForKeys("this run's output, including the FAIL line above")
 	os.Exit(1)
 }

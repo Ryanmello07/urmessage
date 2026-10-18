@@ -63,11 +63,14 @@ package mls
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/importer"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"go/types"
 	"maps"
@@ -583,6 +586,30 @@ type octetDeclaration struct {
 	name        string
 	where       string
 	comparisons []octetComparison
+	// the declaration's code as go/printer prints it, its doc comment left out: what a decoder row
+	// is keyed by, so that a row excuses one body and not whatever later shares its name
+	body string
+}
+
+// declarationBody is one declaration's code as go/printer prints it, its doc comment left out, so
+// that a comment edited above it is not a change of body and a changed constant inside it is.
+func declarationBody(fileSet *token.FileSet, holding ast.Node) string {
+	if function, isFunction := holding.(*ast.FuncDecl); isFunction {
+		bare := *function
+		bare.Doc = nil
+		holding = &bare
+	}
+	var out bytes.Buffer
+	if err := printer.Fprint(&out, fileSet, holding); err != nil {
+		return ""
+	}
+	return out.String()
+}
+
+// bodyDigest is a body's SHA-256, as a decoder row holds it.
+func bodyDigest(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:])
 }
 
 // declarationsHoldingExpressions calls back once for each top level declaration of one file that
@@ -625,6 +652,7 @@ func octetComparisonsByDeclaration(checked checkedBodies) []octetDeclaration {
 				name:        name,
 				where:       checked.where(at),
 				comparisons: octetComparisonsIn(checked, holding),
+				body:        declarationBody(checked.fileSet, holding),
 			})
 		})
 	}
@@ -1050,6 +1078,8 @@ func TestFramingUsesConstantTimeComparison(t *testing.T) {
 	}
 	judged, read := 0, 0
 	excused := map[[3]string][]string{}
+	// the digest each named declaration's body has now, for a row that matches nothing
+	bodies := map[[3]string]string{}
 	for _, root := range roots {
 		checked := typeCheckedBodiesOf(t, root)
 		onDisk := rootSourcePaths(t, root)
@@ -1063,6 +1093,9 @@ func TestFramingUsesConstantTimeComparison(t *testing.T) {
 		reported := 0
 		for _, declaration := range declarations {
 			row, isDecoder := framingDecoderRowOf(root, declaration)
+			if _, named := framingDecoderComparisons[row]; named {
+				bodies[row] = bodyDigest(declaration.body)
+			}
 			for _, one := range declaration.comparisons {
 				if isDecoder {
 					excused[row] = append(excused[row], one.rendered)
@@ -1081,7 +1114,9 @@ func TestFramingUsesConstantTimeComparison(t *testing.T) {
 	for row := range framingDecoderComparisons {
 		t.Logf("decoder row %v excused %q", row, excused[row])
 		if len(excused[row]) == 0 {
-			t.Errorf("framingDecoderComparisons names %v, which decides no comparison of octets in the roots read; a row that excuses nothing reads as coverage", row)
+			t.Errorf("framingDecoderComparisons names %v, which excuses no comparison of octets in the roots read: its "+
+				"declaration decides none, or its body is not the one reviewed (its body now digests to %s); a row "+
+				"that excuses nothing reads as coverage", row, bodies[row])
 		}
 	}
 	if judged == 0 {
@@ -1102,20 +1137,43 @@ func TestFramingUsesConstantTimeComparison(t *testing.T) {
 // ../messagegroup's phrase.go. The review of identity phase 1's Tasks 8 to 10 found both spelled
 // around this gate (L2-08): the tokenizer read each octet's class out of a table, and the loader
 // compared the list's digest with crypto/subtle, and neither bought constant time -- the word a
-// fold spells is looked up in a go map, and the switch on the class branches. Neither compares a
-// secret with anything: a fold is one of a to z, a space or '#', and the list and its pin are
-// public. Everything else in phrase.go, P34's equality and the checksum's included, is under the
-// rule, and TestTheDecoderRowsExcuseTheirOwnDeclarationsAndNothingBeside is the control.
-var framingDecoderComparisons = map[[3]string]string{
-	{"../messagegroup", "phrase.go", "take"}: "the tokenizer, reading one code point's fold a symbol at a time " +
-		"and ending a word at a space; the word it gathers is looked up in the list's map",
-	{"../messagegroup", "phrase.go", "mustReadPhraseList"}: "the vendored BIP-39 list read once at " +
-		"initialisation: its line feeds, and its SHA-256 against the pin F3 X1 publishes, both public",
+// fold spells is looked up in a go map, and the switch on the class branches.
+//
+// WHAT EACH ONE EXCUSES, STATED AS THE RESIDUAL IT IS (LRI R84 item 13; review G-6). The tokenizer
+// BRANCHES ON THE TYPED LETTERS, WHICH ARE LOCAL INPUT: its time varies with the words the person
+// typed, and that is accepted, because the lookup the letters feed is a go map, which is not
+// constant time either, and the typed text is this device's own. The loader's comparisons are of
+// the list and its pin, both public. Everything else in phrase.go, P34's equality and the checksum's
+// included, is under the rule.
+//
+// EACH ROW IS KEYED BY ITS BODY: the SHA-256 of the declaration's code as go/printer prints it, its
+// doc comment left out. A body that changes, by one constant, matches no row, and its comparisons are
+// reported until the row is reviewed again and its digest written down; a row that matches nothing
+// fails as one that excuses nothing. TestTheDecoderRowsExcuseTheirOwnDeclarationsAndNothingBeside is
+// the control.
+type framingDecoderRow struct {
+	// the SHA-256 of the reviewed body, in hex
+	body   string
+	reason string
+}
+
+var framingDecoderComparisons = map[[3]string]framingDecoderRow{
+	{"../messagegroup", "phrase.go", "take"}: {
+		body: "d316eaea5139570836df4a0a9b0a29d7d83d43d86e49904c04b5c7a1374baed9",
+		reason: "the tokenizer, reading one code point's fold a symbol at a time and ending a word at a space: it " +
+			"branches on the typed letters, which are local input, and the word it gathers is looked up in the " +
+			"list's go map",
+	},
+	{"../messagegroup", "phrase.go", "mustReadPhraseList"}: {
+		body: "521574164420bad1535ce29fbe2721ed8815257e9cb64999e9343bff6e2cd983",
+		reason: "the vendored BIP-39 list read once at initialisation: its line feeds, and its SHA-256 against " +
+			"the pin F3 X1 publishes, both public",
+	},
 }
 
 // framingDecoderRowOf answers the decoder row one declaration of one root falls under, if any:
-// keyed by the root, the BASE name of the declaration's file, and the declaration's name, so that a
-// row covers one body in one file and nothing that merely shares a name.
+// keyed by the root, the BASE name of the declaration's file, the declaration's name, and its body's
+// digest, so that a row covers one body in one file and nothing that merely shares a name.
 func framingDecoderRowOf(root string, declaration octetDeclaration) ([3]string, bool) {
 	file := declaration.where
 	for range 2 {
@@ -1124,8 +1182,8 @@ func framingDecoderRowOf(root string, declaration octetDeclaration) ([3]string, 
 		}
 	}
 	row := [3]string{root, filepath.Base(file), declaration.name}
-	_, isDecoder := framingDecoderComparisons[row]
-	return row, isDecoder
+	reviewed, named := framingDecoderComparisons[row]
+	return row, named && reviewed.body == bodyDigest(declaration.body)
 }
 
 // The decoder rows' control: a package written in a file of the name a row scopes, with one
@@ -1150,25 +1208,48 @@ func beside(fold string) bool {
 `
 
 func TestTheDecoderRowsExcuseTheirOwnDeclarationsAndNothingBeside(t *testing.T) {
+	// THE REVIEWED BODY IS EXCUSED: messagegroup's own take, as the gate reads it
+	var reviewed *octetDeclaration
+	for _, declaration := range octetComparisonsByDeclaration(typeCheckedBodiesOf(t, "../messagegroup")) {
+		if declaration.name == "take" && strings.Contains(declaration.where, "phrase.go") {
+			found := declaration
+			reviewed = &found
+		}
+	}
+	if reviewed == nil || len(reviewed.comparisons) == 0 {
+		t.Fatal("messagegroup's take was not read, or decides no comparison, so the rows control nothing")
+	}
+	if _, excused := framingDecoderRowOf("../messagegroup", *reviewed); !excused {
+		t.Fatalf("messagegroup's own take is not excused by its row (its body digests to %s)", bodyDigest(reviewed.body))
+	}
+	// AND NOTHING BESIDE IT: the same body under another root or file, and the same declaration with
+	// its body changed by one constant (LRI R84 item 13; review G-6)
+	if _, elsewhere := framingDecoderRowOf("../mls", *reviewed); elsewhere {
+		t.Error("take is excused under ../mls, which no row names")
+	}
+	renamed := *reviewed
+	renamed.where = strings.Replace(reviewed.where, "phrase.go", "phrase_other.go", 1)
+	if _, moved := framingDecoderRowOf("../messagegroup", renamed); moved {
+		t.Errorf("take is excused in another file of the same root, %s", renamed.where)
+	}
+	changed := *reviewed
+	changed.body = strings.Replace(reviewed.body, "' '", "'	'", 1)
+	if changed.body == reviewed.body {
+		t.Fatal("CONTROL FAILED: the changed body is the reviewed one")
+	}
+	if _, stillExcused := framingDecoderRowOf("../messagegroup", changed); stillExcused {
+		t.Error("take with one constant of its body changed is still excused: the row is keyed by its name and not by its body")
+	}
+	// a package of the control's own, in a file of the name a row scopes, is reported throughout:
+	// neither its take, whose body is not the reviewed one, nor the declaration beside it is excused
 	checked := typeCheckedBodiesOfText(t, "phrase.go", framingDecoderRowControl)
-	verdicts := map[string]bool{}
 	for _, declaration := range octetComparisonsByDeclaration(checked) {
 		if len(declaration.comparisons) == 0 {
 			t.Fatalf("the control's %s decides no comparison of octets, so it controls nothing", declaration.name)
 		}
-		_, excused := framingDecoderRowOf("../messagegroup", declaration)
-		verdicts[declaration.name] = excused
-		if _, elsewhere := framingDecoderRowOf("../mls", declaration); elsewhere {
-			t.Errorf("the control's %s is excused under ../mls, which no row names", declaration.name)
+		if _, excused := framingDecoderRowOf("../messagegroup", declaration); excused {
+			t.Errorf("the control's %s is excused, and its body is not the reviewed one", declaration.name)
 		}
-		renamed := declaration
-		renamed.where = strings.Replace(declaration.where, "phrase.go", "phrase_other.go", 1)
-		if _, moved := framingDecoderRowOf("../messagegroup", renamed); moved {
-			t.Errorf("the control's %s is excused in another file of the same root, %s", declaration.name, renamed.where)
-		}
-	}
-	if !verdicts["take"] || verdicts["beside"] || len(verdicts) != 2 {
-		t.Errorf("the decoder rows answered %v over the control; want take excused and beside reported", verdicts)
 	}
 }
 

@@ -147,10 +147,17 @@ var layeringRules = map[string]layeringRule{
 	},
 	"sdk/livepeer": {
 		module:   []string{"protocol", "sdk", "sdk/urmessage"},
-		external: []string{"github.com/urnetwork/connect", "google.golang.org/protobuf"},
-		reason: "the live peer command: one device on a real network. protobuf is its tests' server double, which " +
-			"answers Hello so that a device can make its identity: an identity's self group is founded under a " +
-			"connection (identity phase 1's Task 12)",
+		external: []string{"github.com/urnetwork/connect"},
+		testFiles: map[string]testFileAllowance{
+			"sdk/livepeer/main_test.go": {
+				external: []string{"google.golang.org/protobuf"},
+				reason: "the live peer's tests' server double, which answers Hello so that a device can make its " +
+					"identity: an identity's self group is founded under a connection (identity phase 1's Task 12). " +
+					"The answer is a protobuf message, and protobuf is the double's alone: the peer reaches the " +
+					"server through sdk (LRI R84 item 9; review G-1)",
+			},
+		},
+		reason: "the live peer command: one device on a real network",
 	},
 	"sdk/liveprobe": {
 		module:   []string{"messagegroup", "mls", "protocol", "sdk", "sdk/urmessage", "syntax"},

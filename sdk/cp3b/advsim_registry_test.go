@@ -3,9 +3,13 @@ package cp3b
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -210,4 +214,113 @@ func TestAdvSimEveryRegistryEntryIsNamedByExactlyOneScenario(t *testing.T) {
 		}
 	}
 	t.Logf("%d registry entries, each named by exactly one scenario in %v", len(ids), sources)
+}
+
+// EVERY ENTRY IS JUDGED BY A TestAdvSim FUNCTION, so the RED report judges every one (LRI R84 item 13;
+// review G-7). The report is the strict run narrowed to `-run TestAdvSim`, so a scenario judged from
+// any other test runs in the normal run and is skipped by the report, and a closed entry's regression
+// is then invisible where Task 17 reads. Every [advJudge] call in the advsim sources sits in a
+// top-level function whose name begins TestAdvSim, and names its entry by a literal; with the census
+// above, each entry is judged by exactly one such function. What no call reaches is printed.
+//
+// THE CONTROL: a judging call in a helper, and one in a test of another name, are each refused.
+func TestAdvSimEveryEntryIsJudgedByATestAdvSimFunction(t *testing.T) {
+	sources, err := filepath.Glob("advsim_*_test.go")
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no advsim source file was found (%v), so the census below read nothing", err)
+	}
+	judged := map[string]string{}
+	for _, source := range sources {
+		body, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatalf("read %s: %v", source, err)
+		}
+		calls, problems := advJudgingCallsOf(t, source, body)
+		for _, problem := range problems {
+			t.Error(problem)
+		}
+		for id, function := range calls {
+			judged[id] = function
+		}
+	}
+	entries := advLoadRegistry(t)
+	unjudged := []string{}
+	for id := range entries {
+		if _, found := judged[id]; !found {
+			unjudged = append(unjudged, id)
+		}
+	}
+	slices.Sort(unjudged)
+	if len(unjudged) != 0 {
+		t.Errorf("no TestAdvSim function judges %v, so the RED report has no row for them", unjudged)
+	}
+	t.Logf("%d judging call(s), each in a TestAdvSim function; %d registry entries; not judged: %v",
+		len(judged), len(entries), unjudged)
+
+	// THE CONTROL
+	_, problems := advJudgingCallsOf(t, "advsim_control_test.go", []byte(`package cp3b
+
+func advHelperThatJudges(t *testing.T) {
+	advJudge(t, "control-in-a-helper", nil)
+}
+
+func TestSomethingElse(t *testing.T) {
+	advJudge(t, "control-in-another-test", nil)
+}
+`))
+	if len(problems) != 2 {
+		t.Errorf("CONTROL FAILED: a judging call in a helper and one in another test answered %d problem(s), want 2: %v",
+			len(problems), problems)
+	}
+}
+
+// advJudgingCallsOf reads one advsim source and answers each judged entry with the function that
+// judges it, and every call outside a TestAdvSim function, or without a literal id, as a problem.
+func advJudgingCallsOf(t *testing.T, name string, body []byte) (map[string]string, []string) {
+	t.Helper()
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, name, body, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	calls := map[string]string{}
+	problems := []string{}
+	for _, declaration := range parsed.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil || function.Name.Name == "advJudge" {
+			continue
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			callee, ok := call.Fun.(*ast.Ident)
+			if !ok || callee.Name != "advJudge" {
+				return true
+			}
+			at := fileSet.Position(call.Pos())
+			if !strings.HasPrefix(function.Name.Name, "TestAdvSim") {
+				problems = append(problems, fmt.Sprintf("%s: advJudge is called in %s, which the RED report's -run TestAdvSim never runs",
+					at, function.Name.Name))
+				return true
+			}
+			var literal *ast.BasicLit
+			if 2 <= len(call.Args) {
+				literal, _ = call.Args[1].(*ast.BasicLit)
+			}
+			if literal == nil || literal.Kind != token.STRING {
+				problems = append(problems, fmt.Sprintf("%s: advJudge in %s names its entry by no literal", at, function.Name.Name))
+				return true
+			}
+			id, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("%s: %v", at, err))
+				return true
+			}
+			calls[id] = function.Name.Name
+			return true
+		})
+	}
+	return calls, problems
 }
