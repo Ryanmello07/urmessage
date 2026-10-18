@@ -295,8 +295,9 @@ void urnet_message_client_close(uint64_t self);
 
 /* subscribe this group to the server's push when it holds no current subscription: none yet, one
  * at an older epoch, or one on a connection a Hello has since replaced. answers 1 when it
- * subscribed now, 0 when it was already current, -1 with out_error when the server refused. after
- * a 1, receive once: a subscription only announces what arrives after it. */
+ * subscribed now, 0 when it was already current, and -1 when it did not subscribe, with out_error
+ * when the server refused. after a 1, receive once: a subscription only announces what arrives
+ * after it. */
 int32_t urnet_message_group_ensure_subscribed(uint64_t self, uint64_t ctx, char** out_error);
 /* wait up to timeout_ms for a push and answer the group id it names, as hex, or NULL on timeout.
  * a push carries no records: answer it with urnet_message_group_receive. free with
@@ -395,10 +396,13 @@ bool urnet_message_device_create_identity(uint64_t self, uint8_t* out, int32_t* 
 /* the 25 words typed back, as counted UTF-8 octets, read with the list's own fold (case, spacing).
  * BLOCKS: when they match, the identity is made and its self group founded under the device's
  * connection, so connect first. answers a URNET_MESSAGE_WORDS_* KIND. on WRONG the positions, from
- * 1, of every word that is not the word shown are handed back by the buffer-out pattern over int32s:
- * *inout_count is ALWAYS set to how many there are, and they are copied when out_positions is not
- * NULL and the capacity passed in was enough -- 25 always is. overwrite the typed buffer once this
- * returns. */
+ * 1, of every word that is not the word shown -- a missing word and an extra one included -- are
+ * handed back by the buffer-out pattern over int32s, CAPPED AT THE CAPACITY passed in: *inout_count
+ * is ALWAYS set, to how many positions there are, all of them, and to 0 on every answer but WRONG;
+ * the first of them, in order and as many as the capacity holds, are copied when out_positions is
+ * not NULL. typed text of 25 words names at most 25 positions; more words typed can name more, and a
+ * count above the capacity says so. a WRONG changes nothing, so the same text may be confirmed again
+ * with a larger buffer. overwrite the typed buffer once this returns. */
 int32_t urnet_message_device_confirm_words(uint64_t self, uint64_t ctx, const uint8_t* typed, int32_t typed_len, int32_t* out_positions, int32_t* inout_count, char** out_error);
 /* whether one typed word is a word of the recovery phrase's list, read with the list's own fold, so
  * that a screen can mark each word as it is typed. it takes no device and makes nothing; two words,

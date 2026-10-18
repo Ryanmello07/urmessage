@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -91,11 +94,19 @@ type identityDevice struct {
 	device *urmessage.Device
 	handle uint64
 	dir    string
+	store  *urmessage.DurableStateStore
 	// closes the device and its two stores, once, so that a restart can open the directory again
 	close func()
 }
 
 func newIdentityDevice(t *testing.T, dir string) *identityDevice {
+	t.Helper()
+	return newIdentityDeviceDrawingFrom(t, dir, nil)
+}
+
+// newIdentityDeviceDrawingFrom is newIdentityDevice whose device draws its randomness from the reader
+// given: its keys, at NewDevice, and its account ID's salt, when its identity is made.
+func newIdentityDeviceDrawingFrom(t *testing.T, dir string, random io.Reader) *identityDevice {
 	t.Helper()
 	transport, err := sdk.NewMessageTransport(&sdk.MessageTransportConfig{
 		Client:          &identityAnsweringClient{},
@@ -120,6 +131,7 @@ func newIdentityDevice(t *testing.T, dir string) *identityDevice {
 		Transport:     transport,
 		Reserver:      sdk.NewStreamIndexReserver(streamStore),
 		StateStore:    stateStore,
+		Random:        random,
 		Connect:       urmessage.ConnectPolicy{Budget: 30 * time.Second, AttemptTimeout: 2 * time.Second},
 	})
 	if err != nil {
@@ -141,7 +153,7 @@ func newIdentityDevice(t *testing.T, dir string) *identityDevice {
 	}
 	handle := newHandle(device)
 	t.Cleanup(func() { handleRelease(handle) })
-	return &identityDevice{device: device, handle: handle, dir: dir, close: closeAll}
+	return &identityDevice{device: device, handle: handle, dir: dir, store: stateStore, close: closeAll}
 }
 
 // exportOutError is a char** out_error as a test passes one, and what was written through it.
@@ -190,17 +202,31 @@ func createIdentity(t *testing.T, handle uint64) ([]string, string) {
 // kind, the positions handed back and the out_error.
 func confirmWords(t *testing.T, handle uint64, typed string) (int32, []int32, string) {
 	t.Helper()
+	kind, positions, count, failure := confirmWordsInto(t, handle, typed, 25)
+	if int(count) != len(positions) {
+		t.Fatalf("confirm_words counted %d positions past a capacity of 25", count)
+	}
+	return kind, positions, failure
+}
+
+// confirmWordsInto is confirmWords with a positions buffer of the capacity given. It answers the
+// positions copied, and *inout_count as the export left it, which may be more.
+func confirmWordsInto(t *testing.T, handle uint64, typed string, capacity int) (int32, []int32, int32, string) {
+	t.Helper()
 	// one octet past the words, so that no typed input is an empty buffer to take the address of
 	octets := append([]byte(typed), 0)
-	positions := make([]int32, 25)
-	count := int32(len(positions))
+	positions := make([]int32, capacity+1)
+	count := int32(capacity)
 	var outError exportOutError
 	kind := int32(callExportNil(t, urnet_message_device_confirm_words, handle, uint64(0), unsafe.Pointer(&octets[0]),
 		int32(len(typed)), unsafe.Pointer(&positions[0]), unsafe.Pointer(&count), outError.pointer())[0].Int())
-	if count < 0 || int(count) > len(positions) {
-		t.Fatalf("confirm_words named %d positions", count)
+	if count < 0 {
+		t.Fatalf("confirm_words counted %d positions", count)
 	}
-	return kind, positions[:count], outError.take(t)
+	if positions[capacity] != 0 {
+		t.Fatalf("confirm_words wrote past the capacity of %d it was handed", capacity)
+	}
+	return kind, positions[:min(int(count), capacity)], count, outError.take(t)
 }
 
 // identityJson calls urnet_message_device_identity and answers the json and the out_error.
@@ -234,7 +260,7 @@ func TestTheIdentityExportsMakeTheIdentityAndNameAWrongWord(t *testing.T) {
 	one := newIdentityDevice(t, t.TempDir())
 	before, failure := identityJson(t, one.handle)
 	if failure != "" || !strings.Contains(before, `"has_identity":false`) {
-		t.Fatalf("before any identity the identity json is %q (%s), want has_identity false", before, failure)
+		t.Fatalf("before any identity the identity json (%d octets) does not say has_identity false (%s)", len(before), failure)
 	}
 	if kind, _, _ := confirmWords(t, one.handle, "abandon"); kind != messageWordsNotOffered {
 		t.Fatalf("a confirm with no words offered answered kind %d, want NOT_OFFERED", kind)
@@ -280,7 +306,7 @@ func TestTheIdentityExportsMakeTheIdentityAndNameAWrongWord(t *testing.T) {
 	}
 	var decoded deviceIdentityInfo
 	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
-		t.Fatalf("the identity json %q: %v", text, err)
+		t.Fatalf("the identity json (%d octets) does not decode: %v", len(text), err)
 	}
 	if !decoded.HasIdentity || decoded.AccountId != made.AccountId || decoded.DeviceId != made.DeviceId ||
 		decoded.PhraseDevice != made.PhraseDevice || len(decoded.Devices) != len(made.Devices) {
@@ -372,8 +398,9 @@ func TestTheMemberJsonCarriesTheDeviceIdAndTheIdentity(t *testing.T) {
 // system group, and one conversation; the group list export answers the conversation and nothing
 // else, and so does the restore's, which restores the self group and answers none of it.
 //
-// THE CONTROL: the device does hold the self group -- a restart restores it, and the store holds two
-// group records -- so the list's one entry is the export leaving it out, not its absence.
+// THE CONTROL: the device does hold the self group -- the store holds one group record, which is not
+// the conversation's, since a conversation at epoch 0 writes none, and the restart restores it -- so
+// the lists leaving it out is the exports leaving it out, not its absence.
 func TestTheGroupListExportAnswersConversationsOnly(t *testing.T) {
 	dir := t.TempDir()
 	one := newIdentityDevice(t, dir)
@@ -404,13 +431,14 @@ func TestTheGroupListExportAnswersConversationsOnly(t *testing.T) {
 	if ids := groupListIds(t, callExport(t, urnet_message_device_groups, restarted.handle)[0].Uint()); len(ids) != 0 {
 		t.Fatalf("after the restore the group list export answers %d group(s)", len(ids))
 	}
-	// THE CONTROL: the restarted device holds the self group
+	// THE CONTROL: the store holds the self group's record, by its own id: the one record it holds,
+	// and not the conversation's
 	if _, err := restarted.device.KeyPackage(); err != nil {
 		t.Fatalf("CONTROL FAILED: the restarted device has no identity: %v", err)
 	}
-	records, err := os.ReadDir(filepath.Join(dir, "state"))
-	if err != nil || len(records) == 0 {
-		t.Fatalf("CONTROL FAILED: the store's directory reads %d entries (%v)", len(records), err)
+	records, err := restarted.store.GroupRecords()
+	if err != nil || len(records) != 1 || bytes.Equal(records[0].GroupId, groupId) {
+		t.Fatalf("CONTROL FAILED: the store holds %d group record(s) (%v), want the self group's alone", len(records), err)
 	}
 }
 
@@ -454,7 +482,12 @@ func TestNoExportAnswersAPhraseSecret(t *testing.T) {
 	answers := map[string]string{}
 	before, _ := identityJson(t, one.handle)
 	answers["the identity json before the identity"] = before
-	_, _, wrongFailure := confirmWords(t, one.handle, strings.Join(append(slices.Clone(words[:24]), "zoo"), " "))
+	// a 25th word that is not the 25th word shown, so that this confirm is wrong on every phrase
+	other := "zoo"
+	if words[24] == other {
+		other = "abandon"
+	}
+	_, _, wrongFailure := confirmWords(t, one.handle, strings.Join(append(slices.Clone(words[:24]), other), " "))
 	answers["a wrong confirm's out_error"] = wrongFailure
 	kind, _, okFailure := confirmWords(t, one.handle, strings.Join(words, " "))
 	if kind != messageWordsOk {
@@ -503,7 +536,8 @@ func TestNoExportAnswersAPhraseSecret(t *testing.T) {
 			read += 1
 		}
 		if leaked := phraseIn(words, answer); leaked != "" {
-			t.Errorf("%s carries the words (%s): %q", name, leaked, answer)
+			// the shape and the size, and never the text, which carries the words
+			t.Errorf("%s carries the words (%s), in %d octets", name, leaked, len(answer))
 		}
 	}
 	if read < 6 {
@@ -620,4 +654,116 @@ func TestTheHeaderDefinesExactlyTheWordsKinds(t *testing.T) {
 	if !reflect.DeepEqual(defined, constants) {
 		t.Fatalf("the header defines the words kinds as %v and the library's constants are %v", defined, constants)
 	}
+}
+
+// A PANIC INSIDE CONFIRM_WORDS ANSWERS FAILED, AND NO POSITION (LRI R84 item 3; review X-LIB-1).
+// cgoGuard recovers a panic, and an unnamed result then answers its zero value, which is
+// URNET_MESSAGE_WORDS_OK: an identity a caller is told exists, and *inout_count left at the
+// capacity it passed in. The panic is real and inside the making: the device's own randomness, which
+// the identity's account ID salt is drawn from, panics once armed.
+//
+// THE CONTROL: the same words, the reader disarmed, make the identity -- so the FAILED was the panic,
+// and the words were still offered after it.
+func TestAPanicInsideConfirmWordsAnswersFailedAndNoPosition(t *testing.T) {
+	random := &armedPanicReader{}
+	one := newIdentityDeviceDrawingFrom(t, t.TempDir(), random)
+	words, failure := createIdentity(t, one.handle)
+	if failure != "" {
+		t.Fatalf("create_identity: %s", failure)
+	}
+	random.arm(true)
+	kind, positions, count, _ := confirmWordsInto(t, one.handle, strings.Join(words, " "), 25)
+	random.arm(false)
+	if kind != messageWordsFailed {
+		t.Errorf("a panic inside the identity's making answered kind %d, want FAILED (%d)", kind, messageWordsFailed)
+	}
+	if count != 0 || len(positions) != 0 {
+		t.Errorf("a panic inside the identity's making left *inout_count at %d: it is set to none before anything", count)
+	}
+	if _, err := one.device.Identity(); !errors.Is(err, urmessage.ErrNoIdentity) {
+		t.Fatalf("CONTROL FAILED: the panic left an identity behind (%v), so it was not inside the making", err)
+	}
+	if !random.panicked() {
+		t.Fatal("CONTROL FAILED: the armed reader was never read, so nothing panicked")
+	}
+	if kind, _, failure := confirmWords(t, one.handle, strings.Join(words, " ")); kind != messageWordsOk {
+		t.Fatalf("CONTROL FAILED: the same words, the reader disarmed, answered kind %d (%s)", kind, failure)
+	}
+}
+
+// A PANIC INSIDE ENSURE_SUBSCRIBED ANSWERS -1, NOT "ALREADY CURRENT" (LRI R84 item 3). Its 0 says the
+// subscription is current, which a recovered panic must never say. The group handle is a group no
+// device made, whose subscribe panics inside.
+func TestAPanicInsideEnsureSubscribedAnswersThatItDidNotSubscribe(t *testing.T) {
+	group := newHandle(&urmessage.Group{})
+	defer handleRelease(group)
+	if got := callExportNil(t, urnet_message_group_ensure_subscribed, group, uint64(0), nil)[0].Int(); got != -1 {
+		t.Errorf("a panic inside ensure_subscribed answered %d, want -1: 0 says the subscription is current and 1 that it was made", got)
+	}
+}
+
+// MORE POSITIONS THAN THE CAPACITY ARE COUNTED, AND THE FIRST ARE COPIED (LRI R84 item 4; review
+// X-LIB-2). Typed back with every word doubled, 50 words name more than 25 positions. A capacity of 25
+// answers the first 25 of them and counts them all; a capacity of the count answers every one, the
+// first 25 the same; and a WRONG changes nothing, so the words typed right then make the identity.
+func TestMorePositionsThanTheCapacityAreCountedAndTheFirstAreCopied(t *testing.T) {
+	one := newIdentityDevice(t, t.TempDir())
+	words, failure := createIdentity(t, one.handle)
+	if failure != "" {
+		t.Fatalf("create_identity: %s", failure)
+	}
+	doubled := make([]string, 0, 2*len(words))
+	for _, word := range words {
+		doubled = append(doubled, word, word)
+	}
+	kind, first, count, _ := confirmWordsInto(t, one.handle, strings.Join(doubled, " "), 25)
+	if kind != messageWordsWrong || count <= 25 || len(first) != 25 {
+		t.Fatalf("50 words typed back answered kind %d, %d position(s) counted and %d copied: want WRONG, more than 25, and 25",
+			kind, count, len(first))
+	}
+	for at := 1; at < len(first); at += 1 {
+		if first[at-1] < 1 || first[at] <= first[at-1] {
+			t.Fatalf("the positions copied are not the first ones in order: %v", first)
+		}
+	}
+	kind, all, again, _ := confirmWordsInto(t, one.handle, strings.Join(doubled, " "), int(count))
+	if kind != messageWordsWrong || again != count || len(all) != int(count) || !slices.Equal(all[:25], first) {
+		t.Fatalf("with a capacity of %d the same words answered kind %d, %d counted and %d copied, the first 25 the same: %v",
+			count, kind, again, len(all), len(all) >= 25 && slices.Equal(all[:25], first))
+	}
+	if kind, _, failure := confirmWords(t, one.handle, strings.Join(words, " ")); kind != messageWordsOk {
+		t.Fatalf("after the WRONG answers the right words answered kind %d (%s)", kind, failure)
+	}
+}
+
+// armedPanicReader is a device's randomness that panics once armed, and is crypto/rand before.
+type armedPanicReader struct {
+	mutex   sync.Mutex
+	armed   bool
+	reached bool
+}
+
+func (self *armedPanicReader) arm(armed bool) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	self.armed = armed
+}
+
+func (self *armedPanicReader) panicked() bool {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	return self.reached
+}
+
+func (self *armedPanicReader) Read(octets []byte) (int, error) {
+	self.mutex.Lock()
+	armed := self.armed
+	if armed {
+		self.reached = true
+	}
+	self.mutex.Unlock()
+	if armed {
+		panic("the test's armed randomness, read inside the identity's making")
+	}
+	return rand.Read(octets)
 }
