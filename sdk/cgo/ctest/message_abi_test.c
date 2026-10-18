@@ -60,6 +60,10 @@ extern uint64_t urnet_message_loopback_world_client(uint64_t self);
 extern uint64_t urnet_message_loopback_world_unrouted_client(uint64_t self);
 extern void urnet_message_loopback_world_omit_highest(uint64_t self, bool on);
 extern void urnet_message_loopback_world_close(uint64_t self);
+/* a connected device's identity, made in Go, so the words never cross: every group this build
+ * founds requires one of each member (identity phase 1's Task 12), and the shipping identity
+ * exports are Task 14's */
+extern bool urnet_message_loopback_device_identify(uint64_t device, uint64_t ctx, char** out_error);
 
 /* ── assertions ──────────────────────────────────────────────────────────────────────────── */
 
