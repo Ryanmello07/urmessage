@@ -1,7 +1,9 @@
 package urmessage
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,6 +11,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -65,10 +69,13 @@ func TestASetupKilledBetweenAnyTwoWritesStartsWithNoIdentityOrAWholeOne(t *testi
 	device.Close()
 
 	noIdentity, whole := 0, 0
+	sweptBy := map[string][]string{}
 	for _, point := range points {
-		switch restartFromKill(t, point) {
+		outcome, swept := restartFromKill(t, point)
+		switch outcome {
 		case killLeftNoIdentity:
 			noIdentity += 1
+			sweptBy[point.before] = swept
 		case killLeftAWholeIdentity:
 			whole += 1
 		}
@@ -76,15 +83,21 @@ func TestASetupKilledBetweenAnyTwoWritesStartsWithNoIdentityOrAWholeOne(t *testi
 	// THE CONTROL: the folder nothing killed starts, with the identity it made
 	untouched := killPoint{before: "nothing", dir: dir}
 	kills.DurableStateStore.Close()
-	if outcome := restartFromKill(t, untouched); outcome != killLeftAWholeIdentity {
+	if outcome, _ := restartFromKill(t, untouched); outcome != killLeftAWholeIdentity {
 		t.Errorf("CONTROL FAILED: the folder nothing killed did not start with its identity whole")
 	}
 	if noIdentity == 0 || whole == 0 {
 		t.Errorf("CONTROL FAILED: of %d kill(s), %d left no identity and %d a whole one; the kills must reach both",
 			len(points), noIdentity, whole)
 	}
-	t.Logf("%d kill points over the writes %v: %d left no identity, %d a whole identity (account digest %s)",
-		len(points), written, noIdentity, whole, digestForTest(made.AccountId))
+	// THE SWEEP'S CONTROL (LRI R85): the kill just before the identity record left the phrase key and
+	// the heads standing beside no identity record, and the start that followed erased both, so the
+	// sweep's assertion in restartFromKill was not held over a disk with nothing to sweep
+	if swept := sweptBy[stateRootIdentityName]; len(swept) != 2 {
+		t.Errorf("CONTROL FAILED: the kill before the identity record left %v of the heads and the phrase key to sweep, want both", swept)
+	}
+	t.Logf("%d kill points over the writes %v: %d left no identity, %d a whole identity; swept at each start with no identity: %v (account digest %s)",
+		len(points), written, noIdentity, whole, sweptBy, digestForTest(made.AccountId))
 }
 
 type killOutcome int
@@ -96,71 +109,102 @@ const (
 )
 
 // restartFromKill opens one kill's disk as the next process opens its directory, and says what it
-// holds: no identity, over which setup runs again to an identity that itself restarts whole; or a
-// whole identity, its heads naming its own list, its phrase key held, and a self group held once
-// Restore has run. Anything else is a failure of the test, named by the write the kill came before.
-func restartFromKill(t *testing.T, point killPoint) killOutcome {
+// holds: no identity, its setup's orphans swept by the start, over which setup runs again to an
+// identity that itself restarts whole; or a whole identity, its heads naming its own list, its phrase
+// key held, and a self group held once Restore has run. Anything else is a failure of the test, named
+// by the write the kill came before. With no identity, it also answers the orphans the start swept:
+// those of the heads and the phrase key that stood on the kill's disk.
+func restartFromKill(t *testing.T, point killPoint) (killOutcome, []string) {
 	t.Helper()
 	ctx := context.Background()
+	stood := setupOrphansOn(point.dir)
 	store, err := OpenDurableStateStore(point.dir)
 	if err != nil {
 		t.Errorf("killed before %s: the store does not open: %v", point.before, err)
-		return killLeftNothingThatStarts
+		return killLeftNothingThatStarts, nil
 	}
 	defer store.Close()
 	device, err := newKillRestartDevice(t, store, "the restart after a kill before "+point.before)
 	if err != nil {
 		t.Errorf("killed before %s: the next start refuses the device: %v", point.before, err)
-		return killLeftNothingThatStarts
+		return killLeftNothingThatStarts, nil
 	}
 	defer device.Close()
 	identity, err := device.Identity()
 	if errors.Is(err, ErrNoIdentity) {
+		// A SETUP'S ORPHANS ARE SWEPT BY THE START (LRI R85; erase authority (j)): whatever of the
+		// heads and the phrase key the kill left beside no identity record is gone, from the disk and
+		// from the store's reads, before setup runs again
+		if left := setupOrphansOn(point.dir); len(left) != 0 {
+			t.Errorf("killed before %s: the start left %v standing beside no identity record (%v stood before it): a setup's orphans were not swept",
+				point.before, left, stood)
+			return killLeftNothingThatStarts, nil
+		}
+		if _, err := store.IdentityHeads(); !errors.Is(err, ErrStateNotFound) {
+			t.Errorf("killed before %s: after the start the store's heads read answers %v, want ErrStateNotFound", point.before, err)
+			return killLeftNothingThatStarts, nil
+		}
+		if _, err := store.PhraseKey(); !errors.Is(err, ErrStateNotFound) {
+			t.Errorf("killed before %s: after the start the store's phrase key read answers %v, want ErrStateNotFound", point.before, err)
+			return killLeftNothingThatStarts, nil
+		}
 		// SETUP RUNS AGAIN, and its identity stands
 		words, err := device.CreateIdentity()
 		if err != nil {
 			t.Errorf("killed before %s: no identity, and CreateIdentity answers %v", point.before, err)
-			return killLeftNothingThatStarts
+			return killLeftNothingThatStarts, nil
 		}
 		typed := strings.Join(words, " ")
 		clear(words)
 		if err := device.ConfirmWords(ctx, typed); err != nil {
 			t.Errorf("killed before %s: no identity, and setting up again answers %v", point.before, err)
-			return killLeftNothingThatStarts
+			return killLeftNothingThatStarts, nil
 		}
 		if _, err := device.Identity(); err != nil {
 			t.Errorf("killed before %s: setting up again made no identity: %v", point.before, err)
-			return killLeftNothingThatStarts
+			return killLeftNothingThatStarts, nil
 		}
 		if _, err := store.PhraseKey(); err != nil {
 			t.Errorf("killed before %s: setting up again left no phrase key: %v", point.before, err)
-			return killLeftNothingThatStarts
+			return killLeftNothingThatStarts, nil
 		}
-		return killLeftNoIdentity
+		return killLeftNoIdentity, stood
 	}
 	if err != nil {
 		t.Errorf("killed before %s: the restarted device's identity answers %v", point.before, err)
-		return killLeftNothingThatStarts
+		return killLeftNothingThatStarts, nil
 	}
 	// A WHOLE IDENTITY: its phrase key held, as a first device's is, and its self group held once
 	// Restore has run
 	if !identity.PhraseDevice {
 		t.Errorf("killed before %s: the identity came back without its phrase device mark", point.before)
-		return killLeftNothingThatStarts
+		return killLeftNothingThatStarts, nil
 	}
 	if _, err := store.PhraseKey(); err != nil {
 		t.Errorf("killed before %s: the identity came back as a phrase device with no phrase key: %v", point.before, err)
-		return killLeftNothingThatStarts
+		return killLeftNothingThatStarts, nil
 	}
 	if _, err := device.Restore(ctx); err != nil {
 		t.Errorf("killed before %s: Restore answered %v", point.before, err)
-		return killLeftNothingThatStarts
+		return killLeftNothingThatStarts, nil
 	}
 	if !device.holdsSystemGroup() {
 		t.Errorf("killed before %s: the identity came back and Restore holds no self group", point.before)
-		return killLeftNothingThatStarts
+		return killLeftNothingThatStarts, nil
 	}
-	return killLeftAWholeIdentity
+	return killLeftAWholeIdentity, nil
+}
+
+// setupOrphansOn is which of the two records a setup writes before its commit point -- the phrase key
+// and the heads -- stand as files in the store directory under dir, whatever stands beside them.
+func setupOrphansOn(dir string) []string {
+	standing := []string{}
+	for _, name := range []string{stateRootPhraseKeyName, stateRootHeadsName} {
+		if info, err := os.Lstat(filepath.Join(dir, stateDataDirName, name)); err == nil && info.Mode().IsRegular() {
+			standing = append(standing, name)
+		}
+	}
+	return standing
 }
 
 // newKillRestartDevice is newAnsweringDeviceOver with NewDevice's refusal answered rather than fatal,
@@ -438,4 +482,115 @@ func allZero(octets []byte) bool {
 		}
 	}
 	return true
+}
+
+// THE SWEEP ERASES ONLY BESIDE NO IDENTITY RECORD (LRI R85; erase authority (j)). Its premise is read
+// at the erase, so a direct call answers it too: a store whose identity record stands erases nothing,
+// since its heads and its phrase key are a whole identity's; the same store with its identity record
+// gone erases both, the phrase secret first. A stray at a record's name, which is not this store's
+// record, is left standing.
+//
+// THE CONTROL: the records the first sweep must not take are read back whole after it.
+func TestTheSetupOrphanSweepErasesOnlyBesideNoIdentityRecord(t *testing.T) {
+	dir := t.TempDir()
+	store := openTestStore(t, dir)
+	key := bytes.Repeat([]byte{0x11}, ed25519.PublicKeySize)
+	if err := store.PutIdentityHeads([]IdentityHead{{Root: key, Identity: []byte("the root's list")}}); err != nil {
+		t.Fatalf("PutIdentityHeads: %v", err)
+	}
+	if err := store.PutPhraseKey(&PhraseKeyRecord{IdentityKey: key, KeyNumber: 1, Seed: bytes.Repeat([]byte{0x22}, ed25519.SeedSize)}); err != nil {
+		t.Fatalf("PutPhraseKey: %v", err)
+	}
+	if err := store.PutIdentity(&IdentityRecord{Root: key, CurrentKey: key}); err != nil {
+		t.Fatalf("PutIdentity: %v", err)
+	}
+	if erased, err := store.SweepIdentityOrphans(); err != nil || len(erased) != 0 {
+		t.Errorf("beside a standing identity record the sweep erased %v (%v): a whole identity's records are no orphans", erased, err)
+	}
+	if _, err := store.IdentityHeads(); err != nil {
+		t.Fatalf("CONTROL FAILED: beside a standing identity record the heads read answers %v", err)
+	}
+	if _, err := store.PhraseKey(); err != nil {
+		t.Fatalf("CONTROL FAILED: beside a standing identity record the phrase key read answers %v", err)
+	}
+
+	// THE IDENTITY RECORD GONE: what stands beside no identity record is a setup's orphans
+	if err := os.Remove(filepath.Join(dir, stateDataDirName, stateRootIdentityName)); err != nil {
+		t.Fatalf("removing the identity record: %v", err)
+	}
+	erased, err := store.SweepIdentityOrphans()
+	if err != nil || !slices.Equal(erased, []string{stateRootPhraseKeyName, stateRootHeadsName}) {
+		t.Fatalf("beside no identity record the sweep erased %v (%v), want the phrase key and then the heads", erased, err)
+	}
+	if _, err := store.PhraseKey(); !errors.Is(err, ErrStateNotFound) {
+		t.Errorf("after the sweep the phrase key read answers %v, want ErrStateNotFound", err)
+	}
+	if _, err := store.IdentityHeads(); !errors.Is(err, ErrStateNotFound) {
+		t.Errorf("after the sweep the heads read answers %v, want ErrStateNotFound", err)
+	}
+
+	// A STRAY: a directory standing at the heads' name is not this store's record, and stays
+	stray := filepath.Join(dir, stateDataDirName, stateRootHeadsName)
+	if err := os.Mkdir(stray, 0o700); err != nil {
+		t.Fatalf("planting the stray: %v", err)
+	}
+	if erased, err := store.SweepIdentityOrphans(); err != nil || len(erased) != 0 {
+		t.Errorf("with a stray directory at the heads' name the sweep erased %v (%v): want nothing", erased, err)
+	}
+	if info, err := os.Lstat(stray); err != nil || !info.IsDir() {
+		t.Errorf("the stray directory at the heads' name was taken by the sweep (%v)", err)
+	}
+}
+
+// THE ENGINE AN IDENTITY REPLACES ERASES ITS COPY OF THE SIGNING KEY (LRI R85; review L-5's second
+// half). A device runs under its own key until its identity is made, and the making then builds its
+// engine again under the identity key. The engine it replaces holds a copy of device_sig that nothing
+// uses again, and nothing else would erase. The test keeps that copy's own array, read off the engine
+// before the making.
+//
+// THE CONTROL: before the making the array is the device's signing key, and after it the engine that
+// replaced it still holds the key it signs with.
+func TestTheEngineAnIdentityReplacesErasesItsCopyOfTheSigningKey(t *testing.T) {
+	ctx := context.Background()
+	device := newAnsweringDeviceOver(t, openTestStore(t, t.TempDir()), []byte("the device's nonce"))
+	replaced := device.currentEngine()
+	held := engineSignerForTest(t, replaced)
+	if allZero(held) || !bytes.Equal(held, device.signer) {
+		t.Fatalf("CONTROL FAILED: the engine built at the start does not hold the device's signing key (%d octets)", len(held))
+	}
+	words, err := device.CreateIdentity()
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	typed := strings.Join(words, " ")
+	clear(words)
+	if err := device.ConfirmWords(ctx, typed); err != nil {
+		t.Fatalf("ConfirmWords: %v", err)
+	}
+	standing := device.currentEngine()
+	if standing == replaced {
+		t.Fatal("CONTROL FAILED: the making did not replace the engine")
+	}
+	if kept := engineSignerForTest(t, standing); allZero(kept) || !bytes.Equal(kept, device.signer) {
+		t.Fatalf("CONTROL FAILED: the engine under the identity key does not hold the device's signing key (%d octets)", len(kept))
+	}
+	if !allZero(held) {
+		t.Errorf("the engine the identity replaced still holds its copy of the device's signing key (%d octets)", len(held))
+	}
+}
+
+// engineSignerForTest is the signing key array an engine holds. The engine keeps it in a field of its
+// own package, so the test reads it by reflection: a test that cannot see the array cannot see it
+// erased. A field renamed or retyped fails the test, rather than passing it blind.
+func engineSignerForTest(t *testing.T, engine messagegroup.GroupEngine) []byte {
+	t.Helper()
+	value := reflect.ValueOf(engine)
+	if value.Kind() != reflect.Pointer || value.Elem().Kind() != reflect.Struct {
+		t.Fatalf("the engine is a %T, not a pointer to a struct this test can read", engine)
+	}
+	field := value.Elem().FieldByName("signer")
+	if !field.IsValid() || field.Kind() != reflect.Slice || field.Type().Elem().Kind() != reflect.Uint8 {
+		t.Fatalf("the engine %T keeps no signer array this test can read", engine)
+	}
+	return field.Bytes()
 }

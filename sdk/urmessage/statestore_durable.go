@@ -234,6 +234,10 @@ type DeviceStore interface {
 	IdentityHeads() ([]IdentityHead, error)
 	PutPhraseKey(record *PhraseKeyRecord) error
 	PhraseKey() (*PhraseKeyRecord, error)
+	// SweepIdentityOrphans erases the heads and the phrase key from a store that holds no identity
+	// record: what a setup stopped before its commit point left (erase authority (j), LRI R85). A store
+	// whose identity record stands erases nothing. See [DurableStateStore.SweepIdentityOrphans].
+	SweepIdentityOrphans() ([]string, error)
 }
 
 // PeerHead is the highest 5.6 stream index this device has AUTHENTICATED on one peer's receiver
@@ -3600,4 +3604,55 @@ func (self *DurableStateStore) PhraseKey() (*PhraseKeyRecord, error) {
 		return nil, fmt.Errorf("%w: the phrase key record is not one this build wrote", ErrStateStoreFormat)
 	}
 	return &PhraseKeyRecord{IdentityKey: parts[0], KeyNumber: binary.BigEndian.Uint32(parts[1]), Seed: parts[2]}, nil
+}
+
+// SweepIdentityOrphans erases the phrase key record and the heads record, each by its own name, from
+// a store that holds NO identity record: ERASE AUTHORITY (j), A SETUP'S ORPHANS (LRI R85; review L-1's
+// caveat). It answers the names it erased, in the order it erased them.
+//
+// WHY THEY ARE ORPHANS. The identity record is the commit point of an identity's making
+// ([Device.putIdentityRecords]): the heads, then a phrase device's phrase key, then the identity record.
+// So the two standing with no identity record beside them are what a setup stopped before its commit
+// point left, and the phrase key among them is isk_seed[1], a phrase secret on the disk of a device
+// that holds no identity (P15; Property 4). Nothing reads either while no identity record stands, and
+// the next making replaces both; this erase is so that they do not wait for it.
+//
+// THE PREMISE IS READ AT THE ERASE, under the store's lock: an identity record that stands -- or whose
+// absence this store cannot prove -- erases nothing. Only a regular file at either name is erased, so a
+// stray that is not this store's record is left where it stands. A removal that fails leaves what it
+// did not take for the next start, which sweeps again.
+func (self *DurableStateStore) SweepIdentityOrphans() ([]string, error) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(self.identityRecordPath()); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return nil, fmt.Errorf("%w: whether an identity record stands could not be read, so no orphan of a setup was erased: %w",
+				ErrStateStoreState, err)
+		}
+		return nil, nil
+	}
+	erased := []string{}
+	// THE PHRASE SECRET FIRST
+	if regularFileStands(self.phraseKeyPath()) {
+		if err := self.removeLocked(self.phraseKeyPath()); err != nil {
+			return erased, err
+		}
+		erased = append(erased, stateRootPhraseKeyName)
+	}
+	if regularFileStands(self.identityHeadsPath()) {
+		if err := self.removeLocked(self.identityHeadsPath()); err != nil {
+			return erased, err
+		}
+		erased = append(erased, stateRootHeadsName)
+	}
+	return erased, nil
+}
+
+// regularFileStands answers whether a regular file stands at path itself, a link not followed.
+func regularFileStands(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
 }

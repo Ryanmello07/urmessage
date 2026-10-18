@@ -500,6 +500,14 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		if identity, heads, err = loadIdentity(store, ed25519.PublicKey(signerPub)); err != nil {
 			return nil, err
 		}
+		// A SETUP'S ORPHANS ARE SWEPT AT START (LRI R85; erase authority (j)): with no identity record,
+		// the heads and the phrase key that a setup stopped before its commit point wrote are erased
+		// before anything else runs. A removal that fails leaves them for the next start, and this
+		// start goes on: nothing reads them while no identity record stands, and the next making
+		// replaces both.
+		if identity == nil {
+			_, _ = store.SweepIdentityOrphans()
+		}
 	}
 	credential := []byte(signerPub)
 	if identity != nil {

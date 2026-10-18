@@ -262,11 +262,20 @@ func (self *Device) makeIdentity(parsed *messagegroup.RecoveryPhrase) error {
 		return fmt.Errorf("urmessage: the mls engine under the identity key: %w", err)
 	}
 	self.identityLock.Lock()
+	replaced := self.engine
 	self.engine = engine
 	self.identityPub = append([]byte(nil), record.CurrentKey...)
 	self.identity = state
 	self.heads = map[string][]byte{string(record.Root): state.extension.Data}
 	self.identityLock.Unlock()
+	// THE ENGINE THIS ONE REPLACES ERASES ITS COPY OF device_sig (LRI R85; review L-5's second half).
+	// Nothing founds, joins or restores through it after the swap above: each asks
+	// [Device.currentEngine] under admitMutex, which the making holds; a key package needs the
+	// identity, set in the same swap; and a past epoch loads through the engine that stands when it is
+	// asked. An engine that declares no erase has nothing to erase here.
+	if erasable, erases := replaced.(interface{ Zeroize() }); erases {
+		erasable.Zeroize()
+	}
 
 	return nil
 }
@@ -284,9 +293,9 @@ func (self *Device) makeIdentity(parsed *messagegroup.RecoveryPhrase) error {
 // identity record and the heads left a store no start would open again, and a stop before the phrase
 // key a phrase device without its phrase key.
 //
-// WHAT A STOP BEFORE THE IDENTITY RECORD LEAVES, stated: the heads and, on a phrase device, a phrase
-// key record of an identity that was never made, until a later setup replaces them. Nothing reads
-// either on a device with no identity record.
+// WHAT A STOP BEFORE THE IDENTITY RECORD LEAVES: the heads and, on a phrase device, a phrase key record
+// of an identity that was never made. The next start erases both, under erase authority (j)
+// ([DurableStateStore.SweepIdentityOrphans]; LRI R85), and nothing reads either before it.
 func (self *Device) putIdentityRecords(state *deviceIdentityState, seed []byte) error {
 	store, durable := self.stateStore.(DeviceStore)
 	if !durable {
