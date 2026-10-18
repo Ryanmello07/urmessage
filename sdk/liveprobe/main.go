@@ -1245,12 +1245,11 @@ func main() {
 	// leaf left standing reads every epoch and writes to the group. So the victim is given a second
 	// leaf and the assertion is that BOTH go, in ONE commit.
 	//
-	// AND IT IS A LEAF AND NOT A FOURTH urmessage.Device, WHICH IS A REAL LIMIT AND IS STATED. A
-	// Device's credential identity IS its signature key (device.go says so in as many words), and
-	// one Device mints one identity per state store, so there is no door in that package onto a
-	// SECOND leaf of an EXISTING identity. What can carry one is the seam: a key package whose
-	// credential names C's identity and whose signer is its own, which is exactly what cp3b's
-	// world.seamMemberClaiming builds and what its removal case is driven with. THAT IS NOT A
+	// AND IT IS A LEAF AND NOT A FOURTH urmessage.Device, WHICH IS A REAL LIMIT AND IS STATED. One
+	// Device is one device, and until a later slice links a second one (Task 27) there is no door in
+	// that package onto a SECOND leaf of an EXISTING identity. What can carry one is the seam: a key
+	// package whose credential names C's identity and whose signer is its own, which is exactly what
+	// cp3b's world.seamMemberClaiming builds and what its removal case is driven with. THAT IS NOT A
 	// FORGERY WHEN THAT IDENTITY COMMITS THE ADD: §11's self-service rule gives every member its own
 	// device leaves, and R6a requires an Add claiming an identity already in the group to be
 	// committed BY that identity -- so C's own AddMemberAndPublish is the only call that can land it,

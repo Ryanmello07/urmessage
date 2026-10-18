@@ -242,12 +242,12 @@ Hence the named refusal rather than a late, generic "a wrap did not open".
       wraps pastEpoch FAILED gaps`.
 
     **What this step does NOT do, and why.** The victim's second device is a **leaf**, not a fourth
-    `urmessage.Device`: a Device's credential identity *is* its signature key and it mints one
-    identity per state store, so that package has no door onto a second leaf of an existing
-    identity. What carries one is a seam-level key package -- BOUND: a further device of C's
-    identity, the next base of the list C's own device publishes, made from the words C typed back
-    in step 5 -- whose credential names C's identity and
-    whose signer is its own — the same construction as `cp3b`'s `world.seamMemberClaiming`. That
+    `urmessage.Device`: one Device is one device, and until a later slice links a second one (Task
+    27) that package has no door onto a second leaf of an existing identity. What carries one is a
+    seam-level key package whose credential names C's identity and whose signer is its own, BOUND
+    as a further device of C's identity: the next base of the list C's own device publishes, made
+    from the words C typed back in step 5. It is the same construction as `cp3b`'s
+    `world.seamMemberClaiming`. That
     leaf never connects and never fetches; a fourth *reading* party would need a fourth credential
     and this deployment has three accounts. For the same reason there is **no online non-committer
     survivor**: with three accounts and one victim there are exactly two survivors, and one of them
