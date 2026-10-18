@@ -280,26 +280,34 @@ func (self *Device) makeIdentity(parsed *messagegroup.RecoveryPhrase) error {
 	return nil
 }
 
-// putIdentityRecords writes the identity layer's three records, on a durable store: the heads, then
-// -- on a phrase device only, for its current key number only (Property 4) -- the phrase key, and the
-// identity record LAST. A store that is not durable keeps nothing, as for every other record.
+// putIdentityRecords writes the identity layer's three records, on a durable store, between the two
+// halves of the setup mark: the mark, then the heads, then -- on a phrase device only, for its current
+// key number only (Property 4) -- the phrase key, then the identity record, and the mark's removal
+// LAST. A store that is not durable keeps nothing, as for every other record.
 //
 // THE IDENTITY RECORD IS THE COMMIT POINT (LRI R84 item 1; review L-1). Each record is written
 // atomically, and the record a start reads first is the identity record ([loadIdentity]). So a
 // process stopped before the identity record leaves a device with no identity, over which setup runs
-// again, and the next making replaces the heads and the phrase key it finds, since both writes
-// replace; and a process stopped after it leaves a whole identity, whose self group is founded again
+// again; and a process stopped after it leaves a whole identity, whose self group is founded again
 // at start if its founding did not finish (R76 item 2). Written in the other order, a stop between the
 // identity record and the heads left a store no start would open again, and a stop before the phrase
 // key a phrase device without its phrase key.
 //
-// WHAT A STOP BEFORE THE IDENTITY RECORD LEAVES: the heads and, on a phrase device, a phrase key record
-// of an identity that was never made. The next start erases both, under erase authority (j)
-// ([DurableStateStore.SweepIdentityOrphans]; LRI R85), and nothing reads either before it.
+// THE SETUP MARK IS WHAT A STOP BEFORE THE COMMIT POINT IS SWEPT ON (LRI R86). Such a stop leaves the
+// heads and, on a phrase device, a phrase key record of an identity that was never made, beside the
+// mark this making wrote first: the next start erases them under erase authority (j)
+// ([DurableStateStore.SweepIdentityOrphans]), and nothing reads either before it. The mark goes only
+// once the identity record stands, so a stop between the two leaves a whole identity and its mark,
+// and the next start takes the mark alone. A removal of the mark that fails here fails nothing: the
+// identity record already stands, and the next start takes the mark away beside it.
 func (self *Device) putIdentityRecords(state *deviceIdentityState, seed []byte) error {
 	store, durable := self.stateStore.(DeviceStore)
 	if !durable {
 		return nil
+	}
+	// THE SETUP MARK, FIRST
+	if err := store.PutSetupMark(state.record.Root); err != nil {
+		return fmt.Errorf("urmessage: the setup mark: %w", err)
 	}
 	if err := store.PutIdentityHeads([]IdentityHead{{Root: state.record.Root, Identity: state.extension.Data}}); err != nil {
 		return fmt.Errorf("urmessage: the heads: %w", err)
@@ -317,6 +325,8 @@ func (self *Device) putIdentityRecords(state *deviceIdentityState, seed []byte) 
 	if err := store.PutIdentity(&state.record); err != nil {
 		return fmt.Errorf("urmessage: the identity record: %w", err)
 	}
+	// THE MARK GOES, ONLY NOW THAT THE IDENTITY RECORD STANDS
+	_ = store.ClearSetupMark()
 	return nil
 }
 

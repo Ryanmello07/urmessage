@@ -234,9 +234,12 @@ type DeviceStore interface {
 	IdentityHeads() ([]IdentityHead, error)
 	PutPhraseKey(record *PhraseKeyRecord) error
 	PhraseKey() (*PhraseKeyRecord, error)
-	// SweepIdentityOrphans erases the heads and the phrase key from a store that holds no identity
-	// record: what a setup stopped before its commit point left (erase authority (j), LRI R85). A store
-	// whose identity record stands erases nothing. See [DurableStateStore.SweepIdentityOrphans].
+	// the setup mark (LRI R86): PutSetupMark writes it before the three records above, ClearSetupMark
+	// takes it away once the identity record stands, and SweepIdentityOrphans erases the heads and
+	// the phrase key a setup left only where the mark stands with no identity record (erase authority
+	// (j)). With no mark, nothing is erased. See [DurableStateStore.SweepIdentityOrphans].
+	PutSetupMark(identityKey []byte) error
+	ClearSetupMark() error
 	SweepIdentityOrphans() ([]string, error)
 }
 
@@ -883,6 +886,9 @@ const (
 	stateKindIdentity      byte = 11
 	stateKindIdentityHeads byte = 12
 	stateKindPhraseKey     byte = 13
+	// the setup mark (LRI R86): the store's own note that an identity's making is writing the three
+	// above, and the one fact erase authority (j) erases on
+	stateKindSetupMark byte = 14
 )
 
 // encodeStateRecord frames one record: magic, version, kind, the parts each length-prefixed, and
@@ -1204,8 +1210,9 @@ func (self *DurableStateStore) groupFolderNameOf(root string, entry os.DirEntry)
 // store writes into its data directory, defined here and nowhere else, as the group folder's are
 // below. Every path helper builds its path from one of them, and
 // TestEveryRootPathIsOneOfTheStoresOwnNames holds the two together both ways and holds that no other
-// spelling of them stands in this file. The last three are the identity layer's: the identity
-// record, the heads and the phrase key, under the names section 8.1's table gives them.
+// spelling of them stands in this file. Three are the identity layer's: the identity record, the
+// heads and the phrase key, under the names section 8.1's table gives them. The last is the setup
+// mark an identity's making writes before them and takes away after them (LRI R86).
 const (
 	stateRootDeviceName     = "device"
 	stateRootPrivateName    = "priv"
@@ -1214,12 +1221,13 @@ const (
 	stateRootIdentityName   = "identity"
 	stateRootHeadsName      = "identity-heads"
 	stateRootPhraseKeyName  = "phrase-key"
+	stateRootSetupMarkName  = "identity-setup"
 )
 
 // stateRootNames is the set above, as one list.
 var stateRootNames = []string{
 	stateRootDeviceName, stateRootPrivateName, stateRootKeyPackageName, stateRootGroupsName,
-	stateRootIdentityName, stateRootHeadsName, stateRootPhraseKeyName,
+	stateRootIdentityName, stateRootHeadsName, stateRootPhraseKeyName, stateRootSetupMarkName,
 }
 
 // stateRootNamesHeld answers which of the store's own root names a data directory holds, each
@@ -1286,6 +1294,11 @@ func (self *DurableStateStore) identityHeadsPath() string {
 
 func (self *DurableStateStore) phraseKeyPath() string {
 	return filepath.Join(self.dataDir, stateRootPhraseKeyName)
+}
+
+// setupMarkPath is the setup mark, store kind 14 (LRI R86): see [DurableStateStore.PutSetupMark].
+func (self *DurableStateStore) setupMarkPath() string {
+	return filepath.Join(self.dataDir, stateRootSetupMarkName)
 }
 
 // THE STORE'S OWN NAMES IN A GROUP'S FOLDER (R34, item 9): every name this store writes into one
@@ -3606,49 +3619,100 @@ func (self *DurableStateStore) PhraseKey() (*PhraseKeyRecord, error) {
 	return &PhraseKeyRecord{IdentityKey: parts[0], KeyNumber: binary.BigEndian.Uint32(parts[1]), Seed: parts[2]}, nil
 }
 
-// SweepIdentityOrphans erases the phrase key record and the heads record, each by its own name, from
-// a store that holds NO identity record: ERASE AUTHORITY (j), A SETUP'S ORPHANS (LRI R85; review L-1's
-// caveat). It answers the names it erased, in the order it erased them.
+// PutSetupMark writes the SETUP MARK (LRI R86): this store's own note that an identity's making is
+// writing the identity layer's records, for the identity key it names. [Device.putIdentityRecords]
+// writes it FIRST, before the heads, and takes it away with [DurableStateStore.ClearSetupMark] only
+// once the identity record stands. It is the one fact erase authority (j) erases on
+// ([DurableStateStore.SweepIdentityOrphans]), and it is NEVER written because something is absent:
+// an identity record a quarantine moved away leaves no mark, so nothing of its identity is swept.
+func (self *DurableStateStore) PutSetupMark(identityKey []byte) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return err
+	}
+	if len(identityKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("%w: a setup mark names an identity key of 32 octets", ErrStateStoreFormat)
+	}
+	return self.writeRecord(self.setupMarkPath(), stateKindSetupMark, identityKey)
+}
+
+// ClearSetupMark takes the setup mark away. A mark that is not there is not a failure. It erases no
+// record of the identity: the mark is this store's note about its own writes, and with it gone,
+// authority (j) erases nothing.
+func (self *DurableStateStore) ClearSetupMark() error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return err
+	}
+	return self.removeLocked(self.setupMarkPath())
+}
+
+// SweepIdentityOrphans erases what an identity's making stopped before its commit point left: ERASE
+// AUTHORITY (j), A SETUP'S ORPHANS (LRI R85, R86; review L-1's caveat). It answers the names it erased,
+// in the order it erased them.
 //
-// WHY THEY ARE ORPHANS. The identity record is the commit point of an identity's making
-// ([Device.putIdentityRecords]): the heads, then a phrase device's phrase key, then the identity record.
-// So the two standing with no identity record beside them are what a setup stopped before its commit
-// point left, and the phrase key among them is isk_seed[1], a phrase secret on the disk of a device
-// that holds no identity (P15; Property 4). Nothing reads either while no identity record stands, and
-// the next making replaces both; this erase is so that they do not wait for it.
+// IT ERASES ONLY ON THE SETUP MARK, A FACT THIS STORE WROTE ITSELF (R86). The making writes the mark,
+// then the heads, a phrase device's phrase key and the identity record -- the commit point
+// ([Device.putIdentityRecords]) -- and takes the mark away only once the identity record stands. So:
+//   - a mark that reads as this store's, with no identity record beside it, is a making that stopped
+//     before its commit point. The heads and the phrase key beside it are that making's, and are
+//     erased, the phrase secret first (P15; Property 4), and the mark last, so that a sweep that stops
+//     part way is finished at the next start;
+//   - a mark beside an identity record that stands is a making that committed and stopped before the
+//     mark went: the mark alone is taken away, so that no stale mark is left to authorize anything.
 //
-// THE PREMISE IS READ AT THE ERASE, under the store's lock: an identity record that stands -- or whose
-// absence this store cannot prove -- erases nothing. Only a regular file at either name is erased, so a
-// stray that is not this store's record is left where it stands. A removal that fails leaves what it
-// did not take for the next start, which sweeps again.
+// WITH NO MARK, NOTHING IS ERASED, WHATEVER IS MISSING. An identity record that a quarantine moved
+// away leaves its heads and its phrase key beside no identity record and no mark, and they wait,
+// untouched, for the record to come back. A mark that does not read as this store's decides nothing,
+// and neither does an identity record whose absence the store cannot prove. Only a regular file is
+// erased at either record's name, so a stray is left where it stands. A removal that fails leaves what
+// it did not take, and its mark, for the next start.
 func (self *DurableStateStore) SweepIdentityOrphans() ([]string, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if err := self.refuseIfClosed(); err != nil {
 		return nil, err
 	}
-	if _, err := os.Lstat(self.identityRecordPath()); !errors.Is(err, os.ErrNotExist) {
-		if err != nil {
-			return nil, fmt.Errorf("%w: whether an identity record stands could not be read, so no orphan of a setup was erased: %w",
-				ErrStateStoreState, err)
-		}
+	mark, err := self.readRecord(self.setupMarkPath(), stateKindSetupMark)
+	if errors.Is(err, ErrStateNotFound) {
 		return nil, nil
 	}
+	if err == nil && (len(mark) != 1 || len(mark[0]) != ed25519.PublicKeySize) {
+		err = fmt.Errorf("%w: it names no identity key", ErrStateStoreFormat)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("urmessage: the setup mark does not read as this store's, so nothing is decided on it: %w", err)
+	}
 	erased := []string{}
-	// THE PHRASE SECRET FIRST
-	if regularFileStands(self.phraseKeyPath()) {
-		if err := self.removeLocked(self.phraseKeyPath()); err != nil {
-			return erased, err
+	_, err = os.Lstat(self.identityRecordPath())
+	switch {
+	case err == nil:
+		// THE MAKING COMMITTED: the identity record stands, and the mark alone goes
+	case errors.Is(err, os.ErrNotExist):
+		// A SETUP'S ORPHANS, THE PHRASE SECRET FIRST
+		if regularFileStands(self.phraseKeyPath()) {
+			if err := self.removeLocked(self.phraseKeyPath()); err != nil {
+				return erased, err
+			}
+			erased = append(erased, stateRootPhraseKeyName)
 		}
-		erased = append(erased, stateRootPhraseKeyName)
-	}
-	if regularFileStands(self.identityHeadsPath()) {
-		if err := self.removeLocked(self.identityHeadsPath()); err != nil {
-			return erased, err
+		if regularFileStands(self.identityHeadsPath()) {
+			if err := self.removeLocked(self.identityHeadsPath()); err != nil {
+				return erased, err
+			}
+			erased = append(erased, stateRootHeadsName)
 		}
-		erased = append(erased, stateRootHeadsName)
+	default:
+		return nil, fmt.Errorf("%w: whether an identity record stands beside the setup mark could not be read, so nothing was erased: %w",
+			ErrStateStoreState, err)
 	}
-	return erased, nil
+	// THE MARK, LAST
+	if err := self.removeLocked(self.setupMarkPath()); err != nil {
+		return erased, err
+	}
+	return append(erased, stateRootSetupMarkName), nil
 }
 
 // regularFileStands answers whether a regular file stands at path itself, a link not followed.

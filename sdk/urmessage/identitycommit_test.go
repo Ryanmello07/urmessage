@@ -26,15 +26,20 @@ import (
 )
 
 // THE IDENTITY RECORD IS THE COMMIT POINT (LRI R84 item 1; review L-1). ConfirmWords writes the
-// heads and the phrase key first and the identity record last, each atomically, and the record a
-// start reads first is the identity record. So a process killed anywhere in the making leaves one of
-// two disks: no identity, over which setup runs again, or a whole identity -- its heads, its phrase
-// key, and a self group founded again at start if its founding did not finish (R76 item 2).
+// setup mark first, then the heads and the phrase key, then the identity record, each atomically, and
+// takes the mark away last; the record a start reads first is the identity record. So a process
+// killed anywhere in the making leaves one of two disks: no identity, over which setup runs again, or
+// a whole identity -- its heads, its phrase key, and a self group founded again at start if its
+// founding did not finish (R76 item 2).
+//
+// AND EVERY START LEAVES NO SETUP MARK, AND NO ORPHAN (LRI R85, R86). With no identity, the start
+// erases the heads and the phrase key the killed making left beside its mark, and the mark; with a
+// whole identity, a mark the making did not live to take away is taken alone.
 //
 // THE KILL IS A COPY. killPointStore copies the store's whole data directory at the call of every
-// write the making makes, before the write lands, which is the disk a process killed at that instant
-// leaves behind. Every copy is then opened as the next process opens its directory, and every one
-// must start.
+// write the making makes, the mark's write and its removal included, before the write lands, which is
+// the disk a process killed at that instant leaves behind. Every copy is then opened as the next
+// process opens its directory, and every one must start.
 //
 // THE CONTROL: the copies span both outcomes, at least one with no identity and one with a whole
 // identity, so that neither arm is held vacuously, and the folder nothing killed starts too.
@@ -61,24 +66,30 @@ func TestASetupKilledBetweenAnyTwoWritesStartsWithNoIdentityOrAWholeOne(t *testi
 	for _, point := range points {
 		written = append(written, point.before)
 	}
-	for _, write := range []string{stateRootHeadsName, stateRootPhraseKeyName, stateRootIdentityName, "group-record"} {
-		if !containsString(written, write) {
-			t.Fatalf("the making wrote %v, and no %s: the kill points do not cover the making", written, write)
+	// THE MARK FIRST AND ITS REMOVAL AFTER THE COMMIT POINT: the order the kills are taken in
+	order := []string{stateRootSetupMarkName, stateRootHeadsName, stateRootPhraseKeyName, stateRootIdentityName, killBeforeMarkRemoval}
+	at := 0
+	for _, write := range written {
+		if at < len(order) && write == order[at] {
+			at += 1
 		}
+	}
+	if at != len(order) || !containsString(written, "group-record") {
+		t.Fatalf("the making wrote %v: want %v in that order, and a group record, so the kill points do not cover the making", written, order)
 	}
 	device.Close()
 
 	noIdentity, whole := 0, 0
-	sweptBy := map[string][]string{}
+	takenBy := map[string][]string{}
 	for _, point := range points {
-		outcome, swept := restartFromKill(t, point)
+		outcome, taken := restartFromKill(t, point)
 		switch outcome {
 		case killLeftNoIdentity:
 			noIdentity += 1
-			sweptBy[point.before] = swept
 		case killLeftAWholeIdentity:
 			whole += 1
 		}
+		takenBy[point.before] = taken
 	}
 	// THE CONTROL: the folder nothing killed starts, with the identity it made
 	untouched := killPoint{before: "nothing", dir: dir}
@@ -90,15 +101,23 @@ func TestASetupKilledBetweenAnyTwoWritesStartsWithNoIdentityOrAWholeOne(t *testi
 		t.Errorf("CONTROL FAILED: of %d kill(s), %d left no identity and %d a whole one; the kills must reach both",
 			len(points), noIdentity, whole)
 	}
-	// THE SWEEP'S CONTROL (LRI R85): the kill just before the identity record left the phrase key and
-	// the heads standing beside no identity record, and the start that followed erased both, so the
-	// sweep's assertion in restartFromKill was not held over a disk with nothing to sweep
-	if swept := sweptBy[stateRootIdentityName]; len(swept) != 2 {
-		t.Errorf("CONTROL FAILED: the kill before the identity record left %v of the heads and the phrase key to sweep, want both", swept)
+	// THE SWEEP'S CONTROLS (LRI R85, R86), so that restartFromKill's assertions were not held over
+	// disks with nothing to take: the kill just before the identity record left the phrase key, the
+	// heads and the mark, and the start erased all three; the kill just before the mark's removal left
+	// a whole identity with its mark, and the start took the mark alone
+	if taken := takenBy[stateRootIdentityName]; !slices.Equal(taken, []string{stateRootPhraseKeyName, stateRootHeadsName, stateRootSetupMarkName}) {
+		t.Errorf("CONTROL FAILED: the start after the kill before the identity record took %v, want the phrase key, the heads and the setup mark", taken)
 	}
-	t.Logf("%d kill points over the writes %v: %d left no identity, %d a whole identity; swept at each start with no identity: %v (account digest %s)",
-		len(points), written, noIdentity, whole, sweptBy, digestForTest(made.AccountId))
+	if taken := takenBy[killBeforeMarkRemoval]; !slices.Equal(taken, []string{stateRootSetupMarkName}) {
+		t.Errorf("CONTROL FAILED: the start after the kill before the mark's removal took %v, want the setup mark alone", taken)
+	}
+	t.Logf("%d kill points over the writes %v: %d left no identity, %d a whole identity; what each start took: %v (account digest %s)",
+		len(points), written, noIdentity, whole, takenBy, digestForTest(made.AccountId))
 }
+
+// killBeforeMarkRemoval names the kill at the call that takes the setup mark away, which comes after
+// the identity record stands.
+const killBeforeMarkRemoval = "the setup mark's removal"
 
 type killOutcome int
 
@@ -109,15 +128,16 @@ const (
 )
 
 // restartFromKill opens one kill's disk as the next process opens its directory, and says what it
-// holds: no identity, its setup's orphans swept by the start, over which setup runs again to an
-// identity that itself restarts whole; or a whole identity, its heads naming its own list, its phrase
-// key held, and a self group held once Restore has run. Anything else is a failure of the test, named
-// by the write the kill came before. With no identity, it also answers the orphans the start swept:
-// those of the heads and the phrase key that stood on the kill's disk.
+// holds: no identity, its setup's orphans and its mark swept by the start, over which setup runs again
+// to an identity that itself restarts whole; or a whole identity, its heads naming its own list, its
+// phrase key held, no setup mark left beside it, and a self group held once Restore has run. Anything
+// else is a failure of the test, named by the write the kill came before. It also answers what the
+// start took of the setup's records -- the phrase key, the heads and the setup mark -- that stood on
+// the kill's disk.
 func restartFromKill(t *testing.T, point killPoint) (killOutcome, []string) {
 	t.Helper()
 	ctx := context.Background()
-	stood := setupOrphansOn(point.dir)
+	stood := setupRecordsOn(point.dir)
 	store, err := OpenDurableStateStore(point.dir)
 	if err != nil {
 		t.Errorf("killed before %s: the store does not open: %v", point.before, err)
@@ -130,12 +150,25 @@ func restartFromKill(t *testing.T, point killPoint) (killOutcome, []string) {
 		return killLeftNothingThatStarts, nil
 	}
 	defer device.Close()
+	left := setupRecordsOn(point.dir)
+	taken := []string{}
+	for _, name := range stood {
+		if !containsString(left, name) {
+			taken = append(taken, name)
+		}
+	}
+	// NO START LEAVES A SETUP MARK (LRI R86): with no identity it went with the orphans it authorized,
+	// and beside a whole identity it went alone
+	if containsString(left, stateRootSetupMarkName) {
+		t.Errorf("killed before %s: the start left the setup mark standing (%v stood before it)", point.before, stood)
+		return killLeftNothingThatStarts, nil
+	}
 	identity, err := device.Identity()
 	if errors.Is(err, ErrNoIdentity) {
-		// A SETUP'S ORPHANS ARE SWEPT BY THE START (LRI R85; erase authority (j)): whatever of the
-		// heads and the phrase key the kill left beside no identity record is gone, from the disk and
-		// from the store's reads, before setup runs again
-		if left := setupOrphansOn(point.dir); len(left) != 0 {
+		// A SETUP'S ORPHANS ARE SWEPT BY THE START (LRI R85, R86; erase authority (j)): whatever of the
+		// heads and the phrase key the kill left beside its mark and no identity record is gone, from
+		// the disk and from the store's reads, before setup runs again
+		if len(left) != 0 {
 			t.Errorf("killed before %s: the start left %v standing beside no identity record (%v stood before it): a setup's orphans were not swept",
 				point.before, left, stood)
 			return killLeftNothingThatStarts, nil
@@ -168,7 +201,11 @@ func restartFromKill(t *testing.T, point killPoint) (killOutcome, []string) {
 			t.Errorf("killed before %s: setting up again left no phrase key: %v", point.before, err)
 			return killLeftNothingThatStarts, nil
 		}
-		return killLeftNoIdentity, stood
+		if again := setupRecordsOn(point.dir); containsString(again, stateRootSetupMarkName) {
+			t.Errorf("killed before %s: setting up again left its setup mark standing beside the identity it made", point.before)
+			return killLeftNothingThatStarts, nil
+		}
+		return killLeftNoIdentity, taken
 	}
 	if err != nil {
 		t.Errorf("killed before %s: the restarted device's identity answers %v", point.before, err)
@@ -192,14 +229,15 @@ func restartFromKill(t *testing.T, point killPoint) (killOutcome, []string) {
 		t.Errorf("killed before %s: the identity came back and Restore holds no self group", point.before)
 		return killLeftNothingThatStarts, nil
 	}
-	return killLeftAWholeIdentity, nil
+	return killLeftAWholeIdentity, taken
 }
 
-// setupOrphansOn is which of the two records a setup writes before its commit point -- the phrase key
-// and the heads -- stand as files in the store directory under dir, whatever stands beside them.
-func setupOrphansOn(dir string) []string {
+// setupRecordsOn is which of the records a making writes around its commit point -- the phrase key,
+// the heads and the setup mark -- stand as files in the store directory under dir, in that order,
+// whatever stands beside them.
+func setupRecordsOn(dir string) []string {
 	standing := []string{}
-	for _, name := range []string{stateRootPhraseKeyName, stateRootHeadsName} {
+	for _, name := range []string{stateRootPhraseKeyName, stateRootHeadsName, stateRootSetupMarkName} {
 		if info, err := os.Lstat(filepath.Join(dir, stateDataDirName, name)); err == nil && info.Mode().IsRegular() {
 			standing = append(standing, name)
 		}
@@ -276,6 +314,16 @@ func (self *killPointStore) points() []killPoint {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
 	return append([]killPoint(nil), self.copies...)
+}
+
+func (self *killPointStore) PutSetupMark(identityKey []byte) error {
+	self.kill(stateRootSetupMarkName)
+	return self.DurableStateStore.PutSetupMark(identityKey)
+}
+
+func (self *killPointStore) ClearSetupMark() error {
+	self.kill(killBeforeMarkRemoval)
+	return self.DurableStateStore.ClearSetupMark()
 }
 
 func (self *killPointStore) PutIdentity(record *IdentityRecord) error {
@@ -484,61 +532,211 @@ func allZero(octets []byte) bool {
 	return true
 }
 
-// THE SWEEP ERASES ONLY BESIDE NO IDENTITY RECORD (LRI R85; erase authority (j)). Its premise is read
-// at the erase, so a direct call answers it too: a store whose identity record stands erases nothing,
-// since its heads and its phrase key are a whole identity's; the same store with its identity record
-// gone erases both, the phrase secret first. A stray at a record's name, which is not this store's
-// record, is left standing.
+// THE SWEEP ERASES ONLY ON ITS MARK, BESIDE NO IDENTITY RECORD (LRI R85, R86; erase authority (j)).
+// Its premise is read at the erase, so a direct call answers it too:
+//   - with no setup mark, nothing is erased, whether the identity record stands or not: an absence
+//     alone decides nothing;
+//   - a mark beside a standing identity record goes alone, and the records stay;
+//   - a mark beside no identity record takes the phrase key, then the heads, then itself;
+//   - a mark that does not read as this store's decides nothing;
+//   - a stray at a record's name, which is not this store's record, is left standing.
 //
-// THE CONTROL: the records the first sweep must not take are read back whole after it.
-func TestTheSetupOrphanSweepErasesOnlyBesideNoIdentityRecord(t *testing.T) {
+// THE CONTROL: the records each sweep must not take are read back whole after it.
+func TestTheSetupOrphanSweepErasesOnlyOnItsMarkBesideNoIdentityRecord(t *testing.T) {
 	dir := t.TempDir()
 	store := openTestStore(t, dir)
+	root := filepath.Join(dir, stateDataDirName)
+	record := filepath.Join(root, stateRootIdentityName)
 	key := bytes.Repeat([]byte{0x11}, ed25519.PublicKeySize)
-	if err := store.PutIdentityHeads([]IdentityHead{{Root: key, Identity: []byte("the root's list")}}); err != nil {
-		t.Fatalf("PutIdentityHeads: %v", err)
+	putOrphans := func() {
+		t.Helper()
+		if err := store.PutIdentityHeads([]IdentityHead{{Root: key, Identity: []byte("the root's list")}}); err != nil {
+			t.Fatalf("PutIdentityHeads: %v", err)
+		}
+		if err := store.PutPhraseKey(&PhraseKeyRecord{IdentityKey: key, KeyNumber: 1, Seed: bytes.Repeat([]byte{0x22}, ed25519.SeedSize)}); err != nil {
+			t.Fatalf("PutPhraseKey: %v", err)
+		}
 	}
-	if err := store.PutPhraseKey(&PhraseKeyRecord{IdentityKey: key, KeyNumber: 1, Seed: bytes.Repeat([]byte{0x22}, ed25519.SeedSize)}); err != nil {
-		t.Fatalf("PutPhraseKey: %v", err)
+	bothRead := func(when string) {
+		t.Helper()
+		if _, err := store.IdentityHeads(); err != nil {
+			t.Fatalf("%s the heads read answers %v", when, err)
+		}
+		if _, err := store.PhraseKey(); err != nil {
+			t.Fatalf("%s the phrase key read answers %v", when, err)
+		}
 	}
+	sweep := func(want []string, when string) {
+		t.Helper()
+		if erased, err := store.SweepIdentityOrphans(); err != nil || !slices.Equal(erased, want) {
+			t.Fatalf("%s the sweep erased %v (%v), want %v", when, erased, err, want)
+		}
+	}
+	putOrphans()
 	if err := store.PutIdentity(&IdentityRecord{Root: key, CurrentKey: key}); err != nil {
 		t.Fatalf("PutIdentity: %v", err)
 	}
+
+	// NO MARK: nothing, whether the identity record stands or not
+	sweep([]string{}, "with no setup mark, beside a standing identity record,")
+	bothRead("CONTROL FAILED: with no setup mark, beside a standing identity record,")
+	aside := filepath.Join(t.TempDir(), "quarantined")
+	if err := os.Rename(record, aside); err != nil {
+		t.Fatalf("moving the identity record away: %v", err)
+	}
 	if erased, err := store.SweepIdentityOrphans(); err != nil || len(erased) != 0 {
-		t.Errorf("beside a standing identity record the sweep erased %v (%v): a whole identity's records are no orphans", erased, err)
+		t.Fatalf("with no setup mark and no identity record the sweep erased %v (%v): an absence alone decided an erase", erased, err)
 	}
-	if _, err := store.IdentityHeads(); err != nil {
-		t.Fatalf("CONTROL FAILED: beside a standing identity record the heads read answers %v", err)
-	}
-	if _, err := store.PhraseKey(); err != nil {
-		t.Fatalf("CONTROL FAILED: beside a standing identity record the phrase key read answers %v", err)
+	bothRead("CONTROL FAILED: with no setup mark and no identity record,")
+	if err := os.Rename(aside, record); err != nil {
+		t.Fatalf("putting the identity record back: %v", err)
 	}
 
-	// THE IDENTITY RECORD GONE: what stands beside no identity record is a setup's orphans
-	if err := os.Remove(filepath.Join(dir, stateDataDirName, stateRootIdentityName)); err != nil {
+	// A MARK BESIDE A STANDING IDENTITY RECORD: the mark alone
+	if err := store.PutSetupMark(key); err != nil {
+		t.Fatalf("PutSetupMark: %v", err)
+	}
+	sweep([]string{stateRootSetupMarkName}, "with the setup mark beside a standing identity record")
+	bothRead("CONTROL FAILED: with the setup mark beside a standing identity record,")
+	if _, err := store.Identity(); err != nil {
+		t.Fatalf("CONTROL FAILED: the identity record beside the setup mark answers %v", err)
+	}
+
+	// A MARK BESIDE NO IDENTITY RECORD: the phrase secret first, then the heads, and the mark last
+	if err := store.PutSetupMark(key); err != nil {
+		t.Fatalf("PutSetupMark: %v", err)
+	}
+	if err := os.Remove(record); err != nil {
 		t.Fatalf("removing the identity record: %v", err)
 	}
-	erased, err := store.SweepIdentityOrphans()
-	if err != nil || !slices.Equal(erased, []string{stateRootPhraseKeyName, stateRootHeadsName}) {
-		t.Fatalf("beside no identity record the sweep erased %v (%v), want the phrase key and then the heads", erased, err)
-	}
+	sweep([]string{stateRootPhraseKeyName, stateRootHeadsName, stateRootSetupMarkName}, "with the setup mark and no identity record")
 	if _, err := store.PhraseKey(); !errors.Is(err, ErrStateNotFound) {
 		t.Errorf("after the sweep the phrase key read answers %v, want ErrStateNotFound", err)
 	}
 	if _, err := store.IdentityHeads(); !errors.Is(err, ErrStateNotFound) {
 		t.Errorf("after the sweep the heads read answers %v, want ErrStateNotFound", err)
 	}
+	if regularFileStands(filepath.Join(root, stateRootSetupMarkName)) {
+		t.Errorf("after the sweep the setup mark still stands")
+	}
+
+	// A MARK THAT DOES NOT READ AS THIS STORE'S decides nothing
+	putOrphans()
+	if err := os.WriteFile(filepath.Join(root, stateRootSetupMarkName), []byte("not a record this store wrote"), 0o600); err != nil {
+		t.Fatalf("planting the false mark: %v", err)
+	}
+	if erased, err := store.SweepIdentityOrphans(); err == nil || len(erased) != 0 {
+		t.Fatalf("with a setup mark that does not read as this store's the sweep erased %v (%v): want nothing, and the refusal", erased, err)
+	}
+	bothRead("CONTROL FAILED: beside a setup mark that does not read as this store's,")
+	if err := os.Remove(filepath.Join(root, stateRootSetupMarkName)); err != nil {
+		t.Fatalf("removing the false mark: %v", err)
+	}
 
 	// A STRAY: a directory standing at the heads' name is not this store's record, and stays
-	stray := filepath.Join(dir, stateDataDirName, stateRootHeadsName)
+	if err := os.Remove(filepath.Join(root, stateRootHeadsName)); err != nil {
+		t.Fatalf("removing the heads: %v", err)
+	}
+	stray := filepath.Join(root, stateRootHeadsName)
 	if err := os.Mkdir(stray, 0o700); err != nil {
 		t.Fatalf("planting the stray: %v", err)
 	}
-	if erased, err := store.SweepIdentityOrphans(); err != nil || len(erased) != 0 {
-		t.Errorf("with a stray directory at the heads' name the sweep erased %v (%v): want nothing", erased, err)
+	if err := store.PutSetupMark(key); err != nil {
+		t.Fatalf("PutSetupMark: %v", err)
 	}
+	sweep([]string{stateRootPhraseKeyName, stateRootSetupMarkName}, "with a stray directory at the heads' name")
 	if info, err := os.Lstat(stray); err != nil || !info.IsDir() {
 		t.Errorf("the stray directory at the heads' name was taken by the sweep (%v)", err)
+	}
+}
+
+// AN IDENTITY RECORD MOVED AWAY AND PUT BACK STARTS WHOLE (LRI R86). A quarantine that moves the
+// identity record away while the app starts leaves the heads and the phrase key beside no identity
+// record and no setup mark. That start runs with no identity and erases nothing, since an absence
+// alone decides nothing; once the record is put back, the next start opens the identity whole, its
+// phrase key included.
+//
+// THE CONTROL: the making left no setup mark, and the start with the record away found no identity.
+func TestAnIdentityRecordMovedAwayAndPutBackStartsWhole(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenDurableStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := newAnsweringDeviceOver(t, store, []byte("the first start's nonce"))
+	words, err := device.CreateIdentity()
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	typed := strings.Join(words, " ")
+	clear(words)
+	if err := device.ConfirmWords(ctx, typed); err != nil {
+		t.Fatalf("ConfirmWords: %v", err)
+	}
+	made, err := device.Identity()
+	if err != nil {
+		t.Fatalf("Identity: %v", err)
+	}
+	device.Close()
+	store.Close()
+	whole := []string{stateRootPhraseKeyName, stateRootHeadsName}
+	if standing := setupRecordsOn(dir); !slices.Equal(standing, whole) {
+		t.Fatalf("CONTROL FAILED: the making left %v, want the phrase key and the heads and no setup mark", standing)
+	}
+
+	// THE QUARANTINE: the identity record moved away, and a start
+	record := filepath.Join(dir, stateDataDirName, stateRootIdentityName)
+	aside := filepath.Join(t.TempDir(), "quarantined")
+	if err := os.Rename(record, aside); err != nil {
+		t.Fatalf("moving the identity record away: %v", err)
+	}
+	away, err := OpenDurableStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := newKillRestartDevice(t, away, "the start with the record away")
+	if err != nil {
+		t.Fatalf("the start with the identity record away refused: %v", err)
+	}
+	if _, err := started.Identity(); !errors.Is(err, ErrNoIdentity) {
+		t.Fatalf("CONTROL FAILED: the start with the identity record away answers %v, want ErrNoIdentity", err)
+	}
+	if standing := setupRecordsOn(dir); !slices.Equal(standing, whole) {
+		t.Errorf("the start with the identity record away and no setup mark left %v of %v: an absence alone decided an erase", standing, whole)
+	}
+	started.Close()
+	away.Close()
+
+	// THE RECORD PUT BACK: the identity starts whole, its phrase key included
+	if err := os.Rename(aside, record); err != nil {
+		t.Fatalf("putting the identity record back: %v", err)
+	}
+	back, err := OpenDurableStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer back.Close()
+	again, err := newKillRestartDevice(t, back, "the start after the record is put back")
+	if err != nil {
+		t.Fatalf("the start after the identity record is put back refused: %v", err)
+	}
+	defer again.Close()
+	identity, err := again.Identity()
+	if err != nil {
+		t.Fatalf("after the put-back the identity answers %v", err)
+	}
+	if identity.AccountId != made.AccountId || !identity.PhraseDevice {
+		t.Fatalf("after the put-back the identity is another (the same account: %v; a phrase device: %v)",
+			identity.AccountId == made.AccountId, identity.PhraseDevice)
+	}
+	phraseKey, err := back.PhraseKey()
+	if err != nil {
+		t.Fatalf("after the put-back the phrase key read answers %v: the phrase device's key was lost", err)
+	}
+	clear(phraseKey.Seed)
+	if _, err := again.Restore(ctx); err != nil || !again.holdsSystemGroup() {
+		t.Errorf("after the put-back Restore answers %v and holds a self group: %v", err, again.holdsSystemGroup())
 	}
 }
 

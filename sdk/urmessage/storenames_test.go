@@ -109,7 +109,8 @@ func TestEveryGroupPathIsOneOfTheStoresOwnNames(t *testing.T) {
 
 // EVERY PATH THIS STORE WRITES AT ITS ROOT IS ONE OF THE ROOT'S OWN NAMES, AND A STRAY AT THE ROOT IS
 // NEVER READ AS ONE (identity phase 1's Task 12, Property 5). The root holds the device's records and
-// the identity layer's three beside them (Spec A A-36 section 8.1), and the reader that decides on them
+// the identity layer's three beside them (Spec A A-36 section 8.1), with the setup mark an identity's
+// making writes around those three (LRI R86), and the reader that decides on them
 // -- [DurableStateStore.PutDeviceIdentity]'s guard, which refuses a device key beside an identity that
 // would not name it -- asks which of the root's own names stand ([stateRootNamesHeld]). So:
 //   - every path helper's first element below the data directory is in the set, and every name in
@@ -132,6 +133,7 @@ func TestEveryRootPathIsOneOfTheStoresOwnNames(t *testing.T) {
 		"identityRecordPath": store.identityRecordPath(),
 		"identityHeadsPath":  store.identityHeadsPath(),
 		"phraseKeyPath":      store.phraseKeyPath(),
+		"setupMarkPath":      store.setupMarkPath(),
 		"groupDir":           store.groupDir(bytes.Repeat([]byte{0x76}, GroupIdBytes)),
 	}
 	named := map[string]bool{}
