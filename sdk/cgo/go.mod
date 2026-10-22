@@ -11,7 +11,7 @@
 // loopback.go.mod, which adds the message server the harness runs in process.
 module github.com/urnetwork/message/sdk/cgo
 
-go 1.26.5
+go 1.27.3
 
 require (
 	github.com/urnetwork/connect v0.0.0

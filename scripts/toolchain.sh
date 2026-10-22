@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bash scripts/toolchain.sh                      print the pinned toolchain (go1.27.2 today)
+# Usage: bash scripts/toolchain.sh                      print the pinned toolchain (go1.27.3 today)
 #        bash scripts/toolchain.sh --check              the go command, forced to the pin, runs it
 #        bash scripts/toolchain.sh --artefact <file>... each built file records the pin
 #        bash scripts/toolchain.sh --self-test <dir>    this script's own controls, in a scratch dir
@@ -20,7 +20,7 @@
 # under the new compiler), never a side effect of the go command a host happens to have.
 #
 # --check fails, naming the fix, when the pinned toolchain cannot be had: the go command downloads
-# it when it may (GOPROXY reachable), and uses a go1.27.2 binary on PATH when there is one.
+# it when it may (GOPROXY reachable), and uses a go1.27.3 binary on PATH when there is one.
 #
 # --artefact asks each file with `go version`, which reads the build information the linker wrote
 # into it, and fails on any other answer, a file that is not a Go build among them.
@@ -48,7 +48,7 @@ fi
 # The go command, forced to the pin, must be the pin.
 #
 # ITS ANSWER IS WHAT IT WRITES TO STDOUT, AND NOTHING ELSE. The first time a host's go command has to
-# fetch the pin it says so on stderr ("go: downloading go1.27.2 (linux/amd64)") and then answers.
+# fetch the pin it says so on stderr ("go: downloading go1.27.3 (linux/amd64)") and then answers.
 # This check read both streams as the answer until a runner whose go was 1.27.1 showed it: two lines
 # are not the pin, so a host that HAD just fetched the pin was refused, with the fetch's own line
 # quoted as the reason. stderr is kept for the failure message, where it is the diagnosis.
