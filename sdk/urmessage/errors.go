@@ -947,6 +947,14 @@ var (
 	ErrNoIdentity = errors.New("urmessage: this device has no identity yet: CreateIdentity, then ConfirmWords")
 	// CreateIdentity or ConfirmWords on a device that already has an identity.
 	ErrIdentityExists = errors.New("urmessage: this device already has an identity")
+	// THIS DEVICE'S IDENTITY CANNOT BE READ (LRI R89 item 1; review D2L-1, L-D1, G-D1): its heads or its
+	// phrase key stand with no identity record and no setup mark beside them. The making writes the mark
+	// first and the identity record last, so only an identity record that was moved away -- by a
+	// quarantine, a sync tool or a person -- leaves them so. It is never "no identity": Identity answers
+	// it, and CreateIdentity, ConfirmWords and Restore refuse with it, so that no setup writes over a
+	// live identity whose record is away. Put back, the record opens the identity whole at the next
+	// start. sdk/cgo answers it as URNET_MESSAGE_IDENTITY_UNREADABLE.
+	ErrIdentityUnreadable = errors.New("urmessage: this device's identity cannot be read: its records stand without its identity record")
 	// ConfirmWords with no words offered: CreateIdentity first. A restart offers new words.
 	ErrNoWordsOffered = errors.New("urmessage: no recovery phrase has been offered on this device; CreateIdentity first")
 	// The words typed back are not the words shown: each wrong word is named by its position, and

@@ -116,8 +116,8 @@ var layeringRules = map[string]layeringRule{
 	},
 	"sdk/urmessage": {
 		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "syntax"},
-		external: []string{"github.com/urnetwork/connect", "google.golang.org/protobuf"},
-		reason:   "the device and group orchestration over the SDK's transport and stores",
+		external: []string{"github.com/urnetwork/connect", "github.com/urnetwork/glog", "google.golang.org/protobuf"},
+		reason:   "the device and group orchestration over the SDK's transport and stores; glog, the logger the library's host routes to its log directory, for the start's one-line notes on the setup mark (LRI R89 item 3)",
 	},
 	"sdk/cgo": {
 		module:   []string{"messagegroup", "protocol", "sdk", "sdk/urmessage"},

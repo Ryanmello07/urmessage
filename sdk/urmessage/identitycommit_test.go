@@ -593,9 +593,7 @@ func TestTheSetupOrphanSweepErasesOnlyOnItsMarkBesideNoIdentityRecord(t *testing
 	}
 
 	// A MARK BESIDE A STANDING IDENTITY RECORD: the mark alone
-	if err := store.PutSetupMark(key); err != nil {
-		t.Fatalf("PutSetupMark: %v", err)
-	}
+	plantSetupMark(t, store, key)
 	sweep([]string{stateRootSetupMarkName}, "with the setup mark beside a standing identity record")
 	bothRead("CONTROL FAILED: with the setup mark beside a standing identity record,")
 	if _, err := store.Identity(); err != nil {
@@ -603,9 +601,7 @@ func TestTheSetupOrphanSweepErasesOnlyOnItsMarkBesideNoIdentityRecord(t *testing
 	}
 
 	// A MARK BESIDE NO IDENTITY RECORD: the phrase secret first, then the heads, and the mark last
-	if err := store.PutSetupMark(key); err != nil {
-		t.Fatalf("PutSetupMark: %v", err)
-	}
+	plantSetupMark(t, store, key)
 	if err := os.Remove(record); err != nil {
 		t.Fatalf("removing the identity record: %v", err)
 	}
@@ -641,22 +637,23 @@ func TestTheSetupOrphanSweepErasesOnlyOnItsMarkBesideNoIdentityRecord(t *testing
 	if err := os.Mkdir(stray, 0o700); err != nil {
 		t.Fatalf("planting the stray: %v", err)
 	}
-	if err := store.PutSetupMark(key); err != nil {
-		t.Fatalf("PutSetupMark: %v", err)
-	}
+	plantSetupMark(t, store, key)
 	sweep([]string{stateRootPhraseKeyName, stateRootSetupMarkName}, "with a stray directory at the heads' name")
 	if info, err := os.Lstat(stray); err != nil || !info.IsDir() {
 		t.Errorf("the stray directory at the heads' name was taken by the sweep (%v)", err)
 	}
 }
 
-// AN IDENTITY RECORD MOVED AWAY AND PUT BACK STARTS WHOLE (LRI R86). A quarantine that moves the
-// identity record away while the app starts leaves the heads and the phrase key beside no identity
-// record and no setup mark. That start runs with no identity and erases nothing, since an absence
-// alone decides nothing; once the record is put back, the next start opens the identity whole, its
-// phrase key included.
+// AN IDENTITY RECORD MOVED AWAY AND PUT BACK STARTS WHOLE, A SETUP ATTEMPTED MEANWHILE INCLUDED (LRI
+// R86, R89 item 1; review D2L-1, L-D1, G-D1). A quarantine that moves the identity record away while
+// the app starts leaves the heads and the phrase key beside no identity record and no setup mark. That
+// start erases nothing, since an absence alone decides nothing, and it answers that the identity
+// cannot be read -- never "no identity", which sends the app to setup. A setup attempted then is
+// refused before anything is written, so that once the record is put back the next start opens the
+// identity whole, its phrase key included.
 //
-// THE CONTROL: the making left no setup mark, and the start with the record away found no identity.
+// THE CONTROL: the making left no setup mark, and the records the away start found are byte for byte
+// the ones the making wrote.
 func TestAnIdentityRecordMovedAwayAndPutBackStartsWhole(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -695,15 +692,29 @@ func TestAnIdentityRecordMovedAwayAndPutBackStartsWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before := setupRecordDigests(t, dir)
 	started, err := newKillRestartDevice(t, away, "the start with the record away")
 	if err != nil {
 		t.Fatalf("the start with the identity record away refused: %v", err)
 	}
-	if _, err := started.Identity(); !errors.Is(err, ErrNoIdentity) {
-		t.Fatalf("CONTROL FAILED: the start with the identity record away answers %v, want ErrNoIdentity", err)
+	if _, err := started.Identity(); !errors.Is(err, ErrIdentityUnreadable) || errors.Is(err, ErrNoIdentity) {
+		t.Fatalf("the start with the identity record away answers %v, want ErrIdentityUnreadable and not ErrNoIdentity: the app would offer setup over a live identity", err)
 	}
 	if standing := setupRecordsOn(dir); !slices.Equal(standing, whole) {
 		t.Errorf("the start with the identity record away and no setup mark left %v of %v: an absence alone decided an erase", standing, whole)
+	}
+	// THE SETUP ATTEMPT WHILE THE RECORD IS AWAY: refused, and nothing written
+	if _, err := started.CreateIdentity(); !errors.Is(err, ErrIdentityUnreadable) {
+		t.Errorf("CreateIdentity with the identity record away answers %v, want ErrIdentityUnreadable", err)
+	}
+	if err := started.ConfirmWords(ctx, typed); !errors.Is(err, ErrIdentityUnreadable) {
+		t.Errorf("ConfirmWords with the identity record away answers %v, want ErrIdentityUnreadable", err)
+	}
+	if _, err := started.Restore(ctx); !errors.Is(err, ErrIdentityUnreadable) {
+		t.Errorf("Restore with the identity record away answers %v, want ErrIdentityUnreadable", err)
+	}
+	if after := setupRecordDigests(t, dir); !slices.Equal(after, before) {
+		t.Errorf("with the identity record away the records went from %v to %v: something wrote over a live identity", before, after)
 	}
 	started.Close()
 	away.Close()
@@ -775,6 +786,258 @@ func TestTheEngineAnIdentityReplacesErasesItsCopyOfTheSigningKey(t *testing.T) {
 	if !allZero(held) {
 		t.Errorf("the engine the identity replaced still holds its copy of the device's signing key (%d octets)", len(held))
 	}
+}
+
+// A MAKING NEVER WRITES OVER RECORDS IT DID NOT WRITE (LRI R89 item 1; review D2L-1, G-D1). A device
+// starts with no identity, offers its words, and before they are typed back another identity's heads
+// and phrase key appear in its folder -- a quarantine giving back what it took, or a copied folder.
+// ConfirmWords refuses, with [ErrIdentityUnreadable], and writes nothing: those records are a live
+// identity's, and a making replacing them would erase it by rename under no authority.
+//
+// THE CONTROL: with them gone, the same words make the identity.
+func TestAMakingNeverWritesOverRecordsItDidNotWrite(t *testing.T) {
+	ctx := context.Background()
+	// THE OTHER IDENTITY: its heads and its phrase key, as a making writes them
+	other := t.TempDir()
+	otherStore := openTestStore(t, other)
+	otherDevice := newAnsweringDeviceOver(t, otherStore, []byte("the other identity's nonce"))
+	otherWords, err := otherDevice.CreateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTyped := strings.Join(otherWords, " ")
+	clear(otherWords)
+	if err := otherDevice.ConfirmWords(ctx, otherTyped); err != nil {
+		t.Fatalf("the other identity's ConfirmWords: %v", err)
+	}
+	otherDevice.Close()
+
+	dir := t.TempDir()
+	store := openTestStore(t, dir)
+	device := newAnsweringDeviceOver(t, store, []byte("this device's nonce"))
+	words, err := device.CreateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed := strings.Join(words, " ")
+	clear(words)
+	planted := []string{}
+	for _, name := range []string{stateRootPhraseKeyName, stateRootHeadsName} {
+		octets, err := os.ReadFile(filepath.Join(other, stateDataDirName, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, stateDataDirName, name), octets, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		planted = append(planted, name)
+	}
+	before := setupRecordDigests(t, dir)
+	if err := device.ConfirmWords(ctx, typed); !errors.Is(err, ErrIdentityUnreadable) {
+		t.Fatalf("ConfirmWords over another identity's %v answers %v, want ErrIdentityUnreadable", planted, err)
+	}
+	if after := setupRecordDigests(t, dir); !slices.Equal(after, before) {
+		t.Errorf("the refused making changed the records from %v to %v: it wrote over records it did not write", before, after)
+	}
+	if _, err := device.Identity(); !errors.Is(err, ErrNoIdentity) {
+		t.Errorf("after the refused making the device answers %v, want ErrNoIdentity: nothing was made", err)
+	}
+	// THE CONTROL: the planted records gone, the same words make the identity
+	for _, name := range planted {
+		if err := os.Remove(filepath.Join(dir, stateDataDirName, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := device.ConfirmWords(ctx, typed); err != nil {
+		t.Fatalf("CONTROL FAILED: with the planted records gone the same words answer %v", err)
+	}
+}
+
+// THE SWEEP TAKES ONLY ITS OWN MAKING'S RECORDS (LRI R89 item 2; review D2L-3). A mark names the
+// identity key its making was writing. Beside a mark of another key, and no identity record, the heads
+// and the phrase key of an identity whose record is away are not that making's: the sweep takes the
+// mark alone, and the start answers the identity unreadable.
+//
+// THE CONTROL: the same records beside a mark of their own key are taken.
+func TestTheSweepTakesOnlyTheRecordsOfItsMarksKey(t *testing.T) {
+	dir := t.TempDir()
+	store := openTestStore(t, dir)
+	mine := bytes.Repeat([]byte{0x11}, ed25519.PublicKeySize)
+	another := bytes.Repeat([]byte{0x33}, ed25519.PublicKeySize)
+	mintDeviceRecord(t, store)
+	putOrphansOf(t, store, mine)
+	plantSetupMark(t, store, another)
+	if erased, err := store.SweepIdentityOrphans(); err != nil || !slices.Equal(erased, []string{stateRootSetupMarkName}) {
+		t.Fatalf("beside a mark of another key the sweep erased %v (%v), want the mark alone", erased, err)
+	}
+	if standing := setupRecordsOn(dir); !slices.Equal(standing, []string{stateRootPhraseKeyName, stateRootHeadsName}) {
+		t.Fatalf("beside a mark of another key the sweep left %v, want the phrase key and the heads", standing)
+	}
+	if standing, err := store.UnexplainedIdentityRecords(); err != nil || len(standing) != 2 {
+		t.Errorf("after the sweep the records stand unexplained as %v (%v), want both", standing, err)
+	}
+	store.Close()
+	reopened, err := OpenDurableStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	device, err := newKillRestartDevice(t, reopened, "the start after a mark of another key")
+	if err != nil {
+		t.Fatalf("the start refused: %v", err)
+	}
+	if _, err := device.Identity(); !errors.Is(err, ErrIdentityUnreadable) {
+		t.Errorf("the start after a mark of another key answers %v, want ErrIdentityUnreadable", err)
+	}
+	device.Close()
+	// THE CONTROL: a mark of their own key takes them
+	plantSetupMark(t, reopened, mine)
+	if erased, err := reopened.SweepIdentityOrphans(); err != nil || len(erased) != 3 {
+		t.Errorf("CONTROL FAILED: beside a mark of their own key the sweep erased %v (%v), want all three", erased, err)
+	}
+}
+
+// A HELD ERASE LEAVES THE MARK, AND THE NEXT START FINISHES THE SWEEP (LRI R89 item 4; review D2L-2,
+// G-D2). The phrase key's removal is held -- a handle that does not share delete on Windows, a
+// directory without write permission elsewhere, an immutable file for root -- so the sweep stops at
+// the phrase secret: the heads and the mark stay, the mark last of all, and once the hold goes the next
+// start takes all three.
+//
+// THE CONTROL: the hold is real, since removing the held file directly fails.
+func TestAHeldEraseLeavesTheMarkAndTheNextStartFinishes(t *testing.T) {
+	dir := t.TempDir()
+	store := openTestStore(t, dir)
+	key := bytes.Repeat([]byte{0x11}, ed25519.PublicKeySize)
+	mintDeviceRecord(t, store)
+	putOrphansOf(t, store, key)
+	plantSetupMark(t, store, key)
+	phraseKey := filepath.Join(dir, stateDataDirName, stateRootPhraseKeyName)
+	release := holdRemoval(t, phraseKey)
+	if err := os.Remove(phraseKey); err == nil {
+		release()
+		t.Fatalf("CONTROL FAILED: the held phrase key was removed directly, so nothing held it")
+	}
+	erased, err := store.SweepIdentityOrphans()
+	if standing := setupRecordsOn(dir); !slices.Equal(standing, []string{stateRootPhraseKeyName, stateRootHeadsName, stateRootSetupMarkName}) {
+		t.Errorf("a held erase left %v standing, want the phrase key, the heads and the mark: the sweep went on past the phrase secret, or took the mark first", standing)
+	}
+	if err == nil {
+		t.Errorf("the sweep over a held phrase key answered %v and no error: a held erase must be reported, so the next start tries again", erased)
+	}
+	release()
+	store.Close()
+	reopened, err := OpenDurableStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	device, err := newKillRestartDevice(t, reopened, "the start after the hold went")
+	if err != nil {
+		t.Fatalf("the start after the hold refused: %v", err)
+	}
+	defer device.Close()
+	if standing := setupRecordsOn(dir); len(standing) != 0 {
+		t.Errorf("the next start left %v standing: the held sweep was never finished", standing)
+	}
+	if _, err := device.Identity(); !errors.Is(err, ErrNoIdentity) {
+		t.Errorf("after the finished sweep the device answers %v, want ErrNoIdentity", err)
+	}
+}
+
+// A STRAY AT THE PHRASE KEY'S NAME, AND AN IDENTITY RECORD WHOSE STATE CANNOT BE READ, DECIDE NOTHING
+// (LRI R89 item 4; review D2L-2). A directory at the phrase key's name is not this store's record: the
+// sweep leaves it, and takes the heads and the mark. And where asking whether the identity record
+// stands fails for any reason but its absence, the sweep erases nothing at all.
+func TestAStrayAtThePhraseKeysNameAndAnUnreadableAbsenceDecideNothing(t *testing.T) {
+	dir := t.TempDir()
+	store := openTestStore(t, dir)
+	key := bytes.Repeat([]byte{0x11}, ed25519.PublicKeySize)
+	putOrphansOf(t, store, key)
+	plantSetupMark(t, store, key)
+
+	// THE IDENTITY RECORD'S STATE, UNREADABLE: nothing is erased
+	record := filepath.Join(dir, stateDataDirName, stateRootIdentityName)
+	stateLstat = func(path string) (os.FileInfo, error) {
+		if path == record {
+			return nil, os.ErrPermission
+		}
+		return os.Lstat(path)
+	}
+	erased, err := store.SweepIdentityOrphans()
+	stateLstat = os.Lstat
+	if err == nil || len(erased) != 0 {
+		t.Errorf("where the identity record's state could not be read the sweep erased %v (%v), want nothing and a refusal", erased, err)
+	}
+	if standing := setupRecordsOn(dir); len(standing) != 3 {
+		t.Fatalf("where the identity record's state could not be read %v stand, want all three", standing)
+	}
+
+	// A STRAY AT THE PHRASE KEY'S NAME stays
+	phraseKey := filepath.Join(dir, stateDataDirName, stateRootPhraseKeyName)
+	if err := os.Remove(phraseKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(phraseKey, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if erased, err := store.SweepIdentityOrphans(); err != nil || !slices.Equal(erased, []string{stateRootHeadsName, stateRootSetupMarkName}) {
+		t.Errorf("with a stray directory at the phrase key's name the sweep erased %v (%v), want the heads and the mark", erased, err)
+	}
+	if info, err := os.Lstat(phraseKey); err != nil || !info.IsDir() {
+		t.Errorf("the stray directory at the phrase key's name was taken by the sweep (%v)", err)
+	}
+}
+
+// mintDeviceRecord starts a device over store once, so that its device record stands before any
+// identity record is planted beside it, as on every real device.
+func mintDeviceRecord(t *testing.T, store *DurableStateStore) {
+	t.Helper()
+	device, err := newKillRestartDevice(t, store, "the device record's first start")
+	if err != nil {
+		t.Fatalf("the first start: %v", err)
+	}
+	device.Close()
+}
+
+// putOrphansOf writes the heads and a phrase key of one identity key, as a making does before its
+// commit point.
+func putOrphansOf(t *testing.T, store *DurableStateStore, key []byte) {
+	t.Helper()
+	if err := store.PutIdentityHeads([]IdentityHead{{Root: key, Identity: []byte("the root's list")}}); err != nil {
+		t.Fatalf("PutIdentityHeads: %v", err)
+	}
+	if err := store.PutPhraseKey(&PhraseKeyRecord{IdentityKey: key, KeyNumber: 1, Seed: bytes.Repeat([]byte{0x22}, ed25519.SeedSize)}); err != nil {
+		t.Fatalf("PutPhraseKey: %v", err)
+	}
+}
+
+// plantSetupMark writes a setup mark naming key whatever stands, as a making that stopped leaves it:
+// PutSetupMark itself refuses beside records it did not write.
+func plantSetupMark(t *testing.T, store *DurableStateStore, key []byte) {
+	t.Helper()
+	store.lock.Lock()
+	defer store.lock.Unlock()
+	if err := store.writeRecord(store.setupMarkPath(), stateKindSetupMark, key); err != nil {
+		t.Fatalf("planting the setup mark: %v", err)
+	}
+}
+
+// setupRecordDigests is each of the setup's records standing in the store directory under dir, by its
+// name and a digest of its octets, never the octets.
+func setupRecordDigests(t *testing.T, dir string) []string {
+	t.Helper()
+	digests := []string{}
+	for _, name := range []string{stateRootPhraseKeyName, stateRootHeadsName, stateRootSetupMarkName, stateRootIdentityName} {
+		octets, err := os.ReadFile(filepath.Join(dir, stateDataDirName, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		digests = append(digests, name+"="+digestForTest(string(octets)))
+	}
+	return digests
 }
 
 // engineSignerForTest is the signing key array an engine holds. The engine keeps it in a field of its

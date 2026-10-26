@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/urnetwork/glog"
 	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
 	"github.com/urnetwork/message/protocol"
@@ -247,8 +248,11 @@ type Device struct {
 	// every root seen, as 0xF005 bodies by root.
 	identityLock sync.RWMutex
 	identity     *deviceIdentityState
-	offered      *messagegroup.RecoveryPhrase
-	heads        map[string][]byte
+	// identityUnreadable is set at start where the identity's records stand and no identity record or
+	// setup mark explains them ([ErrIdentityUnreadable], LRI R89 item 1); nil otherwise. It never changes.
+	identityUnreadable error
+	offered            *messagegroup.RecoveryPhrase
+	heads              map[string][]byte
 	// whether the last write of the heads failed, so that the next raise writes them whether or not a
 	// head rose (identity phase 1's Task 13; heads.go)
 	headsUnwritten bool
@@ -496,6 +500,7 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	// with its heads, and the engine is built under its identity key; with none, the device runs
 	// under its own key until [Device.ConfirmWords] makes one, and makes no leaf before it.
 	identity, heads := (*deviceIdentityState)(nil), map[string][]byte{}
+	var identityUnreadable error
 	if store, durable := stateStore.(DeviceStore); durable {
 		if identity, heads, err = loadIdentity(store, ed25519.PublicKey(signerPub)); err != nil {
 			return nil, err
@@ -505,8 +510,26 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 		// key that making left are erased, and where it stands beside the identity record, the mark
 		// alone goes. With no mark, nothing is erased. A removal that fails leaves what it did not take
 		// for the next start, and this start goes on: nothing reads an orphan while no identity record
-		// stands, and the next making replaces both.
-		_, _ = store.SweepIdentityOrphans()
+		// stands. A sweep that took something, or failed, says so in one line, with names only (LRI R89
+		// item 3; review D2L-4, L-D2).
+		if erased, err := store.SweepIdentityOrphans(); err != nil {
+			glog.Warningf("urmessage: the start could not finish the sweep of a setup's leftovers, and the next start tries again: %v", err)
+		} else if len(erased) != 0 {
+			glog.Infof("urmessage: the start erased what a setup that stopped part way left: %v", erased)
+		}
+		// RECORDS NO MARK EXPLAINS ARE AN IDENTITY THAT CANNOT BE READ, NEVER "NO IDENTITY" (LRI R89 item
+		// 1; review D2L-1, L-D1, G-D1). The heads or the phrase key standing with no identity record and no
+		// setup mark are a live identity's whose record was moved away. The device starts, so the app can
+		// say so; it makes nothing, and no setup writes over them.
+		if identity == nil {
+			standing, err := store.UnexplainedIdentityRecords()
+			switch {
+			case err != nil:
+				identityUnreadable = fmt.Errorf("%w: %w", ErrIdentityUnreadable, err)
+			case len(standing) != 0:
+				identityUnreadable = fmt.Errorf("%w: %v stand with no identity record and no setup mark", ErrIdentityUnreadable, standing)
+			}
+		}
 	}
 	credential := []byte(signerPub)
 	if identity != nil {
@@ -522,28 +545,29 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	inbox := newPushInbox(config.Transport)
 	held = true
 	return &Device{
-		transport:        config.Transport,
-		reserver:         config.Reserver,
-		connect:          config.Connect.withDefaults(),
-		crypto:           crypto,
-		engine:           engine,
-		leafKeys:         leafKeys,
-		stateStore:       stateStore,
-		identityPub:      append([]byte(nil), credential...),
-		identity:         identity,
-		heads:            heads,
-		signer:           signer,
-		devicePub:        ed25519.PublicKey(append([]byte(nil), signerPub...)),
-		wrapSeed:         wrapSeed,
-		nowMs:            nowMs,
-		random:           random,
-		commitAuthorizer: config.CommitAuthorizer,
-		phraseStretch:    config.PhraseStretch,
-		groups:           map[string]*Group{},
-		unrestored:       map[string]bool{},
-		notRead:          map[string]readClass{},
-		joinStage:        stage,
-		inbox:            inbox,
+		transport:          config.Transport,
+		reserver:           config.Reserver,
+		connect:            config.Connect.withDefaults(),
+		crypto:             crypto,
+		engine:             engine,
+		leafKeys:           leafKeys,
+		stateStore:         stateStore,
+		identityPub:        append([]byte(nil), credential...),
+		identity:           identity,
+		identityUnreadable: identityUnreadable,
+		heads:              heads,
+		signer:             signer,
+		devicePub:          ed25519.PublicKey(append([]byte(nil), signerPub...)),
+		wrapSeed:           wrapSeed,
+		nowMs:              nowMs,
+		random:             random,
+		commitAuthorizer:   config.CommitAuthorizer,
+		phraseStretch:      config.PhraseStretch,
+		groups:             map[string]*Group{},
+		unrestored:         map[string]bool{},
+		notRead:            map[string]readClass{},
+		joinStage:          stage,
+		inbox:              inbox,
 	}, nil
 }
 

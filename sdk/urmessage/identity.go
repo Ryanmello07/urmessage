@@ -9,6 +9,7 @@ import (
 	"io"
 	"slices"
 
+	"github.com/urnetwork/glog"
 	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
 	"github.com/urnetwork/message/syntax"
@@ -17,8 +18,8 @@ import (
 // THE IDENTITY AT THE DEVICE, AND THE SELF GROUP (identity phase 1's Task 12; Spec A A-36 sections 6,
 // 7.2 and 8.1; MASTER sections 5.1 to 5.3 at Revision 10).
 //
-// AD1's ORDER (M5 H.4). [Device.CreateIdentity] answers the 25 words once and makes nothing: no
-// record, no key, no group. [Device.ConfirmWords], with all 25 typed back, then makes the identity --
+// AD1's ORDER (M5 H.4). [Device.CreateIdentity] answers the 25 words and makes nothing: no record, no
+// key, no group; asked again before the identity is made, it answers the same words. [Device.ConfirmWords], with all 25 typed back, then makes the identity --
 // key number 1, the first base naming this device as a phrase device, the account ID's salt -- writes
 // its three records, and only then founds the self group, with 0xF006 {1, root} in its context. Back
 // shows the same words; a restart makes new ones, since the words are never stored.
@@ -105,10 +106,13 @@ func newDeviceIdentityState(record IdentityRecord, own *messagegroup.UrmessageId
 	return state, nil
 }
 
-// CreateIdentity answers the 25 words of a new recovery phrase, once, and makes nothing (AD1). Asked
-// again before [Device.ConfirmWords], it answers the same words, which is Back; a restart makes new
-// ones. The caller shows the words and clears the slice once they are shown (clear(words)).
+// CreateIdentity answers the 25 words of a new recovery phrase and makes nothing (AD1). Asked again
+// before [Device.ConfirmWords] makes the identity, it answers the same words, which is Back; a restart
+// makes new ones (LRI R84's G-8: not "once"). The caller shows the words and clears the slice once they are shown (clear(words)).
 func (self *Device) CreateIdentity() ([]string, error) {
+	if self.identityUnreadable != nil {
+		return nil, self.identityUnreadable
+	}
 	self.identityLock.Lock()
 	defer self.identityLock.Unlock()
 	if self.identity != nil {
@@ -135,6 +139,9 @@ func (self *Device) CreateIdentity() ([]string, error) {
 // founded with 0xF006 {1, root}, its record written. The words leave this device's memory once the
 // identity stands.
 func (self *Device) ConfirmWords(ctx context.Context, phraseTyped string) error {
+	if self.identityUnreadable != nil {
+		return self.identityUnreadable
+	}
 	self.admitMutex.Lock()
 	defer self.admitMutex.Unlock()
 	self.identityLock.RLock()
@@ -325,8 +332,11 @@ func (self *Device) putIdentityRecords(state *deviceIdentityState, seed []byte) 
 	if err := store.PutIdentity(&state.record); err != nil {
 		return fmt.Errorf("urmessage: the identity record: %w", err)
 	}
-	// THE MARK GOES, ONLY NOW THAT THE IDENTITY RECORD STANDS
-	_ = store.ClearSetupMark()
+	// THE MARK GOES, ONLY NOW THAT THE IDENTITY RECORD STANDS. A removal that fails fails nothing, and says
+	// so in one line with no key or word (LRI R89 item 3; review D2L-4, L-D2)
+	if err := store.ClearSetupMark(); err != nil {
+		glog.Warningf("urmessage: the setup mark could not be removed beside the identity record that stands, and the next start removes it: %v", err)
+	}
 	return nil
 }
 
@@ -368,6 +378,9 @@ func loadIdentity(store DeviceStore, devicePub ed25519.PublicKey) (*deviceIdenti
 
 // Identity answers this device's identity, or [ErrNoIdentity] before it has one.
 func (self *Device) Identity() (*Identity, error) {
+	if self.identityUnreadable != nil {
+		return nil, self.identityUnreadable
+	}
 	self.identityLock.RLock()
 	state := self.identity
 	self.identityLock.RUnlock()
@@ -396,6 +409,9 @@ func (self *Device) Identity() (*Identity, error) {
 
 // requireIdentity answers the identity this device runs under, or [ErrNoIdentity].
 func (self *Device) requireIdentity() (*deviceIdentityState, error) {
+	if self.identityUnreadable != nil {
+		return nil, self.identityUnreadable
+	}
 	self.identityLock.RLock()
 	defer self.identityLock.RUnlock()
 	if self.identity == nil {

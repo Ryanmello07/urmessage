@@ -241,6 +241,10 @@ type DeviceStore interface {
 	PutSetupMark(identityKey []byte) error
 	ClearSetupMark() error
 	SweepIdentityOrphans() ([]string, error)
+	// UnexplainedIdentityRecords answers the heads and the phrase key where they stand with no identity
+	// record and no setup mark: an identity that cannot be read (LRI R89 item 1). See
+	// [DurableStateStore.UnexplainedIdentityRecords].
+	UnexplainedIdentityRecords() ([]string, error)
 }
 
 // PeerHead is the highest 5.6 stream index this device has AUTHENTICATED on one peer's receiver
@@ -3619,12 +3623,19 @@ func (self *DurableStateStore) PhraseKey() (*PhraseKeyRecord, error) {
 	return &PhraseKeyRecord{IdentityKey: parts[0], KeyNumber: binary.BigEndian.Uint32(parts[1]), Seed: parts[2]}, nil
 }
 
-// PutSetupMark writes the SETUP MARK (LRI R86): this store's own note that an identity's making is
+// / PutSetupMark writes the SETUP MARK (LRI R86): this store's own note that an identity's making is
 // writing the identity layer's records, for the identity key it names. [Device.putIdentityRecords]
 // writes it FIRST, before the heads, and takes it away with [DurableStateStore.ClearSetupMark] only
 // once the identity record stands. It is the one fact erase authority (j) erases on
 // ([DurableStateStore.SweepIdentityOrphans]), and it is NEVER written because something is absent:
 // an identity record a quarantine moved away leaves no mark, so nothing of its identity is swept.
+//
+// A MAKING NEVER WRITES OVER RECORDS IT DID NOT WRITE (LRI R89 item 1; review D2L-1, L-D1, G-D1). The
+// mark is refused, with [ErrIdentityUnreadable], wherever an identity record, a heads record or a
+// phrase key record already stands, or cannot be proven absent. Such records are a live identity's
+// whose identity record is away, or a making's that the start has not yet swept: replacing them would
+// erase that identity by rename, under no authority. Since the making writes the mark before anything
+// else, nothing of it is written either.
 func (self *DurableStateStore) PutSetupMark(identityKey []byte) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -3633,6 +3644,12 @@ func (self *DurableStateStore) PutSetupMark(identityKey []byte) error {
 	}
 	if len(identityKey) != ed25519.PublicKeySize {
 		return fmt.Errorf("%w: a setup mark names an identity key of 32 octets", ErrStateStoreFormat)
+	}
+	for _, path := range []string{self.identityRecordPath(), self.identityHeadsPath(), self.phraseKeyPath()} {
+		if _, err := stateLstat(path); !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s stands, or cannot be proven absent, and a making writes over no record it did not write",
+				ErrIdentityUnreadable, filepath.Base(path))
+		}
 	}
 	return self.writeRecord(self.setupMarkPath(), stateKindSetupMark, identityKey)
 }
@@ -3649,9 +3666,39 @@ func (self *DurableStateStore) ClearSetupMark() error {
 	return self.removeLocked(self.setupMarkPath())
 }
 
+// UnexplainedIdentityRecords answers the identity layer's records that stand where neither an identity
+// record nor a setup mark explains them: the phrase key and the heads, by their names (LRI R89 item 1).
+// Since the making writes the mark first and the identity record last, only an identity record that
+// was moved away leaves them so: the identity they belong to cannot be read, and it is never "no
+// identity" ([ErrIdentityUnreadable]). It answers nothing where the identity record stands or a mark
+// does, and an error where either cannot be proven absent.
+func (self *DurableStateStore) UnexplainedIdentityRecords() ([]string, error) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if err := self.refuseIfClosed(); err != nil {
+		return nil, err
+	}
+	for _, path := range []string{self.identityRecordPath(), self.setupMarkPath()} {
+		_, err := stateLstat(path)
+		if err == nil {
+			return nil, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: whether %s stands could not be read: %w", ErrStateStoreState, filepath.Base(path), err)
+		}
+	}
+	standing := []string{}
+	for _, path := range []string{self.phraseKeyPath(), self.identityHeadsPath()} {
+		if regularFileStands(path) {
+			standing = append(standing, filepath.Base(path))
+		}
+	}
+	return standing, nil
+}
+
 // SweepIdentityOrphans erases what an identity's making stopped before its commit point left: ERASE
-// AUTHORITY (j), A SETUP'S ORPHANS (LRI R85, R86; review L-1's caveat). It answers the names it erased,
-// in the order it erased them.
+// AUTHORITY (j), A SETUP'S ORPHANS (LRI R85, R86, R89; review L-1's caveat). It answers the names it
+// erased, in the order it erased them.
 //
 // IT ERASES ONLY ON THE SETUP MARK, A FACT THIS STORE WROTE ITSELF (R86). The making writes the mark,
 // then the heads, a phrase device's phrase key and the identity record -- the commit point
@@ -3662,6 +3709,12 @@ func (self *DurableStateStore) ClearSetupMark() error {
 //     part way is finished at the next start;
 //   - a mark beside an identity record that stands is a making that committed and stopped before the
 //     mark went: the mark alone is taken away, so that no stale mark is left to authorize anything.
+//
+// ONLY THE MARK'S OWN MAKING'S RECORDS (R89 item 2; review D2L-3). The mark names the identity key its
+// making was writing. The phrase key is erased only where its record names that key, and the heads
+// only where every row's root is that key. A record that names another key, or does not read, is
+// another identity's or unknown: it stays, and once the mark is gone it stands unexplained, so the
+// start answers [ErrIdentityUnreadable] rather than "no identity".
 //
 // WITH NO MARK, NOTHING IS ERASED, WHATEVER IS MISSING. An identity record that a quarantine moved
 // away leaves its heads and its phrase key beside no identity record and no mark, and they wait,
@@ -3685,20 +3738,21 @@ func (self *DurableStateStore) SweepIdentityOrphans() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: the setup mark does not read as this store's, so nothing is decided on it: %w", err)
 	}
+	markKey := mark[0]
 	erased := []string{}
-	_, err = os.Lstat(self.identityRecordPath())
+	_, err = stateLstat(self.identityRecordPath())
 	switch {
 	case err == nil:
 		// THE MAKING COMMITTED: the identity record stands, and the mark alone goes
 	case errors.Is(err, os.ErrNotExist):
-		// A SETUP'S ORPHANS, THE PHRASE SECRET FIRST
-		if regularFileStands(self.phraseKeyPath()) {
+		// A SETUP'S ORPHANS, THE PHRASE SECRET FIRST, each only where it names the mark's key
+		if regularFileStands(self.phraseKeyPath()) && self.phraseKeyNamesLocked(markKey) {
 			if err := self.removeLocked(self.phraseKeyPath()); err != nil {
 				return erased, err
 			}
 			erased = append(erased, stateRootPhraseKeyName)
 		}
-		if regularFileStands(self.identityHeadsPath()) {
+		if regularFileStands(self.identityHeadsPath()) && self.headsNameOnlyLocked(markKey) {
 			if err := self.removeLocked(self.identityHeadsPath()); err != nil {
 				return erased, err
 			}
@@ -3714,6 +3768,43 @@ func (self *DurableStateStore) SweepIdentityOrphans() ([]string, error) {
 	}
 	return append(erased, stateRootSetupMarkName), nil
 }
+
+// phraseKeyNamesLocked answers whether the phrase key record reads and names identityKey. The parts the
+// read answers, the seed among them, are cleared before it answers.
+func (self *DurableStateStore) phraseKeyNamesLocked(identityKey []byte) bool {
+	parts, err := self.readRecord(self.phraseKeyPath(), stateKindPhraseKey)
+	names := err == nil && len(parts) == 3 && bytes.Equal(parts[0], identityKey)
+	for _, part := range parts {
+		zeroizeState(part)
+	}
+	return names
+}
+
+// headsNameOnlyLocked answers whether the heads record reads and every row's root is identityKey.
+func (self *DurableStateStore) headsNameOnlyLocked(identityKey []byte) bool {
+	parts, err := self.readRecord(self.identityHeadsPath(), stateKindIdentityHeads)
+	if err != nil || len(parts) != 1 || len(parts[0]) == 0 {
+		return false
+	}
+	rows := parts[0]
+	for at := 0; at < len(rows); {
+		if len(rows)-at < ed25519.PublicKeySize+4 || !bytes.Equal(rows[at:at+ed25519.PublicKeySize], identityKey) {
+			return false
+		}
+		length := int(binary.BigEndian.Uint32(rows[at+ed25519.PublicKeySize:]))
+		at += ed25519.PublicKeySize + 4
+		if length == 0 || len(rows)-at < length {
+			return false
+		}
+		at += length
+	}
+	return true
+}
+
+// stateLstat is os.Lstat, as this store asks it whether the identity layer's names stand. It is a
+// variable so that a test can make the asking fail, which no file move does on every platform (LRI R89
+// item 4; review D2L-2's M3).
+var stateLstat = os.Lstat
 
 // regularFileStands answers whether a regular file stands at path itself, a link not followed.
 func regularFileStands(path string) bool {

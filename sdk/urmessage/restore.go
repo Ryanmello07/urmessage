@@ -207,6 +207,11 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	if !durable {
 		return nil, ErrNoDeviceStore
 	}
+	// AN IDENTITY THAT CANNOT BE READ RESTORES NOTHING (LRI R89 item 1): its groups wait, untouched, for
+	// its identity record to come back, as its heads and its phrase key do
+	if self.identityUnreadable != nil {
+		return nil, self.identityUnreadable
+	}
 	// ONE ADMISSION AT A TIME: a Join or a CreateGroup of a group this call is about to restore
 	// waits for it and reads the answer it leaves. See [Device.admitMutex].
 	self.admitMutex.Lock()
