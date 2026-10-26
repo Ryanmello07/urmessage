@@ -754,3 +754,33 @@ func TestTheRosterIsPrintedByIdentity(t *testing.T) {
 		}
 	}
 }
+
+// A REFUSAL AND A RECEIVE'S ERROR ARE PRINTED WITH NO KEY IN HEX (LRI R89 item 8; review X2-6). The
+// identity rules name a refused leaf by its identity key in hex, and an identity key is made from its
+// party's words: every such run is printed as its digest, on every line that prints a refusal or a
+// receive's error, the lines that do not end the run among them.
+//
+// THE CONTROLS: the source pattern that printed them by %v is found where it is planted, and an error
+// with no hex in it is printed as it is.
+func TestARefusalIsPrintedWithNoKeyInHex(t *testing.T) {
+	key := bytes.Repeat([]byte{0xC3, 0x5A, 0x91, 0x0E}, 8)
+	refusal := fmt.Errorf("urmessage: a commit breaks the identity rules: leaf 2 (%x) added by a member", key)
+	printed := printable(refusal)
+	if strings.Contains(strings.ToLower(printed), "c35a910e") || !strings.Contains(printed, "sha256:") {
+		t.Errorf("the refusal is printed as %d octets that still carry the key, or no digest of it", len(printed))
+	}
+	if plain := errors.New("urmessage: the group is closed"); printable(plain) != plain.Error() {
+		t.Errorf("CONTROL FAILED: an error with no hex in it is printed as %q", printable(plain))
+	}
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byText := regexp.MustCompile(`(REFUSED|reported): %v`)
+	if found := byText.FindAllString(string(source), -1); len(found) != 0 {
+		t.Errorf("main.go still prints %d refusal or receive line(s) by their text: %v", len(found), found)
+	}
+	if !byText.MatchString(`fmt.Printf("  -> REFUSED: %v\n", err)`) {
+		t.Error("CONTROL FAILED: the source pattern does not find a planted line")
+	}
+}

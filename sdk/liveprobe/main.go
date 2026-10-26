@@ -437,6 +437,19 @@ func identify(ctx context.Context, name string, device *urmessage.Device) (*urme
 	if err != nil {
 		return nil, words, fmt.Errorf("%s Identity, once its words were typed back: %w", name, err)
 	}
+	// THE PARTY'S IDENTITY KEY IS A NEEDLE FROM THE MOMENT IT IS MADE (LRI R89 item 8; review X2-5), not
+	// from its first roster read: read off a bound key package, whose credential is the identity key, as
+	// strangerPackage reads the stranger's. A failure line of any later step that names it in hex is then
+	// announced.
+	keyPackage, err := device.KeyPackage()
+	if err != nil {
+		return nil, words, fmt.Errorf("%s KeyPackage, once its identity was made: %w", name, err)
+	}
+	_, credential, err := keyPackageList(keyPackage)
+	if err != nil {
+		return nil, words, fmt.Errorf("%s's key package does not read back: %w", name, err)
+	}
+	transcript.holdKey(name+"'s identity", credential)
 	return identity, words, nil
 }
 

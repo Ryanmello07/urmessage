@@ -236,6 +236,22 @@ func TestAPartysIdentityIsMadeAsAPersonMakesOne(t *testing.T) {
 	if held, err := device.Identity(); err != nil || held.AccountId != identity.AccountId {
 		t.Fatalf("the device's own identity is %v (%v), and identify answered another", held, err)
 	}
+	// ITS IDENTITY KEY IS A NEEDLE FROM THE MOMENT IT IS MADE (LRI R89 item 8; review X2-5), before any
+	// roster is read: a line of step 2 that names it in hex is found
+	ownPackage, err := device.KeyPackage()
+	if err != nil {
+		t.Fatalf("KeyPackage: %v", err)
+	}
+	_, credential, err := keyPackageList(ownPackage)
+	if err != nil || len(credential) == 0 {
+		t.Fatalf("CONTROL FAILED: the party's key package names no identity key (%v)", err)
+	}
+	transcript.mutex.Lock()
+	needle := transcript.keys["T-connected's identity"]
+	transcript.mutex.Unlock()
+	if needle == "" || needle != keyNeedle(credential) {
+		t.Errorf("once its identity is made, the party's identity key is not a needle of the transcript (%d octets held)", len(needle))
+	}
 	line := identityLine("T-connected", identity)
 	// a failure names the line by its size and digest and never prints it, since a line that carried
 	// the words would put them in the log (LRI R84 item 6; review X-LIB-7)

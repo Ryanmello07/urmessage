@@ -66,6 +66,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -269,7 +270,7 @@ func main() {
 	say("restoring any group this peer already holds")
 	restored, err := p.device.Restore(ctx)
 	if err != nil {
-		fmt.Printf("  restore reported: %v (and answered %d group(s))\n", err, len(restored))
+		fmt.Printf("  restore reported: %s (and answered %d group(s))\n", printable(err), len(restored))
 	}
 	if 0 < len(restored) {
 		group := restored[0]
@@ -278,7 +279,7 @@ func main() {
 		// A RESTORED GROUP WILL NOT SEAL UNTIL Receive HAS RUN ONCE OVER IT: the cursor is not
 		// persisted, so this re-reads the history and re-derives the keys its own next send needs.
 		if got, err := group.Receive(ctx); err != nil {
-			fmt.Printf("  the restored group's first receive reported: %v (%d record(s))\n", err, len(got))
+			fmt.Printf("  the restored group's first receive reported: %s (%d record(s))\n", printable(err), len(got))
 		} else {
 			fmt.Printf("  the restored group read %d record(s) back\n", len(got))
 		}
@@ -551,7 +552,7 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 						tombstone, err := group.Delete(ctx, lastSent.MessageId)
 						deleteMs := time.Since(deleteStarted).Milliseconds()
 						if err != nil {
-							fmt.Printf("  -> REFUSED: %v\n", err)
+							fmt.Printf("  -> REFUSED: %s\n", printable(err))
 							continue
 						}
 						fmt.Printf("  [%s] -> deleted message %s (record %d) with tombstone record %d in %dms\n",
@@ -565,7 +566,7 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 					submitMs := time.Since(sendStarted).Milliseconds()
 					if err != nil {
 						// NOT fail(): a refused send must not end a conversation. Say so and keep serving.
-						fmt.Printf("  -> REFUSED: %v\n", err)
+						fmt.Printf("  -> REFUSED: %s\n", printable(err))
 						continue
 					}
 					// THE SUBMIT IS A ROUND TRIP TO THE SERVER AND IS TIMED SEPARATELY from when the far
@@ -582,7 +583,7 @@ func converse(ctx context.Context, group *urmessage.Group, serve time.Duration, 
 		if err != nil {
 			// A NON-EMPTY RESULT AND AN ERROR CAN BOTH COME BACK, so the messages are printed
 			// before the reason rather than instead of it.
-			fmt.Printf("  receive reported: %v (and still answered %d record(s))\n", err, len(got))
+			fmt.Printf("  receive reported: %s (and still answered %d record(s))\n", printable(err), len(got))
 		}
 		if now := group.Stats().Ingested; now != ingested {
 			printRoster(group, fmt.Sprintf("after ingesting commit %d", now))
@@ -772,7 +773,7 @@ func joinGroup(ctx context.Context, device *urmessage.Device, joinCodeOut string
 	// joined epoch is read here, printed as converse prints it.
 	got, err := group.Receive(ctx)
 	if err != nil {
-		fmt.Printf("  the joined group's first receive reported: %v (and still answered %d record(s))\n", err, len(got))
+		fmt.Printf("  the joined group's first receive reported: %s (and still answered %d record(s))\n", printable(err), len(got))
 	}
 	for _, one := range got {
 		printArrived(one)
@@ -876,7 +877,7 @@ func joinAdvice(err error) string {
 // refuse ends a join this peer cannot make: the library's own sentence verbatim, the one line that
 // says what to do, and a non-zero exit.
 func refuse(err error, todo string) {
-	fmt.Fprintf(os.Stderr, "\nREFUSED: %v\n  WHAT TO DO: %s\n", err, todo)
+	fmt.Fprintf(os.Stderr, "\nREFUSED: %s\n  WHAT TO DO: %s\n", printable(err), todo)
 	os.Exit(1)
 }
 
@@ -1167,6 +1168,22 @@ func rosterByIdentity(members []urmessage.Member) []string {
 	}
 	return lines
 }
+
+// printable is how this peer prints a library refusal or a receive's error (LRI R89 item 8; review
+// X2-6): its text with every run of 32 or more hex digits -- an identity key, as the identity rules
+// format a refused leaf's, or a group id -- replaced by that run's digest. An identity key is made from
+// its party's words, so no line this peer prints, a line that does not end the run included, carries
+// one in hex.
+func printable(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return longHex.ReplaceAllStringFunc(err.Error(), func(run string) string {
+		return digestOf([]byte(strings.ToLower(run)))
+	})
+}
+
+var longHex = regexp.MustCompile(`[0-9a-fA-F]{32,}`)
 
 // digestOf is how this peer prints a value made from a person's words (Property 1): the first 8
 // octets of its SHA-256, in hex, marked as a digest. Equal values print equal, and nothing of the
