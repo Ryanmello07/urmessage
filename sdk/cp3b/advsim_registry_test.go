@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -120,12 +121,98 @@ func advJudge(t *testing.T, id string, observed []string) {
 	if !registered {
 		t.Fatalf("FAIL(HARNESS): scenario %q has no registry entry; every scenario's expected observation is written down first", id)
 	}
+	advJudged.Lock()
+	advJudged.ids[id] = true
+	advJudged.Unlock()
 	strict := os.Getenv("ADVSIM_STRICT") == "1"
 	passed, verdict := advVerdict(entry, observed, strict)
 	line := fmt.Sprintf("ADVSIM %-30s state=%-8s expect=%v observed=%v :: %s", id, entry.State, advSet(entry.Expect), advSet(observed), verdict)
 	fmt.Println(line)
 	if !passed {
 		t.Fatalf("%s\n    the scenario: %s", line, entry.Reads)
+	}
+}
+
+// advJudged is every registry id an advJudge call of this run reached, so that the RED report can
+// say which entries printed no row (LRI R89 item 9; review G-D4).
+var advJudged = struct {
+	sync.Mutex
+	ids map[string]bool
+}{ids: map[string]bool{}}
+
+// advUnjudged answers the registry ids that no judging reached, sorted.
+func advUnjudged(registry []string, judged map[string]bool) []string {
+	missing := []string{}
+	for _, id := range registry {
+		if !judged[id] {
+			missing = append(missing, id)
+		}
+	}
+	slices.Sort(missing)
+	return missing
+}
+
+// advRegistryIds reads the registry's ids without a test, for TestMain.
+func advRegistryIds() ([]string, error) {
+	body, err := os.ReadFile(filepath.FromSlash(advRegistryPath))
+	if err != nil {
+		return nil, err
+	}
+	file := advRegistryFile{}
+	if err := json.Unmarshal(body, &file); err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, entry := range file.Entries {
+		ids = append(ids, entry.Id)
+	}
+	return ids, nil
+}
+
+// EVERY REGISTRY ENTRY PRINTS A ROW IN THE RED REPORT, A SKIP INCLUDED (LRI R89 item 9; review G-D4).
+// The RED report is the ADVSIM_STRICT=1 run of the TestAdvSim scenarios. After it, every registry entry
+// that no advJudge call reached -- a scenario skipped, returned early, or judged under no TestAdvSim
+// name -- is printed by id as ADVSIM-MISSING, and the run fails; a whole report says ADVSIM-COMPLETE.
+// A run without ADVSIM_STRICT is not the report, and is not held to it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if os.Getenv("ADVSIM_STRICT") == "1" {
+		ids, err := advRegistryIds()
+		advJudged.Lock()
+		missing := advUnjudged(ids, advJudged.ids)
+		advJudged.Unlock()
+		switch {
+		case err != nil:
+			fmt.Printf("ADVSIM-MISSING: the registry could not be read: %v\n", err)
+			code = max(code, 1)
+		case len(missing) != 0:
+			fmt.Printf("ADVSIM-MISSING: %d of %d registry entries printed no row in this RED report: %v\n", len(missing), len(ids), missing)
+			code = max(code, 1)
+		default:
+			fmt.Printf("ADVSIM-COMPLETE: every one of the %d registry entries printed its row\n", len(ids))
+		}
+	}
+	os.Exit(code)
+}
+
+// THE RED REPORT'S MISSING ROWS ARE THE REGISTRY'S COMPLEMENT OF WHAT WAS JUDGED (LRI R89 item 9).
+//
+// THE CONTROL: with every id judged nothing is missing, and an id taken out of the judged set is named.
+func TestAdvSimTheRedReportNamesEveryEntryThatPrintedNoRow(t *testing.T) {
+	ids, err := advRegistryIds()
+	if err != nil || len(ids) == 0 {
+		t.Fatalf("the registry's ids: %v (%d)", err, len(ids))
+	}
+	judged := map[string]bool{}
+	for _, id := range ids {
+		judged[id] = true
+	}
+	if missing := advUnjudged(ids, judged); len(missing) != 0 {
+		t.Fatalf("CONTROL FAILED: with every id judged %v are missing", missing)
+	}
+	delete(judged, ids[len(ids)-1])
+	if missing := advUnjudged(ids, judged); !slices.Equal(missing, []string{ids[len(ids)-1]}) {
+		t.Errorf("an entry no judging reached is named as %v, want it alone", missing)
 	}
 }
 
