@@ -1335,6 +1335,7 @@ func TestTheHeaderDefinesExactlyTheForgetKinds(t *testing.T) {
 		"REFUSED":    messageForgetRefused,
 		"UNFINISHED": messageForgetUnfinished,
 		"FAILED":     messageForgetFailed,
+		"UNKNOWN":    messageForgetUnknown,
 	}
 	if len(defined) < 2 {
 		t.Fatalf("the header defines %d URNET_MESSAGE_FORGET_* kinds; the positive control is not met", len(defined))

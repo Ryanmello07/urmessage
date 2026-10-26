@@ -726,26 +726,154 @@ func TestAPanicInsideEnsureSubscribedAnswersThatItDidNotSubscribe(t *testing.T) 
 	}
 }
 
-// A PANIC INSIDE FORGET_GROUP ANSWERS FAILED, NEVER OK (LRI R84 item 3). Its result is preset to
-// FAILED, as every kind-answering export's is (gen's TestEveryKindAnsweringExportPresetsItsFailure):
-// an unpreset result answers its zero value, URNET_MESSAGE_FORGET_OK, a group a caller is told is
-// gone. The panic is real and inside the leave: the device's durable store panics once armed, at the
-// first question a leave asks it.
+// A PANIC INSIDE FORGET_GROUP ANSWERS UNKNOWN, NEVER OK AND NEVER "NOT HELD" (LRI R84 item 3, R89 item
+// 7; review X-D2-3). Its result is preset to UNKNOWN, as every kind-answering export's is to its failure
+// (gen's TestEveryKindAnsweringExportPresetsItsFailure): an unpreset result answers its zero value,
+// URNET_MESSAGE_FORGET_OK, a group a caller is told is gone, and FAILED would say no such group is
+// held, which the app also reads as left. A panic may come before anything changed or after the group
+// was closed, so the answer is that its state is unknown, and out_error says so. The panic is real and
+// inside the leave: the device's durable store panics once armed, at the first question a leave asks.
 //
-// THE CONTROL: the armed store was asked, so the FAILED was the panic's. A group this device does not
-// hold answers FAILED as well, which is why the control is the store's and not a second call's.
-func TestAPanicInsideForgetGroupAnswersFailedNeverOk(t *testing.T) {
+// THE CONTROL: the armed store was asked, so the UNKNOWN was the panic's; and the same call disarmed,
+// for a group this device does not hold, answers FAILED.
+func TestAPanicInsideForgetGroupAnswersUnknownNeverOkOrNotHeld(t *testing.T) {
 	store := &armedPanicStore{}
 	one := newIdentityDeviceOver(t, t.TempDir(), nil, store)
+	var failure exportOutError
 	store.arm(true)
-	got := callExportNil(t, urnet_message_device_forget_group, one.handle, nil, int32(0), nil)[0].Int()
+	got := callExportNil(t, urnet_message_device_forget_group, one.handle, nil, int32(0), failure.pointer())[0].Int()
 	store.arm(false)
-	if int32(got) != messageForgetFailed {
-		t.Errorf("a panic inside forget_group answered kind %d, want FAILED (%d): %d is OK, a group a caller is told is gone",
-			got, messageForgetFailed, messageForgetOk)
+	why := failure.take(t)
+	if int32(got) != messageForgetUnknown {
+		t.Errorf("a panic inside forget_group answered kind %d, want UNKNOWN (%d): %d is OK, a group a caller is told is gone, and %d is FAILED, a group not held",
+			got, messageForgetUnknown, messageForgetOk, messageForgetFailed)
+	}
+	if !strings.Contains(why, "unknown") {
+		t.Errorf("a panic inside forget_group set out_error to %d octets that do not say the group's state is unknown", len(why))
 	}
 	if !store.panicked() {
 		t.Fatal("CONTROL FAILED: the armed store was never asked, so nothing panicked")
+	}
+	var notHeld exportOutError
+	if got := callExportNil(t, urnet_message_device_forget_group, one.handle, nil, int32(0), notHeld.pointer())[0].Int(); int32(got) != messageForgetFailed {
+		t.Errorf("CONTROL FAILED: with nothing armed, a group this device does not hold answered kind %d, want FAILED", got)
+	}
+	notHeld.take(t)
+}
+
+// THE IDENTITY'S STATE TELLS AN UNREADABLE IDENTITY FROM NONE (LRI R89 item 1; review D2L-1, L-D1,
+// G-D1). urnet_message_device_identity_state answers NONE before an identity, MADE after it, and,
+// with the identity record moved away, UNREADABLE -- urmessage's ErrIdentityUnreadable -- with
+// out_error naming the records that stand. Over that, urnet_message_device_identity answers NULL with
+// out_error, as for any identity that cannot be read, and create_identity refuses: no setup is offered
+// over a live identity. An unknown handle answers FAILED with out_error NULL.
+//
+// THE CONTROL: the record put back, the state is MADE again.
+func TestTheIdentityStateTellsAnUnreadableIdentityFromNone(t *testing.T) {
+	dir := t.TempDir()
+	state := func(handle uint64) (int32, string) {
+		t.Helper()
+		var why exportOutError
+		got := callExportNil(t, urnet_message_device_identity_state, handle, why.pointer())[0].Int()
+		return int32(got), why.take(t)
+	}
+	one := newIdentityDevice(t, dir)
+	if got, _ := state(one.handle); got != messageIdentityNone {
+		t.Fatalf("a device with no identity answered state %d, want NONE (%d)", got, messageIdentityNone)
+	}
+	words, failure := createIdentity(t, one.handle)
+	if failure != "" {
+		t.Fatalf("create_identity: %s", failure)
+	}
+	if kind, _, failure := confirmWords(t, one.handle, strings.Join(words, " ")); kind != messageWordsOk {
+		t.Fatalf("confirm_words answered kind %d (%s)", kind, failure)
+	}
+	if got, _ := state(one.handle); got != messageIdentityMade {
+		t.Fatalf("a device with its identity answered state %d, want MADE (%d)", got, messageIdentityMade)
+	}
+	one.close()
+
+	// THE IDENTITY RECORD MOVED AWAY
+	record := identityRecordUnder(t, dir)
+	aside := filepath.Join(t.TempDir(), "quarantined")
+	if err := os.Rename(record, aside); err != nil {
+		t.Fatal(err)
+	}
+	two := newIdentityDevice(t, dir)
+	got, why := state(two.handle)
+	if got != messageIdentityUnreadable {
+		t.Errorf("with the identity record away the state is %d, want UNREADABLE (%d): NONE sends the app to setup over a live identity", got, messageIdentityUnreadable)
+	}
+	if !strings.Contains(why, "phrase-key") || !strings.Contains(why, "identity-heads") {
+		t.Errorf("the UNREADABLE state's out_error (%d octets) does not name the records that stand", len(why))
+	}
+	var identityWhy exportOutError
+	if json := callExportNil(t, urnet_message_device_identity, two.handle, identityWhy.pointer())[0]; !json.IsNil() {
+		t.Errorf("with the identity record away urnet_message_device_identity answered json: has_identity false would send the app to setup")
+	}
+	if identityWhy.take(t) == "" {
+		t.Errorf("with the identity record away urnet_message_device_identity answered NULL and no out_error")
+	}
+	if _, failure := createIdentity(t, two.handle); failure == "" {
+		t.Errorf("with the identity record away create_identity offered words")
+	}
+	if got, why := state(uint64(1) << 62); got != messageIdentityFailed || why != "" {
+		t.Errorf("an unknown handle answered state %d with %d octets of out_error, want FAILED and none", got, len(why))
+	}
+	two.close()
+
+	// THE CONTROL: put back, the identity is MADE again
+	if err := os.Rename(aside, record); err != nil {
+		t.Fatal(err)
+	}
+	three := newIdentityDevice(t, dir)
+	if got, _ := state(three.handle); got != messageIdentityMade {
+		t.Errorf("CONTROL FAILED: with the identity record back the state is %d, want MADE", got)
+	}
+}
+
+// identityRecordUnder answers the path of the identity record of the durable store under dir.
+func identityRecordUnder(t *testing.T, dir string) string {
+	t.Helper()
+	found := ""
+	filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && entry.Type().IsRegular() && entry.Name() == "identity" {
+			found = path
+		}
+		return nil
+	})
+	if found == "" {
+		t.Fatalf("no identity record under %s", dir)
+	}
+	return found
+}
+
+// THE HEADER'S URNET_MESSAGE_IDENTITY_* DEFINES ARE THE LIBRARY'S STATES, BY NAME AND BY VALUE, both
+// ways (LRI R89 item 1).
+func TestTheHeaderDefinesExactlyTheIdentityStates(t *testing.T) {
+	header, err := os.ReadFile("include/urnetwork_message.h")
+	if err != nil {
+		t.Fatalf("reading the header: %v", err)
+	}
+	defined := map[string]int32{}
+	for _, match := range regexp.MustCompile(`(?m)^#define URNET_MESSAGE_IDENTITY_([A-Z_]+)\s+(\d+)`).FindAllStringSubmatch(string(header), -1) {
+		value, err := strconv.ParseInt(match[2], 10, 32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defined[match[1]] = int32(value)
+	}
+	constants := map[string]int32{
+		"NONE":       messageIdentityNone,
+		"MADE":       messageIdentityMade,
+		"UNREADABLE": messageIdentityUnreadable,
+		"FAILED":     messageIdentityFailed,
+	}
+	if len(defined) < 2 {
+		t.Fatalf("the header defines %d URNET_MESSAGE_IDENTITY_* states; the positive control is not met", len(defined))
+	}
+	if !reflect.DeepEqual(defined, constants) {
+		t.Fatalf("the header defines the identity states as %v and the library's constants are %v", defined, constants)
 	}
 }
 

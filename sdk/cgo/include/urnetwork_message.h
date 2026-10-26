@@ -190,12 +190,35 @@ extern "C" {
  * holding a closed group.
  * FAILED: no such group is held (never joined, or already left). out_error left NULL is an
  * unknown self handle.
+ * UNKNOWN: the leave failed inside the library (a recovered panic), before anything changed or after
+ * the group was closed, so whether the group is still held is NOT known. out_error says so. do not
+ * treat the group as left, and do not drop its handles: restore or read the group list again, and
+ * act on what that answers.
  *
  * a go test holds these equal, by name and value, to the library's own constants. */
 #define URNET_MESSAGE_FORGET_OK         0
 #define URNET_MESSAGE_FORGET_REFUSED    1
 #define URNET_MESSAGE_FORGET_UNFINISHED 2
 #define URNET_MESSAGE_FORGET_FAILED     3
+#define URNET_MESSAGE_FORGET_UNKNOWN    4
+
+/* urnet_message_device_identity_state answers one of these STATES, which a first screen decides on:
+ *
+ * NONE: this device has no identity yet: set one up (urnet_message_device_create_identity).
+ * MADE: this device has its identity, which urnet_message_device_identity answers.
+ * UNREADABLE: this device's identity cannot be read. its records stand without its identity record,
+ * which something -- an antivirus quarantine, a sync tool, a person -- moved away. NEVER offer setup:
+ * create_identity and confirm_words refuse, and a new identity would replace this one. say the
+ * identity could not be read and ask the person to close the app and open it again; once the record
+ * is back, the next start opens the identity whole. out_error names the records that stand.
+ * FAILED: the state could not be read (out_error set), or the handle does not resolve (out_error
+ * NULL). a recovered panic answers FAILED.
+ *
+ * a go test holds these equal, by name and value, to the library's own constants. */
+#define URNET_MESSAGE_IDENTITY_NONE       0
+#define URNET_MESSAGE_IDENTITY_MADE       1
+#define URNET_MESSAGE_IDENTITY_UNREADABLE 2
+#define URNET_MESSAGE_IDENTITY_FAILED     3
 
 /* urnet_message_device_confirm_words answers one of these KINDS:
  *
@@ -385,6 +408,12 @@ bool urnet_message_device_key_package(uint64_t self, uint8_t* out, int32_t* inou
  * THE KEY LISTS ABOVE ARE THE JSON'S OWN, IN THEIR ORDER, and a go test in this directory holds
  * them so. */
 char* urnet_message_device_identity(uint64_t self, char** out_error);
+
+/* which of four states this device's identity is in: a URNET_MESSAGE_IDENTITY_* STATE (above). a first
+ * screen asks this before it offers setup: UNREADABLE is an identity whose identity record is away,
+ * over which nothing may be set up. out_error is set for UNREADABLE, and for FAILED but on an unknown
+ * handle; free it with urnet_free_string. */
+int32_t urnet_message_device_identity_state(uint64_t self, char** out_error);
 /* buffer-out. THE 25 WORDS OF A NEW RECOVERY PHRASE, AND NOTHING IS MADE YET: they are UTF-8,
  * lower case, separated by single spaces, and carry no terminating NUL. asked again before the
  * identity is made it answers the SAME words (Back); a restart offers new ones, since the words are

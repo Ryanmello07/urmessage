@@ -785,7 +785,8 @@ func deviceIdentityInfoOf(identity *urmessage.Identity) *deviceIdentityInfo {
 
 // urnet_message_device_identity answers this device's identity as json, and a json with has_identity
 // false before it has one, which is how a first run is told. NULL with out_error set when it cannot
-// be read; NULL with no error for an unknown handle. Free with urnet_free_string.
+// be read -- urmessage's ErrIdentityUnreadable among those, which urnet_message_device_identity_state
+// answers apart -- and NULL with no error for an unknown handle. Free with urnet_free_string.
 //
 //export urnet_message_device_identity
 func urnet_message_device_identity(self C.uint64_t, outError **C.char) *C.char {
@@ -803,6 +804,48 @@ func urnet_message_device_identity(self C.uint64_t, outError **C.char) *C.char {
 		return nil
 	}
 	return cJson(deviceIdentityInfoOf(identity), "urnet_message_device_identity")
+}
+
+// THE FOUR ANSWERS OF urnet_message_device_identity_state (LRI R89 item 1), held equal to the header's
+// URNET_MESSAGE_IDENTITY_* by name and value (TestTheHeaderDefinesExactlyTheIdentityStates).
+const (
+	messageIdentityNone       int32 = 0
+	messageIdentityMade       int32 = 1
+	messageIdentityUnreadable int32 = 2
+	messageIdentityFailed     int32 = 3
+)
+
+// urnet_message_device_identity_state answers which of four states this device's identity is in, which
+// is what the app's first screen decides on (LRI R89 item 1; review D2L-1, L-D1, G-D1):
+//   - NONE: no identity yet, so set one up;
+//   - MADE: an identity, which urnet_message_device_identity answers;
+//   - UNREADABLE: urmessage's ErrIdentityUnreadable. This device's identity cannot be read: its
+//     records stand without its identity record, which something moved away. Nothing may be set up
+//     over it -- create_identity and confirm_words refuse -- and it opens whole once the record is
+//     back. out_error says which records stand;
+//   - FAILED: the state could not be read, with out_error set, or the handle does not resolve, with
+//     out_error NULL. A recovered panic answers FAILED.
+//
+//export urnet_message_device_identity_state
+func urnet_message_device_identity_state(self C.uint64_t, outError **C.char) (state C.int32_t) {
+	state = C.int32_t(messageIdentityFailed)
+	defer cgoGuard("urnet_message_device_identity_state")
+	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_identity_state")
+	if !ok || self_ == nil {
+		return C.int32_t(messageIdentityFailed)
+	}
+	_, err := self_.Identity()
+	switch {
+	case err == nil:
+		return C.int32_t(messageIdentityMade)
+	case errors.Is(err, urmessage.ErrNoIdentity):
+		return C.int32_t(messageIdentityNone)
+	case errors.Is(err, urmessage.ErrIdentityUnreadable):
+		setErrorOut(outError, err)
+		return C.int32_t(messageIdentityUnreadable)
+	}
+	setErrorOut(outError, err)
+	return C.int32_t(messageIdentityFailed)
 }
 
 // urnet_message_device_create_identity answers the 25 words of a new recovery phrase by the
@@ -1036,24 +1079,41 @@ func urnet_message_device_create_group(self C.uint64_t, ctx C.uint64_t, groupId 
 //
 //export urnet_message_device_forget_group
 func urnet_message_device_forget_group(self C.uint64_t, groupId *C.uint8_t, groupIdLen C.int32_t, outError **C.char) (kind C.int32_t) {
-	kind = C.int32_t(messageForgetFailed)
+	kind = C.int32_t(messageForgetUnknown)
 	defer cgoGuard("urnet_message_device_forget_group")
+	// A RECOVERED PANIC IS NOT "NOT HELD" (LRI R89 item 7; review X-D2-3). It answers UNKNOWN, the
+	// preset above, and says so through out_error: the panic may have come before anything changed or
+	// after the group was closed, so the caller re-reads before it acts. The flag is set by every
+	// answer this function gives itself, so only a panic leaves it unset.
+	answered := false
+	defer func() {
+		if !answered {
+			setErrorOut(outError, errForgetStateUnknown)
+		}
+	}()
 	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_forget_group")
 	if !ok || self_ == nil {
+		answered = true
 		return C.int32_t(messageForgetFailed)
 	}
 	err := self_.ForgetGroup(goBytes(groupId, groupIdLen))
 	setErrorOut(outError, err)
+	answered = true
 	return C.int32_t(messageForgetKindOf(err))
 }
 
-// THE FOUR ANSWERS OF urnet_message_device_forget_group, held equal to the header's
+// errForgetStateUnknown is out_error's sentence when forget_group answers UNKNOWN.
+var errForgetStateUnknown = errors.New("urmessage: the leave failed inside the library, and whether the group is still held is unknown: restore or read the group list again before acting")
+
+// THE FIVE ANSWERS OF urnet_message_device_forget_group, held equal to the header's
 // URNET_MESSAGE_FORGET_* by name and value (TestTheHeaderDefinesExactlyTheForgetKinds).
 const (
 	messageForgetOk         int32 = 0
 	messageForgetRefused    int32 = 1
 	messageForgetUnfinished int32 = 2
 	messageForgetFailed     int32 = 3
+	// UNKNOWN is answered by a recovered panic alone (LRI R89 item 7): never by messageForgetKindOf
+	messageForgetUnknown int32 = 4
 )
 
 // messageForgetKindOf is the projection of ForgetGroup's error onto the kinds above. UNFINISHED and
