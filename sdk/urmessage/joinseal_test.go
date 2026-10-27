@@ -206,7 +206,7 @@ func TestAHookThatRefusesLeavesNothingStagedAndNothingSent(t *testing.T) {
 		t.Fatalf("sdk.OpenStreamStore: %v", err)
 	}
 	t.Cleanup(func() { streamStore.Close() })
-	connected, err := NewDevice(DeviceConfig{Transport: transport, Reserver: sdk.NewStreamIndexReserver(streamStore)})
+	connected, err := NewDevice(DeviceConfig{PhraseStretch: messagegroup.FastPhraseStretchForTests(), Transport: transport, Reserver: sdk.NewStreamIndexReserver(streamStore)})
 	if err != nil {
 		t.Fatalf("NewDevice: %v", err)
 	}
@@ -218,6 +218,7 @@ func TestAHookThatRefusesLeavesNothingStagedAndNothingSent(t *testing.T) {
 	before := server.frames.Load()
 
 	joiner, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	joinCode, err := joiner.KeyPackage()
 	if err != nil {
 		t.Fatalf("the joiner's KeyPackage: %v", err)
@@ -318,7 +319,9 @@ func keyPackageListing(t *testing.T, extensions []mls.ExtensionType) []byte {
 func TestAnAdderRefusesAJoinCodeItCannotSealToBeforeAnythingIsStaged(t *testing.T) {
 	ctx := context.Background()
 	alice, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	testIdentify(t, alice)
 	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	testIdentify(t, bob)
 	for _, device := range []*Device{alice, bob} {
 		if err := device.Connect(ctx); err != nil {
 			t.Fatalf("Connect: %v", err)
@@ -380,7 +383,9 @@ func TestAnAdderRefusesAJoinCodeItCannotSealToBeforeAnythingIsStaged(t *testing.
 func TestTheJoinersLeafIsTheWholeLeafTheJoinCodePublished(t *testing.T) {
 	ctx := context.Background()
 	alice, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	testIdentify(t, alice)
 	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	testIdentify(t, bob)
 	for _, device := range []*Device{alice, bob} {
 		if err := device.Connect(ctx); err != nil {
 			t.Fatalf("Connect: %v", err)
@@ -438,7 +443,9 @@ func newSealPair(t *testing.T) *sealPair {
 	t.Helper()
 	ctx := context.Background()
 	alice, aliceServer := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	testIdentify(t, alice)
 	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	testIdentify(t, bob)
 	for _, device := range []*Device{alice, bob} {
 		if err := device.Connect(ctx); err != nil {
 			t.Fatalf("Connect: %v", err)
@@ -606,7 +613,9 @@ func (self *failingRandom) Read(octets []byte) (int, error) {
 func TestAFailedSealLeavesTheFounderWhereItWasAndTheAddCanBeMadeAgain(t *testing.T) {
 	ctx := context.Background()
 	alice, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("alice's nonce"))
+	testIdentify(t, alice)
 	bob, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("bob's nonce"))
+	testIdentify(t, bob)
 	for _, device := range []*Device{alice, bob} {
 		if err := device.Connect(ctx); err != nil {
 			t.Fatalf("Connect: %v", err)

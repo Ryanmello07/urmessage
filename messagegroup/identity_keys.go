@@ -1,0 +1,461 @@
+// The keys a recovery phrase derives, and the two IDs: MASTER section 5.2 at Revision 10, as
+// ledger item 299's registry froze them (identity phase 1's plan, Task 10).
+//
+//	S            = Argon2id(password = P34, salt = "URmessage/v1/phrase-stretch",
+//	                        t = 3, m = 262,144 KiB, p = 4, len = 32)
+//	master_key   = HKDF-Extract(salt = "URmessage/v1", ikm = S)
+//	identity     = HKDF-Expand(master_key, "identity/v1", 32)   -> Ed25519: IRK, the identity key
+//	isk_root     = HKDF-Expand(master_key, "isk/v1", 32)
+//	isk_seed[g]  = HKDF-Expand(isk_root, "iskgen/v1" ‖ u32(g), 32) -> Ed25519: ISK_g
+//
+// ONLY isk_seed[g] IS EVER KEPT, and only by a phrase device, in its phrase key record. The words,
+// S, master_key, isk_root and IRK's private half exist only while a ceremony runs: here, inside
+// one call of [WithPhraseKeys], which erases every one of them before it returns, whatever its
+// ceremony did. One call derives every key number of the SET it is handed, in one stretch, so a
+// lock-out's check of g and its mint of g+1 cost one Argon2id and not two (LRI R68). isk_root goes
+// before the ceremony starts, so no ceremony can mint a key number outside its set from what it
+// was handed, and a device that keeps isk_seed[g] cannot either (F1:356).
+//
+// MESSAGEGROUP SIGNS, AND NO PRIVATE HALF LEAVES THE PACKAGE (LRI R68, answering R65 item 4). IRK's
+// whole private key -- its seed is its first 32 octets -- is in the ceremony's keys for the length
+// of the ceremony, and only the separate buffer the seed was expanded into is erased before it. So
+// IRK and ISK_g sign here, through the methods of *PhraseKeys, each taking and answering public
+// values: IskCert(g), the form-1 step, a base, and D2 IL8's derivation. isk_seed[g] is the one
+// secret a method answers, for the phrase key record.
+//
+// THE STRETCH'S PARAMETERS ARE NOT FROZEN until they are measured on the owner's computers
+// (ledger item 299; M5 H.3). They are phraseStretchFrozen below, and production reads no other:
+// every other test of this package stretches through a cheap value its tests declare, handed in
+// as an argument, and TestProductionStretchesWithTheFrozenParametersOnly holds that no production
+// path can construct or reach one.
+//
+// THE TWO IDs are taken over the identity's ROOT, the identity key of its first phrase, so a
+// phrase change moves neither (MASTER section 5.5; D2 IL1). The account ID is D2's ID1 and the
+// device ID D2's DID1, verbatim as item 299 carries them.
+package messagegroup
+
+import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"slices"
+
+	"github.com/urnetwork/message/syntax"
+	"golang.org/x/crypto/argon2"
+)
+
+// The stretch's salt, the extraction's salt and the expansion labels (ledger item 299).
+const (
+	phraseStretchSalt   = "URmessage/v1/phrase-stretch"
+	phraseMasterKeySalt = "URmessage/v1"
+	identityKeyInfo     = "identity/v1"
+	iskRootInfo         = "isk/v1"
+	iskSeedInfoLabel    = "iskgen/v1"
+)
+
+const (
+	// S, master_key, the identity key's seed, isk_root and isk_seed[g] are each thirty two octets
+	phraseKeyOctets = 32
+	// the salt an account ID is made with: sixteen random octets, made with the ID
+	AccountIdSaltSize = 16
+	// the account ID is the first sixteen octets of its hash; the device ID the first eight
+	accountIdOctets = 16
+	deviceIdOctets  = 8
+	// id_version, the u16 ID1 hashes before the root
+	accountIdVersion uint16 = 1
+)
+
+// The labels the two IDs are hashed under (ledger item 299; D2 ID1 and DID1).
+const (
+	accountIdLabel = "URmessage/v1/id"
+	deviceIdLabel  = "URmessage/v1/device-id"
+)
+
+// One setting of Argon2id: passes, memory in KiB, and lanes.
+type phraseStretchParameters struct {
+	time      uint32
+	memoryKiB uint32
+	lanes     uint8
+}
+
+// The stretch's parameters, MASTER section 5.2 and M5 H.3: t = 3, m = 262,144 KiB, p = 4. NOT
+// FROZEN until they are measured on the owner's computers, and the only parameters production
+// stretches with.
+//
+// A FUNCTION ANSWERING THE LITERAL, so that they are unwritable by construction: there is no
+// variable for a method or an assignment to lighten. The review of Tasks 8 to 10 lightened the
+// variable this replaced through a pointer-receiver method (its M3) and with -- (its M3b), and
+// both passed every gate (L2-03); neither can be written now.
+func phraseStretchFrozen() phraseStretchParameters {
+	return phraseStretchParameters{time: 3, memoryKiB: 262144, lanes: 4}
+}
+
+// The TEST SEAM's parameters: the cheapest Argon2id there is, one pass over 64 KiB in one lane. A
+// function answering the literal, for phraseStretchFrozen's reason, and reached by one production
+// door, WithPhraseKeysUnder, and only under the one PhraseStretch value no production source names
+// (LRI R76 item 10).
+func phraseStretchSeam() phraseStretchParameters {
+	return phraseStretchParameters{time: 1, memoryKiB: 64, lanes: 1}
+}
+
+// S = Argon2id(P34, "URmessage/v1/phrase-stretch", t, m, p, 32), Argon2 version 0x13 with no
+// secret and no associated data.
+func stretchPhrase(p34 []byte, parameters phraseStretchParameters) []byte {
+	return argon2.IDKey(p34, []byte(phraseStretchSalt), parameters.time, parameters.memoryKiB,
+		parameters.lanes, phraseKeyOctets)
+}
+
+// isk_seed[g] = HKDF-Expand(isk_root, "iskgen/v1" ‖ u32(g), 32). It depends on isk_root and g
+// and on nothing else, and isk_root is not kept: so a holder of one key number cannot mint the
+// next.
+func iskSeedOf(iskRoot []byte, keyNumber uint32) []byte {
+	writer := syntax.NewWriter()
+	writer.WriteRaw([]byte(iskSeedInfoLabel))
+	writer.WriteUint32(keyNumber)
+	info, err := writer.Bytes()
+	if err != nil {
+		panic(fmt.Errorf("messagegroup: the info of a key number's seed could not be built: %w", err))
+	}
+	return keyScheduleExpand(iskRoot, info, phraseKeyOctets)
+}
+
+// PhraseKeys is what one stretch of a recovery phrase derives for a set of key numbers: the
+// identity key IRK, and for each g of the set the phrase's key ISK_g with the seed isk_seed[g] it
+// is made from.
+//
+// It is handed to a ceremony by [WithPhraseKeys] and is blank once that call returns. A ceremony
+// that keeps the pointer keeps zeros, and every method then answers ErrPhraseKeysErased.
+type PhraseKeys struct {
+	irk     ed25519.PrivateKey
+	numbers []phraseKeyNumber
+}
+
+// One key number of a ceremony's set: g, isk_seed[g] and ISK_g.
+type phraseKeyNumber struct {
+	keyNumber uint32
+	iskSeed   []byte
+	isk       ed25519.PrivateKey
+}
+
+// The erase of one key number's secrets, in place.
+//
+//go:noinline
+func (self *phraseKeyNumber) erase() {
+	zeroize(self.iskSeed)
+	zeroize(self.isk)
+	self.iskSeed = nil
+	self.isk = nil
+}
+
+// KeyNumbers is the ceremony's set, ascending. It is a copy.
+func (self *PhraseKeys) KeyNumbers() []uint32 {
+	keyNumbers := []uint32{}
+	for _, number := range self.numbers {
+		keyNumbers = append(keyNumbers, number.keyNumber)
+	}
+	return keyNumbers
+}
+
+// IdentityKey is IRK's public half: the identity key, and for an identity's first phrase its
+// root. It is a copy, and nil once the ceremony is over.
+func (self *PhraseKeys) IdentityKey() ed25519.PublicKey {
+	return phrasePublicHalf(self.irk)
+}
+
+// The key number g of the ceremony's set: ErrPhraseKeysErased once the ceremony is over, and
+// ErrPhraseKeyNumber for a g outside the set.
+func (self *PhraseKeys) keyNumberOf(keyNumber uint32) (*phraseKeyNumber, error) {
+	if len(self.irk) != ed25519.PrivateKeySize {
+		return nil, ErrPhraseKeysErased
+	}
+	for at := range self.numbers {
+		if self.numbers[at].keyNumber == keyNumber {
+			return &self.numbers[at], nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %d is not in the ceremony's set %v", ErrPhraseKeyNumber, keyNumber, self.KeyNumbers())
+}
+
+// PhraseKey is ISK_g's public half, the key a base of key number g is checked under. It is a
+// copy.
+func (self *PhraseKeys) PhraseKey(keyNumber uint32) (ed25519.PublicKey, error) {
+	number, err := self.keyNumberOf(keyNumber)
+	if err != nil {
+		return nil, err
+	}
+	return phrasePublicHalf(number.isk), nil
+}
+
+// PhraseKeySeed is isk_seed[g], a copy, for the one place it may go: a phrase device's phrase
+// key record (store kind 13). It is the only phrase secret that outlives a ceremony.
+func (self *PhraseKeys) PhraseKeySeed(keyNumber uint32) ([]byte, error) {
+	number, err := self.keyNumberOf(keyNumber)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), number.iskSeed...), nil
+}
+
+// The public half of an Ed25519 key, copied out of the expanded key rather than sliced from it,
+// for mls.signaturePublicKeyOf's reason: a window onto the expanded key keeps its secret first
+// half reachable from what the caller was told is a public key. A blank key answers nil.
+func phrasePublicHalf(expanded ed25519.PrivateKey) ed25519.PublicKey {
+	if len(expanded) != ed25519.PrivateKeySize {
+		return nil
+	}
+	return append(ed25519.PublicKey(nil), expanded[ed25519.SeedSize:]...)
+}
+
+// SignIskCert answers IskCert(g): IRK's signature, over LP("URmessage/v1/isk-cert") and the
+// certificate's tbs, of key number g's phrase key. IRK's private half exists only inside the
+// ceremony, so this is where every certificate is signed: AD1's first, a lock-out's next, and a
+// phrase change's first under the new key (MASTER sections 5.3 and 5.5).
+func (self *PhraseKeys) SignIskCert(keyNumber uint32) (*IskCert, error) {
+	number, err := self.keyNumberOf(keyNumber)
+	if err != nil {
+		return nil, err
+	}
+	cert := &IskCert{IdentityKey: self.IdentityKey(), IskPub: phrasePublicHalf(number.isk), KeyNumber: keyNumber}
+	if err := signIskCert(self.irk, cert); err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// SignIdentityStep answers the form-1 step from this ceremony's identity key to next: IRK's
+// signature over LP("URmessage/v1/identity-succession") and LP(next), which a phrase change signs
+// with the old words before the new key takes over (MASTER section 5.5; V4 F.0 (1)). It is signed
+// here for the reason SignIskCert is.
+func (self *PhraseKeys) SignIdentityStep(next ed25519.PublicKey) (*IdentityStep, error) {
+	if len(self.irk) != ed25519.PrivateKeySize {
+		return nil, ErrPhraseKeysErased
+	}
+	return signIdentityStep(self.irk, next)
+}
+
+// SignBase fills base's signature by ISK_g: key number g's phrase key, over
+// LP("URmessage/v1/device-list") and the base's tbs. The base names this ceremony's identity key
+// and g already, and its author, a phrase device it names; one that does not, or is not well
+// formed, is refused before anything is signed. The author's own signature is its device key's,
+// [SignBaseAuthor], over the same tbs.
+func (self *PhraseKeys) SignBase(keyNumber uint32, base *DeviceListBase) error {
+	number, err := self.keyNumberOf(keyNumber)
+	if err != nil {
+		return err
+	}
+	if base == nil || !sameOctets(base.IdentityKey, self.IdentityKey()) || base.KeyNumber != keyNumber {
+		return fmt.Errorf("%w: the base names another identity key or key number than the one it is signed under", ErrIdentitySigningKey)
+	}
+	return signBaseByPhraseKey(number.isk, base)
+}
+
+// DeriveIdentityKeyed is D2 IL8's derivation: the public half of the Ed25519 key whose seed is
+// HKDF-Expand(IRK's seed, label, 32). The words-scoped hooks take an identity's keys through it --
+// R registers "inboxown/v1", the owner key -- and only this package reaches IRK's seed, so it is
+// here, answering the public half alone: the derived seed and private key are erased before it
+// returns. Every label is a derivation of its own; the labels are the registering code's constants.
+func (self *PhraseKeys) DeriveIdentityKeyed(label string) (ed25519.PublicKey, error) {
+	if len(self.irk) != ed25519.PrivateKeySize {
+		return nil, ErrPhraseKeysErased
+	}
+	derivedSeed := keyScheduleExpand(self.irk[:ed25519.SeedSize], []byte(label), phraseKeyOctets)
+	defer zeroize(derivedSeed)
+	derived := ed25519.NewKeyFromSeed(derivedSeed)
+	defer zeroize(derived)
+	return phrasePublicHalf(derived), nil
+}
+
+// Format writes a fixed redaction under every verb, so that no fmt call -- a log line, a wrapped
+// error -- carries an octet of the ceremony's keys (the review of Tasks 8 to 10, L1-4). fmt.Formatter
+// rather than String, because fmt consults a Stringer only for v, s, x, X and q, and %d of a key
+// would print it. It writes the same text whatever the verb.
+func (self PhraseKeys) Format(state fmt.State, verb rune) {
+	fmt.Fprint(state, phraseKeysRedacted)
+}
+
+// What every fmt verb writes for a PhraseKeys.
+const phraseKeysRedacted = "messagegroup.PhraseKeys{redacted}"
+
+// The erase at the end of a ceremony: every secret a PhraseKeys holds, in place.
+//
+//go:noinline
+func (self *PhraseKeys) erase() {
+	zeroize(self.irk)
+	self.irk = nil
+	for at := range self.numbers {
+		self.numbers[at].erase()
+	}
+	self.numbers = nil
+}
+
+// WithPhraseKeys stretches the phrase once, under the frozen parameters, and runs ceremony with
+// the identity key and the phrase's key of every key number of keyNumbers: a set, each number at
+// least 1 and none named twice.
+//
+// Everything the phrase derives is erased before it returns, whatever ceremony did: S,
+// master_key and isk_root before ceremony runs, and the identity key, and every ISK_g and
+// isk_seed[g], when it is done. ceremony's error is answered as it is.
+func WithPhraseKeys(phrase *RecoveryPhrase, keyNumbers []uint32, ceremony func(keys *PhraseKeys) error) error {
+	return withPhraseKeys(phrase, keyNumbers, phraseStretchFrozen(), ceremony)
+}
+
+// PhraseStretch names the stretch a ceremony runs a phrase under, for [WithPhraseKeysUnder]. Its
+// zero value is the frozen stretch, MASTER section 5.2's, the only one production runs. Its one
+// other value is the test seam's, which [FastPhraseStretchForTests] answers. Its field is
+// unexported, so no caller can spell a third.
+type PhraseStretch struct {
+	seam bool
+}
+
+// FastPhraseStretchForTests answers the test seam's stretch: t = 1, m = 64 KiB, p = 1. It is for
+// tests outside this package that make identities by the hundred. Each identity at the frozen
+// parameters costs 256 MiB and the better part of a second, and a suite makes hundreds (LRI R76
+// item 10).
+//
+// NOTHING IN PRODUCTION NAMES IT. TestProductionStretchesWithTheFrozenParametersOnly holds that
+// over this package, and sdk's TestNoProductionSourceOfTheSdkNamesTheTestStretch holds it over the
+// sdk module. A key made under it is not the key the words make at the frozen parameters, so an
+// identity made under it is a test's own and nobody else's.
+func FastPhraseStretchForTests() PhraseStretch {
+	return PhraseStretch{seam: true}
+}
+
+// WithPhraseKeysUnder is WithPhraseKeys under the stretch it is handed. Under the zero value,
+// which is the frozen stretch, it is WithPhraseKeys.
+func WithPhraseKeysUnder(stretch PhraseStretch, phrase *RecoveryPhrase, keyNumbers []uint32,
+	ceremony func(keys *PhraseKeys) error) error {
+
+	if stretch.seam {
+		return withPhraseKeys(phrase, keyNumbers, phraseStretchSeam(), ceremony)
+	}
+	return withPhraseKeys(phrase, keyNumbers, phraseStretchFrozen(), ceremony)
+}
+
+// WithPhraseKeys under the stretch parameters it is handed. The two exported entries hand it the
+// frozen ones; only WithPhraseKeysUnder, under FastPhraseStretchForTests, hands it the seam's.
+func withPhraseKeys(phrase *RecoveryPhrase, keyNumbers []uint32, parameters phraseStretchParameters,
+	ceremony func(keys *PhraseKeys) error) error {
+
+	if phrase == nil || ceremony == nil {
+		return ErrPhraseKeysCeremony
+	}
+	if len(keyNumbers) == 0 {
+		return fmt.Errorf("%w: a ceremony of no key number", ErrPhraseKeyNumber)
+	}
+	for at, keyNumber := range keyNumbers {
+		if keyNumber == 0 || slices.Contains(keyNumbers[:at], keyNumber) {
+			return fmt.Errorf("%w: %v names 0 or one number twice", ErrPhraseKeyNumber, keyNumbers)
+		}
+	}
+	keys := derivePhraseKeys(phrase, keyNumbers, parameters)
+	defer keys.erase()
+	return ceremony(keys)
+}
+
+// The one stretch and the derivations under it, for every key number of the set. Every
+// intermediate is erased in the body that made it, before the keys are handed back.
+func derivePhraseKeys(phrase *RecoveryPhrase, keyNumbers []uint32, parameters phraseStretchParameters) *PhraseKeys {
+	stretched := stretchPhrase(phrase.p34[:], parameters)
+	defer zeroize(stretched)
+	masterKey := keyScheduleExtract([]byte(phraseMasterKeySalt), stretched)
+	defer zeroize(masterKey)
+	irkSeed := keyScheduleExpand(masterKey, []byte(identityKeyInfo), phraseKeyOctets)
+	defer zeroize(irkSeed)
+	iskRoot := keyScheduleExpand(masterKey, []byte(iskRootInfo), phraseKeyOctets)
+	defer zeroize(iskRoot)
+	ascending := slices.Sorted(slices.Values(keyNumbers))
+	numbers := make([]phraseKeyNumber, 0, len(ascending))
+	for _, keyNumber := range ascending {
+		iskSeed := iskSeedOf(iskRoot, keyNumber)
+		numbers = append(numbers, phraseKeyNumber{keyNumber: keyNumber, iskSeed: iskSeed, isk: ed25519.NewKeyFromSeed(iskSeed)})
+	}
+	return &PhraseKeys{irk: ed25519.NewKeyFromSeed(irkSeed), numbers: numbers}
+}
+
+// AccountId is an account ID, D2's ID1: sixteen octets of a hash over the identity's root and a
+// salt, written as a UUID of version 8 (RFC 9562 section 5.8).
+type AccountId [accountIdOctets]byte
+
+// AccountIdOf is ID1:
+//
+//	id_hash = SHA-256("URmessage/v1/id" ‖ u16(id_version = 1) ‖ LP(root_pub) ‖ LP(salt))
+//	id      = id_hash[0..16) with octet 6 = (id_hash[6] & 0x0F) | 0x80
+//	                         and octet 8 = (id_hash[8] & 0x3F) | 0x80
+//
+// root is the identity's root, the identity key of its first phrase, and salt is the sixteen
+// random octets made with the ID. It changes with either, and with nothing else.
+func AccountIdOf(root ed25519.PublicKey, salt [AccountIdSaltSize]byte) (AccountId, error) {
+	if len(root) != ed25519.PublicKeySize {
+		return AccountId{}, fmt.Errorf("%w: the root is %d", ErrIdentityPublicKeyLength, len(root))
+	}
+	writer := syntax.NewWriter()
+	writer.WriteRaw([]byte(accountIdLabel))
+	writer.WriteUint16(accountIdVersion)
+	writer.WriteOpaqueLP(root)
+	writer.WriteOpaqueLP(salt[:])
+	preimage, err := writer.Bytes()
+	if err != nil {
+		panic(fmt.Errorf("messagegroup: an account ID's preimage could not be built: %w", err))
+	}
+	return accountIdOfHash(sha256.Sum256(preimage)), nil
+}
+
+// The ID's sixteen octets out of its hash, with UUIDv8's version and variant set, as D2's ID1
+// writes them. message/record_test.go's class-and-bucket gate reads `& 0x0F` as its own shape, and
+// holds this declaration, whole, as a reviewed context of this repository's code
+// (joinReviewedRepositoryContexts): what it masks is a UUID's version nibble over an octet of a
+// hash, and no retention byte. A changed body is under every rule of that gate again.
+func accountIdOfHash(idHash [sha256.Size]byte) AccountId {
+	var id AccountId
+	copy(id[:], idHash[:accountIdOctets])
+	id[6] = (idHash[6] & 0x0F) | 0x80
+	id[8] = (idHash[8] & 0x3F) | 0x80
+	return id
+}
+
+// String is the ID as the app shows it: 8-4-4-4-12 lowercase hex, 36 characters.
+func (self AccountId) String() string {
+	text := hex.EncodeToString(self[:])
+	return text[0:8] + "-" + text[8:12] + "-" + text[12:16] + "-" + text[16:20] + "-" + text[20:32]
+}
+
+// DeviceId is a device ID, D2's DID1: eight octets of a hash over the identity's root and the
+// device's key.
+type DeviceId [deviceIdOctets]byte
+
+// DeviceIdOf is DID1:
+//
+//	device_id = SHA-256("URmessage/v1/device-id" ‖ LP(root_pub) ‖ LP(device_pub))[0..8)
+//
+// It changes with the device key and with the root, and with nothing else (D2 DID3): it takes
+// no salt, so changing the account ID leaves it.
+func DeviceIdOf(root ed25519.PublicKey, device ed25519.PublicKey) (DeviceId, error) {
+	if len(root) != ed25519.PublicKeySize {
+		return DeviceId{}, fmt.Errorf("%w: the root is %d", ErrIdentityPublicKeyLength, len(root))
+	}
+	if len(device) != ed25519.PublicKeySize {
+		return DeviceId{}, fmt.Errorf("%w: the device key is %d", ErrIdentityPublicKeyLength, len(device))
+	}
+	writer := syntax.NewWriter()
+	writer.WriteRaw([]byte(deviceIdLabel))
+	writer.WriteOpaqueLP(root)
+	writer.WriteOpaqueLP(device)
+	preimage, err := writer.Bytes()
+	if err != nil {
+		panic(fmt.Errorf("messagegroup: a device ID's preimage could not be built: %w", err))
+	}
+	return deviceIdOfHash(sha256.Sum256(preimage)), nil
+}
+
+// The ID's eight octets out of its hash.
+func deviceIdOfHash(idHash [sha256.Size]byte) DeviceId {
+	return DeviceId(idHash[:deviceIdOctets])
+}
+
+// String is the ID as the app shows it: four groups of four lowercase hex characters, 19 in all,
+// so that nobody takes it for an account ID.
+func (self DeviceId) String() string {
+	text := hex.EncodeToString(self[:])
+	return text[0:4] + "-" + text[4:8] + "-" + text[8:12] + "-" + text[12:16]
+}

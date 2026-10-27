@@ -1,9 +1,11 @@
 package urmessage
 
 import (
-	"crypto/sha256"
+	"bytes"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/urnetwork/message/messagegroup"
@@ -21,10 +23,86 @@ import (
 // field the path never produces. The end-to-end cases, through real devices and the seam's own
 // commits, are rolesingest_test.go.
 
-// roleIdentity is a deterministic 32-octet identity for a named member.
+// THE TABLE'S NAMES ARE REAL IDENTITIES, AND ITS LEAVES REAL DEVICES OF THEM (identity phase 1's
+// Task 13). The binding rules run inside [authorizeCommit] ahead of R1 and judge every leaf a commit
+// adds or updates, and its committer's: each must carry a 0xF005 that binds it (R6e), and the newest
+// list of its identity must name it (R8-CUR). So every name of a row is an identity made from words of
+// its own, under the test seam's stretch, every leaf of a name is a device of its own key, and one list
+// per name, signed by that name's phrase key, names every device the row puts under it, on both sides
+// of the commit. The rows then measure the rules they were written for, and a row the binding rules
+// answer first says so where it stands.
+var roleIdentities = struct {
+	sync.Mutex
+	phrases map[string]*messagegroup.RecoveryPhrase
+	keys    map[string][]byte
+	lists   map[string]messagegroup.ExtensionBytes
+}{
+	phrases: map[string]*messagegroup.RecoveryPhrase{},
+	keys:    map[string][]byte{},
+	lists:   map[string]messagegroup.ExtensionBytes{},
+}
+
+// roleIdentity is the identity key of a named member: one identity per name in this process, made from
+// words of its own the first time the name is asked for.
 func roleIdentity(name string) []byte {
-	sum := sha256.Sum256([]byte("role-model identity: " + name))
-	return sum[:]
+	roleIdentities.Lock()
+	defer roleIdentities.Unlock()
+	if key, held := roleIdentities.keys[name]; held {
+		return key
+	}
+	phrase, err := messagegroup.NewRecoveryPhrase()
+	if err != nil {
+		panic(fmt.Errorf("the role table's words for %q: %w", name, err))
+	}
+	var identityKey []byte
+	if err := messagegroup.WithPhraseKeysUnder(messagegroup.FastPhraseStretchForTests(), phrase, []uint32{1},
+		func(keys *messagegroup.PhraseKeys) error {
+			identityKey = bytes.Clone(keys.IdentityKey())
+			return nil
+		}); err != nil {
+		panic(fmt.Errorf("the role table's identity key for %q: %w", name, err))
+	}
+	roleIdentities.phrases[name] = phrase
+	roleIdentities.keys[name] = identityKey
+	return identityKey
+}
+
+// roleDevice is the device a named member stands at one leaf with: its seed and its public half.
+func roleDevice(name string, leaf uint32) (mls.SignaturePrivateKey, []byte) {
+	return testDeviceKey(fmt.Sprintf("the role table's %s at leaf %d", name, leaf))
+}
+
+// roleListOf is a named member's one list for a row: base 1 under key number 1, naming the devices of
+// the leaves given, the first ten of them where a row puts more under one name, which no list can name;
+// its author is the device at the lowest leaf.
+func roleListOf(t *testing.T, name string, leaves []uint32) messagegroup.ExtensionBytes {
+	t.Helper()
+	leaves = slices.Clone(leaves)
+	slices.Sort(leaves)
+	leaves = slices.Compact(leaves)
+	if messagegroup.DeviceListMaxDevices < len(leaves) {
+		leaves = leaves[:messagegroup.DeviceListMaxDevices]
+	}
+	key := fmt.Sprintf("%s %v", name, leaves)
+	identityKey := roleIdentity(name)
+	roleIdentities.Lock()
+	defer roleIdentities.Unlock()
+	if list, held := roleIdentities.lists[key]; held {
+		return list
+	}
+	devices := [][]byte{}
+	for _, leaf := range leaves {
+		_, device := roleDevice(name, leaf)
+		devices = append(devices, device)
+	}
+	author, authorPub := roleDevice(name, leaves[0])
+	list := testBaseList(t, roleIdentities.phrases[name], 1, author, authorPub, devices...)
+	parsed, err := messagegroup.ParseUrmessageIdentity(list)
+	if err != nil || !bytes.Equal(parsed.Base.IdentityKey, identityKey) {
+		t.Fatalf("the role table's list for %q is not under its identity key (%v)", name, err)
+	}
+	roleIdentities.lists[key] = list
+	return list
 }
 
 // roleLeaf is one occupied leaf: which member's identity it carries.
@@ -98,22 +176,43 @@ func roleExtensionsOf(t *testing.T, policy *mls.GroupPolicyExtension, capabiliti
 
 // roleMembersOf is one membership as the ingest path would hand it over: every leaf carries its
 // leaf keys, as MemberAt's refusal makes true of the pre-commit side, except the ones a scenario
-// names keyless, which is the post-commit reading a hostile Add produces.
-func roleMembersOf(leaves []roleLeaf, policy *mls.GroupPolicyExtension, keyless []uint32) []CommitMember {
+// names keyless, which is the post-commit reading a hostile Add produces. Every leaf is its member's
+// device at that leaf, and carries its member's list for the row.
+func roleMembersOf(leaves []roleLeaf, policy *mls.GroupPolicyExtension, keyless []uint32,
+	lists map[string]messagegroup.ExtensionBytes) []CommitMember {
+
 	out := []CommitMember{}
 	for _, one := range leaves {
 		identity := roleIdentity(one.who)
 		handle := make([]byte, 16)
 		handle[0] = byte(one.leaf)
+		_, device := roleDevice(one.who, one.leaf)
 		out = append(out, CommitMember{
 			Leaf:         one.leaf,
 			SenderHandle: handle,
 			IdentityPub:  identity,
 			Role:         roleNameIn(policy, identity),
 			HasLeafKeys:  !leafSetOf(keyless)[one.leaf],
+			SignatureKey: device,
+			Extensions:   []messagegroup.ExtensionBytes{lists[one.who]},
 		})
 	}
 	return out
+}
+
+// roleListsOf is every member's one list for a row: each names the devices the row puts under its
+// member on either side of the commit, so that both trees carry one list per identity.
+func roleListsOf(t *testing.T, before []roleLeaf, after []roleLeaf) map[string]messagegroup.ExtensionBytes {
+	t.Helper()
+	leaves := map[string][]uint32{}
+	for _, one := range append(slices.Clone(before), after...) {
+		leaves[one.who] = append(leaves[one.who], one.leaf)
+	}
+	lists := map[string]messagegroup.ExtensionBytes{}
+	for who, held := range leaves {
+		lists[who] = roleListOf(t, who, held)
+	}
+	return lists
 }
 
 // authorization builds the value the ingest path would hand [authorizeCommit] for this scenario.
@@ -156,7 +255,8 @@ func (self roleScenario) authorization(t *testing.T) *CommitAuthorization {
 	// THE SAME DERIVATION THE INGEST PATH RUNS
 	decodedBefore, errBefore := mls.GroupPolicyOf(mlsExtensionsOf(extensionsBefore))
 	decodedAfter, errAfter := mls.GroupPolicyOf(mlsExtensionsOf(extensionsAfter))
-	members := roleMembersOf(self.before, decodedBefore, nil)
+	lists := roleListsOf(t, self.before, self.after)
+	members := roleMembersOf(self.before, decodedBefore, nil, lists)
 	var committerLeaf uint32
 	var committerIdentity []byte
 	found := false
@@ -185,7 +285,7 @@ func (self roleScenario) authorization(t *testing.T) *CommitAuthorization {
 		RemovedLeaves:     self.removed,
 		UpdatedLeaves:     self.updated,
 		Members:           members,
-		MembersAfter:      roleMembersOf(self.after, decodedAfter, self.keylessAfter),
+		MembersAfter:      roleMembersOf(self.after, decodedAfter, self.keylessAfter, lists),
 		PolicyBefore:      decodedBefore,
 		PolicyAfter:       decodedAfter,
 		PolicyBeforeErr:   errBefore,
@@ -663,6 +763,12 @@ func TestR7JudgesTheAddsAndRemovesOnItsOwnTerms(t *testing.T) {
 }
 
 // THE CAPS, ruling 7 and MASTER §11: over the post-commit tree.
+//
+// AND THE ELEVENTH LEAF OF ONE IDENTITY MEETS THE BINDING RULES FIRST (identity phase 1's Task 13). A
+// list names ten devices at most, so no list can name an identity's eleventh: its leaf binds to
+// nothing, and R6e, which runs ahead of the caps, refuses it. The cap is the second fence there, and
+// each row also holds [ruleCaps] alone over the same value, so the cap's own sentence is still the
+// answer it gives.
 func TestTheCapsAreJudgedOverThePostCommitTree(t *testing.T) {
 	leavesOfIdentities := func(identities int, perIdentity int) []roleLeaf {
 		out := []roleLeaf{{0, "owner"}}
@@ -690,13 +796,14 @@ func TestTheCapsAreJudgedOverThePostCommitTree(t *testing.T) {
 		before    []roleLeaf
 		after     []roleLeaf
 		want      error
+		capsAlone error
 	}{
-		{"500 identities is allowed", "owner", leavesOfIdentities(498, 1), leavesOfIdentities(499, 1), nil},
-		{"501 identities is refused", "owner", leavesOfIdentities(499, 1), leavesOfIdentities(500, 1), mls.ErrGroupSizeExceeded},
-		{"1000 leaves is allowed", "owner", leavesOfIdentities(99, 10), leavesOfIdentities(100, 10)[:1000], nil},
-		{"1001 leaves is refused", "owner", leavesOfIdentities(99, 10), leavesOfIdentities(100, 10), mls.ErrGroupSizeExceeded},
-		{"10 leaves for one identity is allowed", "identity-0", leavesOfIdentities(1, 9), leavesOfIdentities(1, 10), nil},
-		{"11 leaves for one identity is refused", "identity-0", leavesOfIdentities(1, 10), leavesOfIdentities(1, 11), mls.ErrDeviceLimitExceeded},
+		{"500 identities is allowed", "owner", leavesOfIdentities(498, 1), leavesOfIdentities(499, 1), nil, nil},
+		{"501 identities is refused", "owner", leavesOfIdentities(499, 1), leavesOfIdentities(500, 1), mls.ErrGroupSizeExceeded, mls.ErrGroupSizeExceeded},
+		{"1000 leaves is allowed", "owner", leavesOfIdentities(99, 10), leavesOfIdentities(100, 10)[:1000], nil, nil},
+		{"1001 leaves is refused", "owner", leavesOfIdentities(99, 10), leavesOfIdentities(100, 10), mls.ErrGroupSizeExceeded, mls.ErrGroupSizeExceeded},
+		{"10 leaves for one identity is allowed", "identity-0", leavesOfIdentities(1, 9), leavesOfIdentities(1, 10), nil, nil},
+		{"11 leaves for one identity is refused", "identity-0", leavesOfIdentities(1, 10), leavesOfIdentities(1, 11), ErrCommitIdentityUnbound, mls.ErrDeviceLimitExceeded},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -705,6 +812,9 @@ func TestTheCapsAreJudgedOverThePostCommitTree(t *testing.T) {
 				added:       addedFrom(row.before, row.after),
 				rolesBefore: map[string]mls.Role{"owner": mls.RoleOwner},
 			}.authorization(t)
+			if err := ruleCaps(decision); (row.capsAlone == nil) != (err == nil) || !errors.Is(err, row.capsAlone) {
+				t.Fatalf("the caps alone answered %v, want %v", err, row.capsAlone)
+			}
 			err := authorizeCommit(decision)
 			if row.want == nil {
 				if err != nil {

@@ -194,6 +194,12 @@ message Capabilities {
     uint32 rendezvous_mailbox_depth       = 23;  // 16 uncollected deposits per rendezvous
     uint32 rendezvous_deposit_ttl_seconds = 24;  // 604800 (7 days)
     uint32 rendezvous_ttl_seconds         = 25;  // 7776000 (90 days), refreshed on every collect
+    // ── Revision 25: the link box, kind 4 (§4.3.11). Fields 27 and 28 are kept for R's,
+    //    the design for IDs and requests, which numbers them; nothing else takes them.
+    repeated uint32 rendezvous_deposit_sizes = 26;  // every deposit size served; I1: [17526]
+    uint32 rendezvous_kinds                  = 29;  // bit k for each kind k served;
+                                                    // I1: 1 << 4 = 16, the link box alone
+    //    While kind 4 is not served (§4.3.11's floor), 26 and 29 leave it out.
 }
 
 message BlobEndpoint {
@@ -859,10 +865,16 @@ message RendezvousRegisterRequest {
     bytes  collect_verify_pub  = 3;   // 32 B Ed25519, held only by the card's owner
     bytes  card_xwing_pub      = 4;   // 1216 B, disclosed on Open
     uint32 alg_id              = 5;
+    uint32 kind                = 6;   // Revision 25: 4, the link box; 0 is the card's
+    bytes  public_ct           = 7;   // Revision 25: kind 4's sealed card, EXACTLY 4124 B
+    // Revision 25, kind 4: 2 is derived from the code, 3 is the new device's own, 4 is absent,
+    //   and 5 is 0x0014. Fields 8 to 10 are kept for R's, which the design for IDs and requests
+    //   numbers; nothing else takes them.
     bytes  register_auth       = 15;  // Ed25519 under collect_sig_sk over the §5.14 preimage
 }
 message RendezvousRegisterResponse {
     uint64 expire_time_ms      = 1;   // when this registration lapses without a collect
+                                      // (Revision 25, kind 4: fixed at registration)
     uint32 mailbox_depth       = 2;   // uncollected deposits waiting right now
 }
 
@@ -874,17 +886,22 @@ message RendezvousOpenResponse {
     bytes  card_xwing_pub      = 1;
     uint32 alg_id              = 2;
     uint32 deposit_bytes       = 3;   // echoes Capabilities.rendezvous_deposit_bytes
+                                      // (Revision 25, kind 4: 17526, the box's own)
+    bytes  public_ct           = 4;   // Revision 25: kind 4's sealed card
+    repeated uint32 deposit_sizes = 5; // Revision 25: the sizes this box takes; kind 4: [17526]
 }
 
 message RendezvousDepositRequest {
     bytes  rendezvous_id       = 1;
     bytes  deposit_ct          = 2;   // EXACTLY rendezvous_deposit_bytes
+                                      // (Revision 25, kind 4: EXACTLY 17526 B)
     bytes  deposit_auth        = 15;  // Ed25519 under deposit_sig_sk over
                                       //   rendezvous_id and H(deposit_ct)
 }
 message RendezvousDepositResponse {
     uint64 deposit_id          = 1;   // the id assigned, or the existing one on an
                                       // idempotent replay of identical bytes
+    bytes  deposit_hash        = 2;   // Revision 25: H(deposit_ct), the idempotency key
 }
 
 message RendezvousCollectRequest {
@@ -893,6 +910,7 @@ message RendezvousCollectRequest {
     uint64 ack_through_deposit_id   = 3;   // deletes everything through this id
     uint32 limit                    = 4;
     bool   subscribe                = 5;   // push while this connection lives
+    // Revision 25: 6 is kept for R's join box, which the design for IDs and requests numbers.
     bytes  collect_auth             = 15;  // Ed25519 under collect_sig_sk
 }
 message RendezvousCollectResponse {
@@ -900,6 +918,7 @@ message RendezvousCollectResponse {
     uint32 pending_count       = 2;
     uint64 refused_count       = 3;   // refusals since the previous collect, then zeroed
     uint64 expire_time_ms      = 4;   // refreshed by this call
+                                      // (Revision 25, kind 4: the box's fixed expiry)
     bool   complete            = 5;
 }
 message RendezvousDeposit {
@@ -972,6 +991,10 @@ enum Reason {
                                            // answer for both, deliberately (§4.3.11)
     REASON_CARD_RATE_LIMITED        = 17;  // per-rendezvous or per-client deposit limit, or the
                                            // mailbox is at rendezvous_mailbox_depth
+                                           // Revision 25, kind 4: CARD_RETIRED is also an expired
+                                           // box and a failed signature, on Open, Deposit, Collect
+                                           // and Retire; CARD_RATE_LIMITED is also the cap of live
+                                           // boxes on Register, and a box's third deposit.
 }
 
 

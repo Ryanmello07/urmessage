@@ -379,6 +379,8 @@ var engineJoinDispositions = map[string]string{
 	"errors.go ErrEngineWelcomeShape": "the sentinel for octets that are not an MLSMessage carrying a Welcome. It is a refusal of a MALFORMED input and fires on nothing a real Welcome produces",
 
 	"errors.go ErrEngineNoKeyPackageForWelcome": "the sentinel for a Welcome addressed to somebody else, and the note that StateStore.TakeKeyPackage answers a bare error so an operator needs the counts. A Welcome this device is not in is not a join that cannot happen",
+
+	"devicelist.go (file header)": "the identity extension's field sets: the list it says carries 'no rejoin' is F1's rejoin<V> FIELD of a leaf (V4 F.0 (1)), which I1's 0xF005 drops (Spec A A-36 section 3.4). It is a sentence about an encoding's fields and says nothing of whether this package joins",
 }
 
 // engineJoinPath is the JOIN PATH, read off this package's own syntax tree.

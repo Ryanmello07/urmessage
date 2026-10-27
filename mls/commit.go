@@ -7,6 +7,11 @@
 // alone. This file grows as the rest of the commit lifecycle lands; today it holds one rule.
 package mls
 
+import (
+	"errors"
+	"fmt"
+)
+
 // CommitPathRequired is RFC 9420 section 12.4's pseudocode, verbatim:
 //
 //	pathRequiredTypes = [update, remove, external_init, group_context_extensions]
@@ -58,6 +63,11 @@ type CommitOptions struct {
 	// this profile appends the ones the POLICY requires beside it.
 	ExtraProposals []Proposal
 
+	// OwnLeafPatch is what the committer changes in its OWN leaf, in the path leaf of this commit.
+	// It needs a path, since a commit with none makes no leaf of its own: Force supplies one where
+	// the proposals do not, and a patch on a commit that carries none is refused. See OwnLeafPatch.
+	OwnLeafPatch *OwnLeafPatch
+
 	// The three seams below make a commit this package would never send, and they are UNEXPORTED
 	// so that no package but this one can set them: p8's ValSem tests need a commit whose
 	// confirmation tag is missing, is taken over the wrong transcript, or whose list this
@@ -74,6 +84,68 @@ type CommitOptions struct {
 	skipValidation                         bool
 	dropConfirmationTag                    bool
 	confirmationTagOverPreCommitTranscript bool
+}
+
+// OwnLeafPatch is a committer's change to its own leaf: a new credential, and new extension bodies
+// by type. It is applied to the committer's path leaf BEFORE that leaf is signed and before the tree
+// is hashed, so the leaf's signature and the epoch's tree hash both cover it, and a receiver that
+// takes the commit holds the patched leaf under both. A patch made after either is a commit no
+// receiver takes.
+//
+// EXTENSIONS ARE SET BY TYPE. An entry of a type the leaf carries replaces that entry's body where
+// it stands; an entry of a type the leaf does not carry is appended, in the patch's order. Nothing is
+// removed. A patch naming one type twice, or a leaf carrying one twice, is refused by the lookup that
+// refuses every repeat.
+//
+// Nothing here is checked that a path leaf is not checked for already: the leaf the patch makes is
+// judged by RFC 9420 section 7.3's commit door, ValidateUpdatePathLeafNode, which CreateCommit runs
+// over its own path before it stages anything, in the effective context every receiver judges it
+// in. So a type a leaf may not carry, one the leaf does not list, or a body that does not parse is
+// a commit its committer refuses to send. A patch changes no capability.
+type OwnLeafPatch struct {
+	// Credential, when it is not nil, replaces the leaf's credential.
+	Credential *Credential
+	// Extensions are set by type, as above.
+	Extensions []Extension
+}
+
+// errOwnLeafPatchWithoutPath is an own-leaf patch on a commit that carries no update path, which
+// makes no leaf of the committer's to apply it to. It is refused rather than dropped: a committer
+// that asked for a change and was told nothing would publish a commit that did not make it.
+var errOwnLeafPatchWithoutPath = errors.New("mls: an own-leaf patch is made in the committer's path leaf, and this commit carries no path")
+
+// applyTo answers a copy of the leaf with this patch applied, sharing no storage with either. The
+// copy is UNSIGNED and the caller signs it, which is the whole point of patching first.
+func (self *OwnLeafPatch) applyTo(leaf *LeafNode) (*LeafNode, error) {
+	patched := leaf.Clone()
+	if self.Credential != nil {
+		patched.Credential = Credential{
+			CredentialType: self.Credential.CredentialType,
+			Identity:       cloneBytes(self.Credential.Identity),
+		}
+	}
+	for at := range self.Extensions {
+		extensionType := self.Extensions[at].ExtensionType
+		// the repeat is the lookup's refusal, and it is asked of the lookup over both vectors
+		if _, _, err := FindExtensionEntry(self.Extensions, extensionType); err != nil {
+			return nil, fmt.Errorf("the own-leaf patch: %w", err)
+		}
+		_, carried, err := FindExtensionEntry(patched.Extensions, extensionType)
+		if err != nil {
+			return nil, fmt.Errorf("the committer's own leaf: %w", err)
+		}
+		body := cloneBytes(self.Extensions[at].ExtensionData)
+		if !carried {
+			patched.Extensions = append(patched.Extensions, Extension{ExtensionType: extensionType, ExtensionData: body})
+			continue
+		}
+		for i := range patched.Extensions {
+			if patched.Extensions[i].ExtensionType == extensionType {
+				patched.Extensions[i].ExtensionData = body
+			}
+		}
+	}
+	return patched, nil
 }
 
 // CommitResult is what a committer sends: the commit itself, the Welcome for the members it adds,
@@ -364,6 +436,31 @@ func (self *StagedCommit) LeafHasKeysAfter(leaf LeafIndex) bool {
 	}
 	_, err := LeafKeysOf(node)
 	return err == nil
+}
+
+// LeafNodeAfter is the POST-commit tree's leaf node at one leaf, as a deep copy the caller owns,
+// and nil for a leaf that is blank or outside the tree. See OccupiedLeavesAfter for which tree
+// this reads and why.
+//
+// IT IS THE ACCESSOR THE IDENTITY LAYER READS A STAGED LEAF THROUGH (identity phase 1's Task 12;
+// LRI R68, the review of Tasks 8 to 10, its L3-5). The binding rules read a leaf's credential, its
+// signature key and its extensions, and the receiving side reads them off the tree the group is
+// about to enter, before ApplyCommit -- Spec A section 6's ProcessedMember.SignatureKey and
+// .Extensions are this leaf's. LeafIdentityAfter and LeafHasKeysAfter answer one fact each; this
+// answers the leaf.
+//
+// THE COPY IS DEEP, for LeafIdentityAfter's reason: every array of the answer is the caller's,
+// and the staged tree, which MergePendingCommit installs and the new epoch's tree hash was taken
+// over, shares none of them.
+func (self *StagedCommit) LeafNodeAfter(leaf LeafIndex) *LeafNode {
+	if self.tree == nil {
+		return nil
+	}
+	node := self.tree.Leaf(leaf)
+	if node == nil {
+		return nil
+	}
+	return node.Clone()
 }
 
 // EpochAuthenticator is the new epoch's fork-detection value, as storage the caller owns.

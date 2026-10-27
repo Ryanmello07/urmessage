@@ -440,8 +440,9 @@ func newSilentDevice(t *testing.T) *Device {
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport: newSilentTransport(t),
-		Reserver:  sdk.NewStreamIndexReserver(streamStore),
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     newSilentTransport(t),
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
 	})
 	if err != nil {
 		t.Fatalf("NewDevice: %v", err)

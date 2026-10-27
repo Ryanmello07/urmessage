@@ -109,6 +109,8 @@ func classifyRead(err error) readClass {
 		}
 	}
 	if errors.Is(err, ErrStateStoreFormat) || errors.Is(err, ErrGroupPredatesJoinSeal) ||
+		errors.Is(err, ErrGroupPredatesIdentity) || errors.Is(err, ErrGroupLeafUnbound) ||
+		errors.Is(err, ErrDeviceListEquivocation) || errors.Is(err, ErrSystemGroupViolation) ||
 		epochStateDoesNotDecode(err) {
 		return readPermanent
 	}

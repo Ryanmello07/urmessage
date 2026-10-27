@@ -10,6 +10,7 @@ package messagegroup
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -278,9 +279,18 @@ func TestTheAeadMaterialSplitsFiftySixIntoAKeyAndAnExtendedNonce(t *testing.T) {
 // another by concatenation.
 //
 // The CLASS is derived off the syntax tree and is not the four names this task added: every
-// package level string constant of this package's production source whose value this package
-// hands to keyScheduleExpand as an info. A fifth label arriving with a shared stem is judged by
-// this gate without anybody extending it.
+// package level string constant of this package's production source NAMED DIRECTLY in an argument
+// of a call that reaches the kdf -- an expansion's info, and an extraction's salt too. A fifth
+// label arriving with a shared stem, and named that way, is judged by this gate without anybody
+// extending it.
+//
+// WHAT IS OUTSIDE IT, measured by the review of identity phase 1's Tasks 8 to 10 (L2-04) and said
+// here rather than claimed away. A label written into an info through syntax.Writer.WriteRaw is
+// not named in the call's arguments, so "iskgen/v1", "wt/v1", "mid/v1" and the wrap's info are
+// outside the class; and so are most of the prefix relations among this package's string
+// constants, 16 of 18 when this was written -- "URmessage/v1" is the whole of most labels here,
+// the identity layer's signature labels among them, and the wrap's info the whole of its salt.
+// Those labels are held by their own known answers, not by this gate.
 //
 // The pair this exists for is rec/v1/head and rec/v1/body, which agree over eleven of their
 // fifteen characters. A single constant with the tail substituted is one edit from handing a
@@ -348,12 +358,30 @@ func TestTheLadderLabelsAreSeparateConstantsAndNoneIsBuiltFromAnother(t *testing
 	// mis-spelling. The second half of this gate, which refuses an info BUILT by concatenating
 	// two constants, is untouched and is what would catch "rec/v1/head" + "-bind".
 	//
-	// AND THE EXEMPTION IS EXACTLY ONE PAIR. A second prefix relation fails here whatever it is,
-	// including one built out of this label -- so the carve-out is a fact about one normative
-	// string rather than a hole in the rule. WHAT WOULD REMOVE IT: a spec label that is not an
-	// extension of an existing one ("rec/v1/hbind" would do), which is msgrepo's to choose and is
-	// reported as such rather than taken here.
-	exempt := map[string]bool{"recordAeadHeadInfo|recordHeadBindInfo": true}
+	// AND THE EXEMPTION IS EXACTLY TWO PAIRS, each a normative string. A third prefix relation
+	// between two labels of the class fails here -- so each carve-out is a fact about a spec string
+	// rather than a hole in the rule; a relation with a label outside the class is not judged here
+	// at all (see the class above). WHAT WOULD REMOVE THIS ONE: a spec
+	// label that is not an extension of an existing one ("rec/v1/hbind" would do), which is
+	// msgrepo's to choose and is reported as such rather than taken here.
+	//
+	// THE SECOND PAIR is two EXTRACTION SALTS, and it arrived with the recovery phrase. MASTER
+	// section 5.2 has always written master_key = HKDF-Extract(salt = "URmessage/v1", ...), and
+	// Revision 10 (ledger item 299) keeps that step over the phrase's stretch; section 7 writes the
+	// wrap KDF's salt as "URmessage/v1/wrap-salt". So the first is the whole of the second. WHY IT
+	// IS SAFE: an extraction's salt is HMAC's KEY, and the two keys are twelve and twenty two
+	// octets, each padded with zeros to SHA-256's sixty four octet block, so they differ at octet
+	// twelve, '/' against zero -- two keys, two functions, and no input to either that the other
+	// answers. HMAC's one key equivalence is a key and the same key with zeros appended, and
+	// "/wrap-salt" is not zeros. Reaching one salt from the other takes a deliberate slice AT THE
+	// USE SITE, and this gate does not see one: the concatenation half below reads expansions'
+	// infos only. The known answers catch it -- the review's mutant M6, the wrap's salt sliced to
+	// the phrase salt's length, is killed by TestTheWrapDoorMatchesItsKnownAnswers and passes this
+	// gate. The two extractions are checked below to answer different roots from one input.
+	exempt := map[string]bool{
+		"recordAeadHeadInfo|recordHeadBindInfo": true,
+		"phraseMasterKeySalt|wrapSaltLabel":     true,
+	}
 	exercised := map[string]bool{}
 	for i, left := range labels {
 		for _, right := range labels[i+1:] {
@@ -381,12 +409,17 @@ func TestTheLadderLabelsAreSeparateConstantsAndNoneIsBuiltFromAnother(t *testing
 			t.Errorf("the prefix exemption %q was never reached, so it is describing a pair this package no longer has; delete it", pair)
 		}
 	}
-	// and the two labels of the exempted pair expand ONE rung to different keys, which is the
-	// property the prefix rule was standing in for.
+	// and the two labels of each exempted pair derive different keys from ONE input -- an
+	// expansion of one rung, an extraction of one ikm -- which is the property the prefix rule
+	// was standing in for.
 	rung := bytes.Repeat([]byte{0x4b}, recordKeyBytes)
 	if bytes.Equal(keyScheduleExpand(rung, []byte(recordAeadHeadInfo), 32),
 		keyScheduleExpand(rung, []byte(recordHeadBindInfo), 32)) {
 		t.Error("rec/v1/head and rec/v1/head-bind expand one rung to the same 32 octets")
+	}
+	if bytes.Equal(keyScheduleExtract([]byte(phraseMasterKeySalt), rung),
+		keyScheduleExtract([]byte(wrapSaltLabel), rung)) {
+		t.Error("URmessage/v1 and URmessage/v1/wrap-salt extract one input to the same 32 octets")
 	}
 	// and no label is BUILT: every one of them is a plain literal in a const declaration,
 	// which keyScheduleStringConstantsOf is what says, and no expansion's info argument is a
@@ -954,6 +987,71 @@ var recordKeyOneWayProbes = map[string]func(secret []byte) [][]byte{
 		}
 		return [][]byte{envelope.Encode(), payload}
 	},
+	// The recovery phrase's keys, handed a rung as the phrase: its 32 octets are P34 below two zero
+	// octets, so its five high bits are zero. It stretches through the test seam and not the
+	// exported entry's frozen parameters, as every test of this package but the known answers do
+	// (TestProductionStretchesWithTheFrozenParametersOnly), and withPhraseKeys is that entry's
+	// whole body. What it answers is the public halves and isk_seed[g] a ceremony can take out, for
+	// the set {1, 2}.
+	//
+	// A FORMALITY OF THE CLASS, said so (the review of Tasks 8 to 10, L2-15): WithPhraseKeys is in
+	// it by being exported and reaching the kdf, and its probe embeds the rung in a 34-octet P34, so
+	// "a member that returned its own input" cannot be seen for it here. The phrase's one-way
+	// property is the phrase-secret census's, which is its enforcer.
+	"WithPhraseKeys": func(secret []byte) [][]byte {
+		return phraseProbeThrough(secret, func(phrase *RecoveryPhrase, ceremony func(keys *PhraseKeys) error) error {
+			return withPhraseKeys(phrase, []uint32{1, 2}, phraseStretchForTests, ceremony)
+		})
+	},
+	// The door under a stretch a test names (LRI R76 item 10): WithPhraseKeys's row through the door
+	// itself, under FastPhraseStretchForTests, which is the test seam's stretch. A formality of the
+	// class for the same reason.
+	"WithPhraseKeysUnder": func(secret []byte) [][]byte {
+		return phraseProbeThrough(secret, func(phrase *RecoveryPhrase, ceremony func(keys *PhraseKeys) error) error {
+			return WithPhraseKeysUnder(FastPhraseStretchForTests(), phrase, []uint32{1, 2}, ceremony)
+		})
+	},
+	// D2 IL8's derivation, handed a rung as IRK's seed: the public half of the key it derives under
+	// a label. Built straight over a PhraseKeys holding that IRK, since what is asked is the
+	// derivation's and not the stretch's. A formality of the class as WithPhraseKeys's row is, with
+	// the phrase-secret census the enforcer of what the derivation keeps.
+	"DeriveIdentityKeyed": func(secret []byte) [][]byte {
+		keys := &PhraseKeys{irk: ed25519.NewKeyFromSeed(secret)}
+		defer keys.erase()
+		derived, err := keys.DeriveIdentityKeyed("inboxown/v1")
+		if err != nil {
+			return nil
+		}
+		return [][]byte{derived}
+	},
+}
+
+// phraseProbeThrough runs one ceremony over a rung as the phrase, its 32 octets as P34 below two
+// zero octets, through the entry it is handed, and answers what a ceremony can take out: IRK's
+// public half, and each key number's public half and isk_seed[g].
+func phraseProbeThrough(secret []byte, entry func(phrase *RecoveryPhrase, ceremony func(keys *PhraseKeys) error) error) [][]byte {
+	phrase := &RecoveryPhrase{}
+	copy(phrase.p34[2:], secret)
+	produced := [][]byte{}
+	err := entry(phrase, func(keys *PhraseKeys) error {
+		produced = append(produced, keys.IdentityKey())
+		for _, keyNumber := range keys.KeyNumbers() {
+			phraseKey, err := keys.PhraseKey(keyNumber)
+			if err != nil {
+				return err
+			}
+			seed, err := keys.PhraseKeySeed(keyNumber)
+			if err != nil {
+				return err
+			}
+			produced = append(produced, phraseKey, seed)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil
+	}
+	return produced
 }
 
 // The three fixed inputs the wrap probes above hold constant, so that the ONLY thing varying

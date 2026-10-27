@@ -73,7 +73,13 @@ func TestAFoundedGroupRequiresTheJoinSealAndAdmitsNoKeyPackageWithoutIt(t *testi
 		}
 		return encoded
 	}
-	without := listing([]mls.ExtensionType{mls.ExtensionTypeUrmessageGroupPolicy, mls.ExtensionTypeUrmessageLeafKeys})
+	// the engine's own listing less the join seal, and then the engine's own listing: every other type
+	// a founded group requires is listed by both (urmessage_identity among them since identity phase
+	// 1's Task 12), so the one difference between the refusal and the control is the join seal's
+	listed := engineCapabilities().Extensions
+	without := listing(slices.DeleteFunc(slices.Clone(listed), func(extension mls.ExtensionType) bool {
+		return extension == mls.ExtensionTypeUrmessageJoinSeal
+	}))
 	_, _, _, err = chain.founded.CommitAdd([][]byte{without})
 	if err == nil {
 		t.Fatalf("a key package that does not list the join seal capability was admitted to a group that requires it")
@@ -86,7 +92,7 @@ func TestAFoundedGroupRequiresTheJoinSealAndAdmitsNoKeyPackageWithoutIt(t *testi
 	}
 
 	// THE CONTROL: the same key package with the capability listed is admitted by the same call.
-	with := listing([]mls.ExtensionType{mls.ExtensionTypeUrmessageGroupPolicy, mls.ExtensionTypeUrmessageLeafKeys, mls.ExtensionTypeUrmessageJoinSeal})
+	with := listing(listed)
 	if _, _, _, err := chain.founded.CommitAdd([][]byte{with}); err != nil {
 		t.Fatalf("CONTROL FAILED: the same key package listing the capability answered %v", err)
 	}

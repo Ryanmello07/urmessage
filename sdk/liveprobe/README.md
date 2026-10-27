@@ -54,10 +54,21 @@ Hence the named refusal rather than a late, generic "a wrap did not open".
 
 ## The eleven steps, and what each one is for
 
-1. **Hello on both parties.** A 32-octet `server_nonce`, and the capabilities the server
-   advertises are PRINTED — `max_records_per_fetch`, `max_request_bytes`,
+1. **Hello on both parties, and an identity on each.** A 32-octet `server_nonce`, and the
+   capabilities the server advertises are PRINTED — `max_records_per_fetch`, `max_request_bytes`,
    `attestation_supported`. The fetch-page step needs the first of those to be set sensibly, and
    the third is the one that is false on the deployed server today.
+
+   Then each party makes its identity as a person does: the 25 words offered, typed back, and the
+   identity made, its self group founded under the connection. Every group this build founds
+   requires an identity of each member, and a device with none publishes no join code. C makes its
+   own the same way when step 5 dials it. **The words are never printed, logged or written:** they
+   are held in this process's memory, for step 11 below, and they are needles of the read-back from
+   before they are typed back. What is printed of an identity is a SHA-256 digest of its account ID
+   and of its device ID, and every roster the steps print names an identity by a digest too. Steps
+   3, 5 and 11 hold that every leaf of the group is bound: each roster row carries its identity and
+   its device ID, and the rows hold the identities the step expects. Step 7 holds that B's identity
+   comes back off the disk.
 2. **A founds a group, adds B, opens it.** Epoch 0 → the commit → §6.1's founding commit, the wrap
    set, the marker.
 3. **B joins and reads the string A typed**, and answers it. This is what CP3b proved in one
@@ -123,7 +134,9 @@ Hence the named refusal rather than a late, generic "a wrap did not open".
     §11's role model (ledger item 242) over the deployed server with three real devices. A, the
     founder and OWNER, promotes B to ADMIN; B and C ingest the policy commit and every party's
     `Members()` reads A owner / B admin / C member. C, a MEMBER, calls `AddMemberAndPublish`
-    with a fresh stranger's key package and is **refused on the send side**
+    with a fresh stranger's key package -- bound to an identity of its own, which the probe makes
+    at the seam from words it draws and erases, so that only the role model refuses it -- and is
+    **refused on the send side**
     (`ErrCommitUnauthorized` wrapping `ErrCommitAddByNonAdmin`), `Stats.CommitRefusedOwn` moves
     by one, and **no party's epoch moves** -- A and B fetch nothing. Then A transfers ownership to
     B: every roster reads B owner / A admin (ruling 4) / C member, and `MyRole()` agrees on both.
@@ -229,10 +242,12 @@ Hence the named refusal rather than a late, generic "a wrap did not open".
       wraps pastEpoch FAILED gaps`.
 
     **What this step does NOT do, and why.** The victim's second device is a **leaf**, not a fourth
-    `urmessage.Device`: a Device's credential identity *is* its signature key and it mints one
-    identity per state store, so that package has no door onto a second leaf of an existing
-    identity. What carries one is a seam-level key package whose credential names C's identity and
-    whose signer is its own — the same construction as `cp3b`'s `world.seamMemberClaiming`. That
+    `urmessage.Device`: one Device is one device, and until a later slice links a second one (Task
+    27) that package has no door onto a second leaf of an existing identity. What carries one is a
+    seam-level key package whose credential names C's identity and whose signer is its own, BOUND
+    as a further device of C's identity: the next base of the list C's own device publishes, made
+    from the words C typed back in step 5. It is the same construction as `cp3b`'s
+    `world.seamMemberClaiming`. That
     leaf never connects and never fetches; a fourth *reading* party would need a fourth credential
     and this deployment has three accounts. For the same reason there is **no online non-committer
     survivor**: with three accounts and one victim there are exactly two survivors, and one of them
@@ -262,12 +277,31 @@ disclosed and mint replacements** sentence beside the failure. Measured on the b
 arms: `-server not-a-valid-id` fails and prints nothing extra; `-server` given a *fabricated*
 JWT-shaped value fails and prints the disclosure, naming the count and never the prefix.
 
+**The parties' words are needles of the same transcript, from the moment each party's words are
+offered.** The needle is any two consecutive words of a party's phrase, with up to four characters
+that are not letters between them, or half of its words in any order: that is how a phrase looks
+however it is printed, joined, as a Go or JSON list, or as a column. **One word is not a needle, by
+design:** the words are the BIP-39 English list's and so is this output, and measured over 100,000
+random phrases against a live run's own transcript, a single word of some party's phrase is in an
+honest run's output 99.76% of the time. The two shapes fire on 0.24% and at most 0.003% of honest
+runs (LRI R83). The read-back's controls plant each party's whole phrase, and two of its words in a
+row, in memory and never in the output, and both must be found. The same scan runs inside the
+failure path, and a hit prints a **treat that party's identity as disclosed** sentence that names
+the party and the shape, never a word.
+
+**So is every identity key.** A key is made from its party's words, and a SHA-256 digest is all this
+probe prints of an identity: every identity key a roster in this run shows, and the stranger's, is a
+needle of the same read-back, as its first four octets in hex in either case, which every print of
+the key in hex begins with. The library's refusals name the refused leaf's identity in hex, so the
+steps print a refusal they expect by the sentinels it wraps and never by its text (LRI R84).
+
 **Stated limit:** it covers every print this file makes and not a library writing to the process's
 stdout by its own hand; catching those needs the file descriptor replaced by a pipe, which costs a
 drained goroutine and loses whatever is in flight when the probe exits on a failure.
 
 The run therefore prints **17 steps**: the eleven scenario steps, four for the join seal, the
-counters, and the read-back.
+counters, and the read-back of credentials and words. Identity phase 1's slice 1 adds no step: the
+identities are made in steps 1 and 5, and the read-back reads for the words.
 
 ## What it does NOT assert
 

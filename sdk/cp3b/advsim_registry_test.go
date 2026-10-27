@@ -3,10 +3,15 @@ package cp3b
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -116,12 +121,98 @@ func advJudge(t *testing.T, id string, observed []string) {
 	if !registered {
 		t.Fatalf("FAIL(HARNESS): scenario %q has no registry entry; every scenario's expected observation is written down first", id)
 	}
+	advJudged.Lock()
+	advJudged.ids[id] = true
+	advJudged.Unlock()
 	strict := os.Getenv("ADVSIM_STRICT") == "1"
 	passed, verdict := advVerdict(entry, observed, strict)
 	line := fmt.Sprintf("ADVSIM %-30s state=%-8s expect=%v observed=%v :: %s", id, entry.State, advSet(entry.Expect), advSet(observed), verdict)
 	fmt.Println(line)
 	if !passed {
 		t.Fatalf("%s\n    the scenario: %s", line, entry.Reads)
+	}
+}
+
+// advJudged is every registry id an advJudge call of this run reached, so that the RED report can
+// say which entries printed no row (LRI R89 item 9; review G-D4).
+var advJudged = struct {
+	sync.Mutex
+	ids map[string]bool
+}{ids: map[string]bool{}}
+
+// advUnjudged answers the registry ids that no judging reached, sorted.
+func advUnjudged(registry []string, judged map[string]bool) []string {
+	missing := []string{}
+	for _, id := range registry {
+		if !judged[id] {
+			missing = append(missing, id)
+		}
+	}
+	slices.Sort(missing)
+	return missing
+}
+
+// advRegistryIds reads the registry's ids without a test, for TestMain.
+func advRegistryIds() ([]string, error) {
+	body, err := os.ReadFile(filepath.FromSlash(advRegistryPath))
+	if err != nil {
+		return nil, err
+	}
+	file := advRegistryFile{}
+	if err := json.Unmarshal(body, &file); err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, entry := range file.Entries {
+		ids = append(ids, entry.Id)
+	}
+	return ids, nil
+}
+
+// EVERY REGISTRY ENTRY PRINTS A ROW IN THE RED REPORT, A SKIP INCLUDED (LRI R89 item 9; review G-D4).
+// The RED report is the ADVSIM_STRICT=1 run of the TestAdvSim scenarios. After it, every registry entry
+// that no advJudge call reached -- a scenario skipped, returned early, or judged under no TestAdvSim
+// name -- is printed by id as ADVSIM-MISSING, and the run fails; a whole report says ADVSIM-COMPLETE.
+// A run without ADVSIM_STRICT is not the report, and is not held to it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if os.Getenv("ADVSIM_STRICT") == "1" {
+		ids, err := advRegistryIds()
+		advJudged.Lock()
+		missing := advUnjudged(ids, advJudged.ids)
+		advJudged.Unlock()
+		switch {
+		case err != nil:
+			fmt.Printf("ADVSIM-MISSING: the registry could not be read: %v\n", err)
+			code = max(code, 1)
+		case len(missing) != 0:
+			fmt.Printf("ADVSIM-MISSING: %d of %d registry entries printed no row in this RED report: %v\n", len(missing), len(ids), missing)
+			code = max(code, 1)
+		default:
+			fmt.Printf("ADVSIM-COMPLETE: every one of the %d registry entries printed its row\n", len(ids))
+		}
+	}
+	os.Exit(code)
+}
+
+// THE RED REPORT'S MISSING ROWS ARE THE REGISTRY'S COMPLEMENT OF WHAT WAS JUDGED (LRI R89 item 9).
+//
+// THE CONTROL: with every id judged nothing is missing, and an id taken out of the judged set is named.
+func TestAdvSimTheRedReportNamesEveryEntryThatPrintedNoRow(t *testing.T) {
+	ids, err := advRegistryIds()
+	if err != nil || len(ids) == 0 {
+		t.Fatalf("the registry's ids: %v (%d)", err, len(ids))
+	}
+	judged := map[string]bool{}
+	for _, id := range ids {
+		judged[id] = true
+	}
+	if missing := advUnjudged(ids, judged); len(missing) != 0 {
+		t.Fatalf("CONTROL FAILED: with every id judged %v are missing", missing)
+	}
+	delete(judged, ids[len(ids)-1])
+	if missing := advUnjudged(ids, judged); !slices.Equal(missing, []string{ids[len(ids)-1]}) {
+		t.Errorf("an entry no judging reached is named as %v, want it alone", missing)
 	}
 }
 
@@ -210,4 +301,113 @@ func TestAdvSimEveryRegistryEntryIsNamedByExactlyOneScenario(t *testing.T) {
 		}
 	}
 	t.Logf("%d registry entries, each named by exactly one scenario in %v", len(ids), sources)
+}
+
+// EVERY ENTRY IS JUDGED BY A TestAdvSim FUNCTION, so the RED report judges every one (LRI R84 item 13;
+// review G-7). The report is the strict run narrowed to `-run TestAdvSim`, so a scenario judged from
+// any other test runs in the normal run and is skipped by the report, and a closed entry's regression
+// is then invisible where Task 17 reads. Every [advJudge] call in the advsim sources sits in a
+// top-level function whose name begins TestAdvSim, and names its entry by a literal; with the census
+// above, each entry is judged by exactly one such function. What no call reaches is printed.
+//
+// THE CONTROL: a judging call in a helper, and one in a test of another name, are each refused.
+func TestAdvSimEveryEntryIsJudgedByATestAdvSimFunction(t *testing.T) {
+	sources, err := filepath.Glob("advsim_*_test.go")
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no advsim source file was found (%v), so the census below read nothing", err)
+	}
+	judged := map[string]string{}
+	for _, source := range sources {
+		body, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatalf("read %s: %v", source, err)
+		}
+		calls, problems := advJudgingCallsOf(t, source, body)
+		for _, problem := range problems {
+			t.Error(problem)
+		}
+		for id, function := range calls {
+			judged[id] = function
+		}
+	}
+	entries := advLoadRegistry(t)
+	unjudged := []string{}
+	for id := range entries {
+		if _, found := judged[id]; !found {
+			unjudged = append(unjudged, id)
+		}
+	}
+	slices.Sort(unjudged)
+	if len(unjudged) != 0 {
+		t.Errorf("no TestAdvSim function judges %v, so the RED report has no row for them", unjudged)
+	}
+	t.Logf("%d judging call(s), each in a TestAdvSim function; %d registry entries; not judged: %v",
+		len(judged), len(entries), unjudged)
+
+	// THE CONTROL
+	_, problems := advJudgingCallsOf(t, "advsim_control_test.go", []byte(`package cp3b
+
+func advHelperThatJudges(t *testing.T) {
+	advJudge(t, "control-in-a-helper", nil)
+}
+
+func TestSomethingElse(t *testing.T) {
+	advJudge(t, "control-in-another-test", nil)
+}
+`))
+	if len(problems) != 2 {
+		t.Errorf("CONTROL FAILED: a judging call in a helper and one in another test answered %d problem(s), want 2: %v",
+			len(problems), problems)
+	}
+}
+
+// advJudgingCallsOf reads one advsim source and answers each judged entry with the function that
+// judges it, and every call outside a TestAdvSim function, or without a literal id, as a problem.
+func advJudgingCallsOf(t *testing.T, name string, body []byte) (map[string]string, []string) {
+	t.Helper()
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, name, body, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	calls := map[string]string{}
+	problems := []string{}
+	for _, declaration := range parsed.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil || function.Name.Name == "advJudge" {
+			continue
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			callee, ok := call.Fun.(*ast.Ident)
+			if !ok || callee.Name != "advJudge" {
+				return true
+			}
+			at := fileSet.Position(call.Pos())
+			if !strings.HasPrefix(function.Name.Name, "TestAdvSim") {
+				problems = append(problems, fmt.Sprintf("%s: advJudge is called in %s, which the RED report's -run TestAdvSim never runs",
+					at, function.Name.Name))
+				return true
+			}
+			var literal *ast.BasicLit
+			if 2 <= len(call.Args) {
+				literal, _ = call.Args[1].(*ast.BasicLit)
+			}
+			if literal == nil || literal.Kind != token.STRING {
+				problems = append(problems, fmt.Sprintf("%s: advJudge in %s names its entry by no literal", at, function.Name.Name))
+				return true
+			}
+			id, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("%s: %v", at, err))
+				return true
+			}
+			calls[id] = function.Name.Name
+			return true
+		})
+	}
+	return calls, problems
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
 )
@@ -42,9 +43,10 @@ func (self *world) readdSinkPersona(t *testing.T, name string) (*persona, *readd
 	}
 	sink := &readdRecordSink{DurableStateStore: durable}
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport:  transport,
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: sink,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    sink,
 	})
 	if err != nil {
 		durable.Close()
@@ -57,6 +59,7 @@ func (self *world) readdSinkPersona(t *testing.T, name string) (*persona, *readd
 		streamStore: streamStore, stateStore: durable, device: device,
 	}
 	t.Cleanup(current.kill)
+	self.identify(t, name, device)
 	return current, sink
 }
 

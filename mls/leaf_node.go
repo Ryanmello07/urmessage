@@ -336,6 +336,23 @@ var (
 // rather than on the first hostile input.
 var errLeafSourceRuleWaivedAndStated = errors.New("mls: the leaf validation context both waives the leaf_node_source rule and expects a source")
 
+// errProfileLeafExtension is a registered type this profile does not admit IN A LEAF, which is
+// validate_commit.go's errProfileGroupExtension read from the other position.
+var errProfileLeafExtension = errors.New("mls: extension type is registered and outside the v1 profile's leaf set")
+
+// leafExtensionProfile is the v1 refusal of a registered type as a LEAF extension, keyed as
+// groupExtensionProfile is.
+//
+// IT HOLDS ONE ROW, AND THAT IS THE RULE AND NOT A HOLE IN IT. RFC 9420 section 7.3 decides a
+// leaf's extensions by its own capabilities alone, and this profile keeps that for every type it
+// had before the identity layer. urmessage_group_purpose is the first type this profile places in
+// a group context with a reason to refuse it in a leaf as well: it says what a whole group is for,
+// so a leaf carrying it is one member speaking for the group. The identity layer's other type,
+// urmessage_identity, belongs in a leaf and is refused in a group context by groupExtensionProfile.
+var leafExtensionProfile = map[ExtensionType]error{
+	ExtensionTypeUrmessageGroupPurpose: errProfileLeafExtension,
+}
+
 // signatureContent is RFC 9420 section 7.2's LeafNodeTBS: the leaf's fields down to and
 // including extensions, followed -- for the update and commit sources ONLY -- by the group id
 // and the leaf index.
@@ -799,6 +816,11 @@ func (self *LeafNode) Validate(ctx *LeafValidationContext) error {
 	// fails rather than narrowing the clause to element zero.
 	for i := range self.Extensions {
 		extensionType := self.Extensions[i].ExtensionType
+		// the profile's position before the leaf's own listing: a type that may not stand in a
+		// leaf is refused whatever the leaf says it supports
+		if refusal := leafExtensionProfile[extensionType]; refusal != nil {
+			return fmt.Errorf("%w: the leaf carries extension type %#04x", refusal, uint16(extensionType))
+		}
 		if !isDefaultExtensionType(extensionType) && !self.Capabilities.SupportsExtension(extensionType) {
 			return fmt.Errorf("%w: the leaf carries extension type %#04x and does not list it",
 				errLeafExtensionNotListed, uint16(extensionType))

@@ -20,6 +20,7 @@ func windowInvite(t *testing.T, joiner *Device) (*Invite, []byte) {
 	t.Helper()
 	ctx := context.Background()
 	founder, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("the founder's nonce"))
+	testIdentify(t, founder)
 	if err := founder.Connect(ctx); err != nil {
 		t.Fatalf("the founder's Connect: %v", err)
 	}
@@ -90,6 +91,7 @@ func TestEveryRefusalInsideTheJoinWindowSaysTheJoinCodeIsNotSpent(t *testing.T) 
 	} {
 		store := NewMemoryStateStore()
 		joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+		testIdentify(t, joiner)
 		honest, groupId := windowInvite(t, joiner)
 		if one.plant {
 			if err := store.PutGroupState(groupId, 1, orphan); err != nil {
@@ -144,6 +146,7 @@ func TestEveryRefusalInsideTheJoinWindowSaysTheJoinCodeIsNotSpent(t *testing.T) 
 			t.Cleanup(func() { durable.Close() })
 			store := &recordSink{DurableStateStore: durable}
 			joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+			testIdentify(t, joiner)
 			honest, _ := windowInvite(t, joiner)
 			store.armed = true
 			_, err = joiner.Join(ctx, honest)
@@ -155,6 +158,7 @@ func TestEveryRefusalInsideTheJoinWindowSaysTheJoinCodeIsNotSpent(t *testing.T) 
 		{"after a refusal whose put-back failed", func(t *testing.T) (*Device, *Invite, func()) {
 			store := &keyPackageSink{MemoryStateStore: NewMemoryStateStore()}
 			joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+			testIdentify(t, joiner)
 			honest, _ := windowInvite(t, joiner)
 			store.armed = true
 			_, err := joiner.Join(ctx, bentInvite(honest, func(invite *Invite) { invite.GroupId = bytes.Repeat([]byte{0x5D}, GroupIdBytes) }))
@@ -187,6 +191,7 @@ func TestEveryRefusalInsideTheJoinWindowSaysTheJoinCodeIsNotSpent(t *testing.T) 
 
 	// THE CONTROL: a refusal made before the window does not carry the window's sentence
 	joiner := newAnsweringDeviceOver(t, NewMemoryStateStore(), []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, _ := windowInvite(t, joiner)
 	if _, err := joiner.Join(ctx, honest); err != nil {
 		t.Fatalf("CONTROL: the honest invite: %v", err)
@@ -226,6 +231,7 @@ func TestARefusalThatCannotPutTheJoinCodeBackSaysItIsSpent(t *testing.T) {
 	} {
 		store := &keyPackageSink{MemoryStateStore: NewMemoryStateStore()}
 		joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+		testIdentify(t, joiner)
 		honest, _ := windowInvite(t, joiner)
 		store.armed = true
 		_, err := joiner.Join(ctx, bentInvite(honest, one.bend))
@@ -284,6 +290,7 @@ func TestAJoinWhoseRecordCannotBeWrittenSaysTheJoinCodeIsSpent(t *testing.T) {
 	t.Cleanup(func() { durable.Close() })
 	store := &recordSink{DurableStateStore: durable}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, _ := windowInvite(t, joiner)
 	store.armed = true
 	_, err = joiner.Join(ctx, honest)

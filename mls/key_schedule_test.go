@@ -3113,6 +3113,23 @@ var groupMethodArgumentRows = map[string]func(t *testing.T, group *Group) [][]re
 			{reflect.ValueOf(LeafIndex(1))},
 		}
 	},
+	// identity phase 1's Task 12: a leaf node, deep-copied, over MemberAt's two rows -- the leaf a
+	// group of one holds and a leaf it does not, which answers nil and no error
+	"LeafNodeCopy": func(t *testing.T, group *Group) [][]reflect.Value {
+		return [][]reflect.Value{
+			{reflect.ValueOf(group.OwnLeafIndex())},
+			{reflect.ValueOf(LeafIndex(1))},
+		}
+	},
+	// and the staged one, at this member's own leaf, which is the committer's post-commit leaf. It
+	// is reachable for PendingExport's reason: the CreateCommit row stages a commit and nothing
+	// between the two clears it. A blank leaf answers ErrBlankLeaf, and a row that errors is a row
+	// this sweep refuses to read, so it has the one row
+	"PendingLeafNode": func(t *testing.T, group *Group) [][]reflect.Value {
+		return [][]reflect.Value{
+			{reflect.ValueOf(group.OwnLeafIndex())},
+		}
+	},
 	// p7 task 18's three message methods that take arguments. Each is driven with the arguments a
 	// caller would use rather than into a refusal, for Export's reason.
 	//
@@ -10541,6 +10558,9 @@ var stagedCommitMethodArgumentRows = map[string]func(t *testing.T, staged *Stage
 	// the second leaf-taking accessor, 2026-09-21's R1 follow-up, over the same domain: it
 	// reads the same tree at the same index and answers a bool, so the rows are the rows.
 	"LeafHasKeysAfter": stagedCommitLeafRows,
+	// the leaf node itself, deep-copied (identity phase 1's Task 12), over the same domain: it reads
+	// the same tree at the same index and answers nil where the other two answer false
+	"LeafNodeAfter": stagedCommitLeafRows,
 }
 
 // stagedCommitLeafRows is EVERY occupied leaf of the staged tree, which is the whole domain a

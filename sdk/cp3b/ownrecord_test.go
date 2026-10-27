@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
 )
@@ -311,9 +312,10 @@ func TestASendWhoseCopyCannotBePersistedIsNotSubmitted(t *testing.T) {
 	// bob again, over the SAME two stores, through a store that refuses the next copy and nothing else
 	refusing := &refusingSentStore{DurableStateStore: bob.stateStore}
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport:  bob.transport,
-		Reserver:   sdk.NewStreamIndexReserver(bob.streamStore),
-		StateStore: refusing,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     bob.transport,
+		Reserver:      sdk.NewStreamIndexReserver(bob.streamStore),
+		StateStore:    refusing,
 	})
 	if err != nil {
 		t.Fatalf("NewDevice over the refusing store: %v", err)

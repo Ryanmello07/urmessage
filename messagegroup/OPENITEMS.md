@@ -1063,7 +1063,8 @@ The healing track (T3).
 ## MG-11 — the joiner of a dark join sees a server refusal and no join sentence
 
 **Status: OPEN. Filed 2026-10-14 from the T1 red team (Task 57, its F8), measured. The adversary is
-a member (A4), out of scope. Owner: the identity track (T2).**
+a member (A4), out of scope. Owner: the identity track's T2 work, which is R's since 2026-10-16,
+when identity phase 1's plan moved it to R, the IDs-and-requests build.**
 
 ### The property
 
@@ -1084,7 +1085,7 @@ A typed sentence for a fetch refusal made before a joined group has ever complet
 
 ### What is owed elsewhere
 
-The identity track (T2), with A4.
+R, which carries the identity track's T2 work, with A4.
 
 ---
 
@@ -1092,8 +1093,9 @@ The identity track (T2), with A4.
 
 **Status: OPEN, and PINNED: `sdk/cp3b`'s strict scenario `S7g-removed-group-second-founder`
 (`TestAdvSimASecondFoundersInvitationOverAGroupTheDeviceWasRemovedFrom`) stands open until the
-identity track (T2) closes it. Re-ruled 2026-10-14 (ruling R24, the T1 red team's Step 1): pinning is
-enough until T2's re-add proof.**
+identity track's T2 work closes it, which is R's since 2026-10-16, when identity phase 1's plan moved
+it to R, the IDs-and-requests build; the scenario's registry entry names R. Re-ruled 2026-10-14
+(ruling R24, the T1 red team's Step 1): pinning is enough until T2's re-add proof.**
 
 ### The property
 
@@ -1119,7 +1121,7 @@ were removed from".
 
 ### What is owed elsewhere
 
-The identity track (T2): the re-add proof and its invite version.
+R, which carries the identity track's T2 work: the re-add proof and its invite version.
 
 ---
 
@@ -1364,3 +1366,77 @@ re-join -- has one way out, and deleting URmessage's folder stops being it.
 ### What is owed elsewhere
 
 A later change that may add an export to the C header, and the app's row for it.
+
+---
+
+## MG-16 — two lock-outs typed at once on two devices leave the later one holding a fork
+
+**Status: OPEN, and accepted. Filed 2026-10-16 by identity phase 1's plan (its Task 8, from its red
+team's M6), before any of the identity layer's code exists. It is a liveness cost of a correct
+refusal, which that plan's budget files rather than fixes (ruling R39). Owner: a later identity
+phase.**
+
+### The property
+
+Two of an account's devices that each lock out a phrase device at the same moment end with one
+device list between them, and neither is left outside its own account.
+
+### The evidence
+
+Not reproducible on this tree, which has no device list. Identity phase 1 builds the list (its
+Task 11), the binding rules over it (Task 13) and the lock-out (Task 32), and the reproduction is
+owed with the lock-out. As that plan builds them: a lock-out makes key number g+1 and signs a first
+base under it. Two lock-outs typed at once on two phrase devices sign two first bases of g+1 at one
+version (one key number, one base number, no amendments) with different octets. Every member
+refuses two lists of one identity at one version with different octets as a fork (R8-EQ), so the
+self group takes the first and the later device holds a list no tree takes. Its own sending check
+will not publish what every receiver refuses, so nothing halts; it holds the fork, and the alarm,
+until it is removed and added again.
+
+### What a fix would be
+
+A random first base number under a new key number, as the identity layer's foundation design (F1)
+has it: two lock-outs then sign bases at two versions, and the self group's order decides between
+them.
+
+### What is owed elsewhere
+
+A later identity phase, with the fix above.
+
+---
+
+## MG-17 — a conversation that holds a key package's leaf past its lifetime takes no new joiner
+
+**Status: OPEN, and accepted in identity phase 1. Read from the code, not reproduced. Filed
+2026-10-16 by identity phase 1's plan (its Task 8, from the lead's ruling R52). It is a liveness cost
+of a correct refusal (ruling R39). Owner: R, the IDs-and-requests build.**
+
+### The property
+
+A conversation can always take a new member.
+
+### The evidence
+
+A joiner checks every leaf of the tree it is handed against its own clock: step 5 of
+`mls.JoinFromWelcome` validates the ratchet tree with the joiner's `NowMs`, and every leaf's
+lifetime with it (`mls/group.go`, the `TreeValidationContext` there; `validateLifetime` in
+`mls/leaf_node.go`). A leaf made from a key package carries that package's lifetime, 90 days
+(`leafLifetimeDefaultSeconds`, `mls/leaf_node.go`), until its device makes a commit that replaces it
+with a leaf of its own. So every new member's join, at this package's `JoinFromWelcome`, refuses a
+conversation that still holds such a leaf more than 90 days after its key package was made. T1's
+pasted joins leave such a leaf today, and identity phase 1's fan-out joins will too, until the device
+that joined makes such a commit.
+
+It is not reproduced here because `mls.JoinFromWelcome` reads the clock itself, with `time.Now`, so
+no test of this tree can move a joiner 90 days on.
+
+### What a fix would be
+
+Every join ends with a commit of the joined device's own (T1b's `Group.Rekey`), so that no key
+package's leaf outlives its join.
+
+### What is owed elsewhere
+
+R, which builds T1b's `Group.Rekey` and ends every join with it, identity phase 1's fan-out joins
+included (the lead's ruling R52). Identity phase 1 accepts the cost because its alpha is reset every
+slice, so no alpha conversation reaches 90 days.

@@ -30,8 +30,10 @@ type handFounded struct {
 // foundByHand founds a group whose context REQUIRES exactly the capabilities the caller lists, and
 // adds one join code to it. It exists because the engine does not let its caller choose that
 // list: every group the engine founds requires the join seal, so a group that does not can only
-// be made beside it.
-func foundByHand(t *testing.T, groupId []byte, required []mls.ExtensionType, joinCode []byte) *handFounded {
+// be made beside it. With bound, the founder's leaf carries a 0xF005 that binds it to an identity of
+// its own and names that identity's key as its credential, as a leaf this build makes does (identity
+// phase 1's Task 12); without, its credential is its own key and it carries none.
+func foundByHand(t *testing.T, groupId []byte, required []mls.ExtensionType, bound bool, joinCode []byte) *handFounded {
 	t.Helper()
 	crypto, err := mls.NewCryptoProvider(deviceCipherSuite)
 	if err != nil {
@@ -46,7 +48,13 @@ func foundByHand(t *testing.T, groupId []byte, required []mls.ExtensionType, joi
 	if err != nil {
 		t.Fatalf("the founder's leaf keys: %v", err)
 	}
-	policy := &mls.GroupPolicyExtension{Roles: []mls.RoleEntry{{MemberId: signerPub, Role: mls.RoleOwner}}}
+	credential, leafExtensions := []byte(signerPub), []mls.Extension(nil)
+	if bound {
+		identityKey, identity := testSignerIdentity(t, signer, signerPub)
+		credential = identityKey
+		leafExtensions = []mls.Extension{{ExtensionType: mls.ExtensionType(identity.Type), ExtensionData: identity.Data}}
+	}
+	policy := &mls.GroupPolicyExtension{Roles: []mls.RoleEntry{{MemberId: credential, Role: mls.RoleOwner}}}
 	if err := policy.Canonicalize(); err != nil {
 		t.Fatalf("the group policy: %v", err)
 	}
@@ -61,11 +69,12 @@ func foundByHand(t *testing.T, groupId []byte, required []mls.ExtensionType, joi
 			ExtensionType: mls.ExtensionTypeUrmessageGroupPolicy,
 			ExtensionData: encodedPolicy.ExtensionData,
 		}},
-		RequiredCaps: mls.RequiredCapabilities{ExtensionTypes: required},
-		Crypto:       crypto,
-		Store:        NewMemoryStateStore(),
-		LeafKeys:     *leafKeys,
-	}, signer, mls.BasicCredential(signerPub))
+		RequiredCaps:   mls.RequiredCapabilities{ExtensionTypes: required},
+		Crypto:         crypto,
+		Store:          NewMemoryStateStore(),
+		LeafKeys:       *leafKeys,
+		LeafExtensions: leafExtensions,
+	}, signer, mls.BasicCredential(credential))
 	if err != nil {
 		t.Fatalf("mls.NewGroup requiring %v: %v", required, err)
 	}
@@ -146,7 +155,11 @@ func foundByHand(t *testing.T, groupId []byte, required []mls.ExtensionType, joi
 
 var (
 	requiredBeforeTheJoinSeal = []mls.ExtensionType{mls.ExtensionTypeUrmessageGroupPolicy, mls.ExtensionTypeUrmessageLeafKeys}
-	requiredWithTheJoinSeal   = []mls.ExtensionType{mls.ExtensionTypeUrmessageGroupPolicy, mls.ExtensionTypeUrmessageLeafKeys, mls.ExtensionTypeUrmessageJoinSeal}
+	// what a build with the join seal and before the identity layer required
+	requiredBeforeTheIdentity = []mls.ExtensionType{mls.ExtensionTypeUrmessageGroupPolicy, mls.ExtensionTypeUrmessageLeafKeys, mls.ExtensionTypeUrmessageJoinSeal}
+	// what every group this build founds requires (Spec A A-36 section 3.4; identity phase 1's Task 12)
+	requiredWithTheJoinSeal = []mls.ExtensionType{mls.ExtensionTypeUrmessageGroupPolicy, mls.ExtensionTypeUrmessageLeafKeys,
+		mls.ExtensionTypeUrmessageJoinSeal, mls.ExtensionTypeUrmessageIdentity}
 )
 
 // ONLY A GROUP THAT REQUIRES THE JOIN SEAL IS JOINED. The invite is at version 3 and everything in
@@ -161,13 +174,14 @@ func TestOnlyAGroupThatRequiresTheJoinSealIsJoined(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStateStore()
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	joinCode, err := joiner.KeyPackage()
 	if err != nil {
 		t.Fatalf("the joiner's KeyPackage: %v", err)
 	}
 	groupId := bytes.Repeat([]byte{0x47}, GroupIdBytes)
 
-	before := foundByHand(t, groupId, requiredBeforeTheJoinSeal, joinCode)
+	before := foundByHand(t, groupId, requiredBeforeTheJoinSeal, true, joinCode)
 	_, err = joiner.Join(ctx, before.invite)
 	if !errors.Is(err, ErrGroupPredatesJoinSeal) {
 		t.Fatalf("an invite into a group that does not require the join seal answered %v, want ErrGroupPredatesJoinSeal", err)
@@ -182,7 +196,7 @@ func TestOnlyAGroupThatRequiresTheJoinSealIsJoined(t *testing.T) {
 		t.Fatalf("the refused invite left a state in the store: %v", err)
 	}
 
-	sealed := foundByHand(t, groupId, requiredWithTheJoinSeal, joinCode)
+	sealed := foundByHand(t, groupId, requiredWithTheJoinSeal, true, joinCode)
 	if _, err := joiner.Join(ctx, sealed.invite); err != nil {
 		t.Fatalf("CONTROL FAILED: the same founder requiring the join seal, over the same join code, answered %v", err)
 	}
@@ -197,27 +211,57 @@ func TestOnlyAGroupThatRequiresTheJoinSealIsJoined(t *testing.T) {
 // THE CONTROL IS THE FIRST ROW: the same planting for a group that requires the seal restores. So
 // a planted group is restorable, and the second row's refusal is the requirement's.
 func TestAGroupFoundedBeforeTheJoinSealIsNotRestoredAndCanBeLeft(t *testing.T) {
+	plantedRestore(t, []plantedRestoreRow{
+		{"a group that requires the join seal", requiredWithTheJoinSeal, true, nil},
+		{"a group founded before the join seal", requiredBeforeTheJoinSeal, true, ErrGroupPredatesJoinSeal},
+	})
+}
+
+// A GROUP WHOSE LEAVES THIS BUILD CANNOT BIND IS NOT RESTORED, AND IT CAN BE LEFT (identity phase 1's
+// Task 12). Restore re-verifies every leaf of every group it loads: a group whose context does not
+// require urmessage_identity was founded by a build with no identity layer, and is refused as
+// [ErrGroupPredatesIdentity]; a group that requires it and holds a leaf that does not bind -- here the
+// founder's, which carries no 0xF005 -- is refused as [ErrGroupLeafUnbound]. Each inside [ErrRestore],
+// each proven permanent, so ForgetGroup leaves it as it leaves a group refused for the join seal.
+//
+// THE CONTROL IS THE FIRST ROW: the same planting, its founder bound and its context requiring what
+// this build requires, restores.
+func TestAGroupWhoseLeavesThisBuildCannotBindIsNotRestoredAndCanBeLeft(t *testing.T) {
+	plantedRestore(t, []plantedRestoreRow{
+		{"a group that requires the identity layer, its founder's leaf bound", requiredWithTheJoinSeal, true, nil},
+		{"a group founded before the identity layer", requiredBeforeTheIdentity, true, ErrGroupPredatesIdentity},
+		{"a group whose founder's leaf does not bind", requiredWithTheJoinSeal, false, ErrGroupLeafUnbound},
+	})
+}
+
+// plantedRestoreRow is one group planted on the disk as an earlier build would have left it, and what
+// the restore answers for it: nil for a group that restores.
+type plantedRestoreRow struct {
+	name     string
+	required []mls.ExtensionType
+	bound    bool
+	want     error
+}
+
+// plantedRestore plants each row's group around [Device.Join] -- the engine joins the hand founder's
+// welcome and the record is written beside it -- restarts, restores, and leaves a refused group.
+func plantedRestore(t *testing.T, rows []plantedRestoreRow) {
+	t.Helper()
 	ctx := context.Background()
 	groupId := bytes.Repeat([]byte{0x47}, GroupIdBytes)
-	for _, one := range []struct {
-		name     string
-		required []mls.ExtensionType
-		want     error
-	}{
-		{"a group that requires the join seal", requiredWithTheJoinSeal, nil},
-		{"a group founded before the join seal", requiredBeforeTheJoinSeal, ErrGroupPredatesJoinSeal},
-	} {
+	for _, one := range rows {
 		dir := t.TempDir()
 		durable, err := OpenDurableStateStore(dir)
 		if err != nil {
 			t.Fatalf("%s: OpenDurableStateStore: %v", one.name, err)
 		}
 		device := newAnsweringDeviceOver(t, durable, []byte("the device's nonce"))
+		testIdentify(t, device)
 		joinCode, err := device.KeyPackage()
 		if err != nil {
 			t.Fatalf("%s: KeyPackage: %v", one.name, err)
 		}
-		founded := foundByHand(t, groupId, one.required, joinCode)
+		founded := foundByHand(t, groupId, one.required, one.bound, joinCode)
 		handle, err := device.engine.JoinFromWelcomeInto(founded.invite.Welcome, founded.invite.RatchetTree, groupId)
 		if err != nil {
 			t.Fatalf("%s: planting the joined state through the engine: %v", one.name, err)
@@ -243,6 +287,7 @@ func TestAGroupFoundedBeforeTheJoinSealIsNotRestoredAndCanBeLeft(t *testing.T) {
 		}
 		t.Cleanup(func() { reopened.Close() })
 		restarted := newAnsweringDeviceOver(t, reopened, []byte("the device's nonce"))
+		testIdentify(t, restarted)
 		groups, err := restarted.Restore(ctx)
 		if one.want == nil {
 			if err != nil || len(groups) != 1 {
@@ -337,6 +382,7 @@ func TestAMemberMadeSealIsHeldToItsEpochItsShapeAndItsAddressee(t *testing.T) {
 		return append(append(bytes.Clone(pq), ghk...), digest...)
 	}
 	carol, _ := newAnsweringDevice(t, 0, []byte("carol's nonce"))
+	testIdentify(t, carol)
 	carolCode, err := carol.KeyPackage()
 	if err != nil {
 		t.Fatalf("carol's KeyPackage: %v", err)
@@ -407,6 +453,7 @@ func TestEveryOctetOfAnInviteIsHeldAndNoRefusalCostsTheJoinCode(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStateStore()
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, groupId := windowInvite(t, joiner)
 	encoded, err := honest.Encode()
 	if err != nil {

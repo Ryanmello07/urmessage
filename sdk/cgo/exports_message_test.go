@@ -826,6 +826,8 @@ func TestTheMemberInfoCarriesEveryFieldUrmessageKeeps(t *testing.T) {
 		IdentityPub:  bytes.Repeat([]byte{0xE7}, 32),
 		Role:         "admin",
 		Mine:         true,
+		DeviceId:     "abcd-efgh-ijkl-mnop",
+		Identity:     bytes.Repeat([]byte{0x5A}, 32),
 	}
 	kept := reflect.TypeOf(urmessage.Member{})
 	fixture := reflect.ValueOf(member)
@@ -852,10 +854,11 @@ func TestTheMemberInfoCarriesEveryFieldUrmessageKeeps(t *testing.T) {
 	if kept.NumField() != carried.NumField() {
 		t.Errorf("urmessage.Member has %d fields and the json carries %d", kept.NumField(), carried.NumField())
 	}
-	// and the two octet fields cross as lower case hex of the right width, which is what the
-	// header promises and what a verb decodes
-	if info.SenderHandle != strings.Repeat("1f", 16) || info.IdentityPub != strings.Repeat("e7", 32) {
-		t.Errorf("the octet fields crossed as %q and %q", info.SenderHandle, info.IdentityPub)
+	// and the octet fields cross as lower case hex of the right width, which is what the header
+	// promises and what a verb decodes
+	if info.SenderHandle != strings.Repeat("1f", 16) || info.IdentityPub != strings.Repeat("e7", 32) ||
+		info.Identity != strings.Repeat("5a", 32) {
+		t.Errorf("the octet fields crossed as %q, %q and %q", info.SenderHandle, info.IdentityPub, info.Identity)
 	}
 }
 
@@ -1332,6 +1335,7 @@ func TestTheHeaderDefinesExactlyTheForgetKinds(t *testing.T) {
 		"REFUSED":    messageForgetRefused,
 		"UNFINISHED": messageForgetUnfinished,
 		"FAILED":     messageForgetFailed,
+		"UNKNOWN":    messageForgetUnknown,
 	}
 	if len(defined) < 2 {
 		t.Fatalf("the header defines %d URNET_MESSAGE_FORGET_* kinds; the positive control is not met", len(defined))

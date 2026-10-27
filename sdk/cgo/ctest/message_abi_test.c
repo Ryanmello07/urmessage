@@ -233,7 +233,9 @@ static int counter_of(uint64_t group, const char* key) {
 
 /* one roster row's role and identity, found by whether it is this device's own. It answers false
  * when no row with that mine value exists, when a row lacks a field, or when two rows claim it --
- * a roster that marks two leaves as one device's own is not a roster. */
+ * a roster that marks two leaves as one device's own is not a roster. Every row also carries its
+ * device ID, of 19 characters, and its identity's root, of 64 hex characters (identity phase 1's
+ * Task 14), or it is not a row of this build's. */
 static bool roster_row(uint64_t roster, bool mine, char* role, size_t role_cap,
                        char* identity, size_t identity_cap) {
   int32_t count = urnet_message_member_list_count(roster);
@@ -241,6 +243,14 @@ static bool roster_row(uint64_t roster, bool mine, char* role, size_t role_cap,
   for (int32_t at = 0; at < count; at += 1) {
     char* info = urnet_message_member_list_info(roster, at);
     if (info == NULL) {
+      return false;
+    }
+    char device_id[32];
+    char root[80];
+    if (!json_string_field(info, "device_id", device_id, sizeof(device_id)) || strlen(device_id) != 19 ||
+        !json_string_field(info, "identity", root, sizeof(root)) || strlen(root) != 64) {
+      fprintf(stderr, "  a roster row carries no device ID of 19 characters or no identity of 64 hex: %s\n", info);
+      urnet_free_string(info);
       return false;
     }
     bool is_mine = strstr(info, "\"mine\":true") != NULL;
@@ -255,6 +265,105 @@ static bool roster_row(uint64_t roster, bool mine, char* role, size_t role_cap,
     urnet_free_string(info);
   }
   return found == 1;
+}
+
+/* ── an identity, made as a C caller makes one ───────────────────────────────────────────── */
+
+/* a device's identity through the shipping exports (identity phase 1's Task 14): the identity json
+ * says there is none; the words are asked for by the buffer-out pattern; check_word marks the first
+ * of them a word and a made-up one not; the words typed back with the first one wrong are WRONG and
+ * name position 1; typed back right they are OK; and the identity json then carries an account ID of
+ * 36 characters and this device's ID of 19. both copies of the words are overwritten before they are
+ * freed. answers whether the identity was made. */
+static bool identify(uint64_t device, uint64_t ctx, const char* who) {
+  char* err = NULL;
+  char* identity = urnet_message_device_identity(device, &err);
+  CHECK(identity != NULL && strstr(identity, "\"has_identity\":false") != NULL,
+        "%s's identity json before any identity is %s", who, identity == NULL ? "NULL" : identity);
+  if (identity != NULL) {
+    urnet_free_string(identity);
+  }
+  if (err != NULL) {
+    show_error("the identity json", err);
+    err = NULL;
+  }
+  int32_t words_len = 0;
+  CHECK(!urnet_message_device_create_identity(device, NULL, &words_len, &err),
+        "%s: a sizing call with out == NULL answered true", who);
+  if (words_len <= 0) {
+    show_error("create_identity", err);
+    return false;
+  }
+  uint8_t* words = (uint8_t*)malloc((size_t)words_len);
+  uint8_t* wrong = (uint8_t*)malloc((size_t)words_len + 8);
+  if (words == NULL || wrong == NULL) {
+    free(words);
+    free(wrong);
+    return false;
+  }
+  int32_t words_cap = words_len;
+  err = NULL;
+  bool made = false;
+  if (!urnet_message_device_create_identity(device, words, &words_cap, &err)) {
+    show_error("create_identity, filling", err);
+    goto done;
+  }
+  int spaces = 0;
+  int32_t first = -1;
+  for (int32_t at = 0; at < words_len; at += 1) {
+    if (words[at] == ' ') {
+      spaces += 1;
+      if (first < 0) {
+        first = at;
+      }
+    }
+  }
+  CHECK(spaces == 24 && 0 < first, "%s's words are %d words, want 25", who, spaces + 1);
+  if (first <= 0) {
+    goto done;
+  }
+  CHECK(urnet_message_device_check_word(words, first), "%s: check_word refused the phrase's own first word", who);
+  CHECK(!urnet_message_device_check_word((const uint8_t*)"notaword", 8), "%s: check_word took a made-up word", who);
+  /* the first word wrong: "zoo", or "abandon" where the first word is "zoo" */
+  const char* other = (first == 3 && memcmp(words, "zoo", 3) == 0) ? "abandon" : "zoo";
+  int32_t other_len = (int32_t)strlen(other);
+  memcpy(wrong, other, (size_t)other_len);
+  memcpy(wrong + other_len, words + first, (size_t)(words_len - first));
+  int32_t wrong_len = other_len + (words_len - first);
+  int32_t positions[25];
+  int32_t count = 25;
+  err = NULL;
+  int32_t kind = urnet_message_device_confirm_words(device, ctx, wrong, wrong_len, positions, &count, &err);
+  CHECK(kind == URNET_MESSAGE_WORDS_WRONG && count == 1 && positions[0] == 1,
+        "%s: the words with the first one wrong answered kind %d naming %d position(s), want WRONG naming 1", who,
+        (int)kind, (int)count);
+  if (err != NULL) {
+    urnet_free_string(err);
+    err = NULL;
+  }
+  count = 25;
+  kind = urnet_message_device_confirm_words(device, ctx, words, words_len, positions, &count, &err);
+  if (kind != URNET_MESSAGE_WORDS_OK) {
+    show_error("confirm_words", err);
+    goto done;
+  }
+  made = true;
+  identity = urnet_message_device_identity(device, &err);
+  char account_id[64];
+  char device_id[32];
+  CHECK(identity != NULL && strstr(identity, "\"has_identity\":true") != NULL &&
+            json_string_field(identity, "account_id", account_id, sizeof(account_id)) && strlen(account_id) == 36 &&
+            json_string_field(identity, "device_id", device_id, sizeof(device_id)) && strlen(device_id) == 19,
+        "%s's identity json after the words is %s", who, identity == NULL ? "NULL" : identity);
+  if (identity != NULL) {
+    urnet_free_string(identity);
+  }
+done:
+  SecureZeroMemory(words, (size_t)words_len);
+  SecureZeroMemory(wrong, (size_t)words_len + 8);
+  free(words);
+  free(wrong);
+  return made;
 }
 
 /* ── a temp directory per store ──────────────────────────────────────────────────────────── */
@@ -492,6 +601,10 @@ int main(void) {
   REQUIRE(urnet_message_device_connect(b.device, ctx, &err), "B could not connect");
   CHECK(counter_a.calls == 0, "A connected first time and the attempt callback fired %ld times",
         (long)counter_a.calls);
+
+  step("an identity, on both, through the shipping exports: every group this build founds requires one of each member");
+  REQUIRE(identify(a.device, ctx, "A"), "A has no identity");
+  REQUIRE(identify(b.device, ctx, "B"), "B has no identity");
 
   step("B's key package, through the buffer-out pattern");
   int32_t kp_len = 0;

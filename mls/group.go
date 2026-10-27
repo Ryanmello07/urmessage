@@ -343,15 +343,20 @@ type StateStore interface {
 // Profile is a *profile and not a *Profile because p8 owns that type; see proposal_list.go's
 // header for why the stand-in is unexported and what the swap costs. A caller outside this package
 // leaves the field nil and gets defaultProfile(), which is the only profile this build has.
+//
+// LeafExtensions are the founder's own leaf's extensions beside urmessage_leaf_keys, which LeafKeys
+// carries, and the leaf carries exactly them, in order, after it: the identity layer's
+// urmessage_identity is the one a founding passes. NewGroup reads it and nothing else does.
 type GroupConfig struct {
-	Suite        CipherSuite
-	GroupId      []byte
-	Extensions   []Extension
-	RequiredCaps RequiredCapabilities
-	Crypto       CryptoProvider
-	Store        StateStore
-	Profile      *profile
-	LeafKeys     LeafKeysExtension
+	Suite          CipherSuite
+	GroupId        []byte
+	Extensions     []Extension
+	RequiredCaps   RequiredCapabilities
+	Crypto         CryptoProvider
+	Store          StateStore
+	Profile        *profile
+	LeafKeys       LeafKeysExtension
+	LeafExtensions []Extension
 }
 
 // Member is one member of the group as the product sees it.
@@ -535,6 +540,29 @@ func NewGroup(cfg *GroupConfig, signer SignaturePrivateKey, cred Credential) (*G
 	if err != nil {
 		return nil, err
 	}
+	// THE FOUNDER'S LEAF CARRIES urmessage_leaf_keys AND THEN EXACTLY THE CALLER'S LeafExtensions,
+	// in order, and each of the caller's entries is judged here, before anything is drawn. Three
+	// questions, each the one a later reader of this leaf would ask: may the type stand in a leaf
+	// at all (leafExtensionProfile); does the founder's own leaf list it, without which section 7.3
+	// has every joiner refuse the tree this group is founded on; and is it a second entry of a type
+	// the leaf already carries, which is the lookup's refusal and is asked of the lookup, so that
+	// FindExtensionEntry stays the one door for the repeat.
+	leafExtensions := append([]Extension{leafKeysExt}, cfg.LeafExtensions...)
+	founderCapabilities := v1Capabilities()
+	for at := range cfg.LeafExtensions {
+		extensionType := cfg.LeafExtensions[at].ExtensionType
+		if refusal := leafExtensionProfile[extensionType]; refusal != nil {
+			return nil, fmt.Errorf("%w: GroupConfig.LeafExtensions entry %d carries extension type %#04x",
+				refusal, at, uint16(extensionType))
+		}
+		if !isDefaultExtensionType(extensionType) && !founderCapabilities.SupportsExtension(extensionType) {
+			return nil, fmt.Errorf("%w: GroupConfig.LeafExtensions entry %d carries extension type %#04x, which the founder's leaf does not list",
+				errLeafExtensionNotListed, at, uint16(extensionType))
+		}
+		if _, _, err := FindExtensionEntry(leafExtensions, extensionType); err != nil {
+			return nil, err
+		}
+	}
 
 	// step 1: a one-member tree, epoch 0, and the zero-length confirmed transcript hash.
 	//
@@ -547,7 +575,7 @@ func NewGroup(cfg *GroupConfig, signer SignaturePrivateKey, cred Credential) (*G
 	if err != nil {
 		return nil, err
 	}
-	leaf, err := NewLeafNode(crypto, signer, cred, encPub, v1Capabilities(), []Extension{leafKeysExt})
+	leaf, err := NewLeafNode(crypto, signer, cred, encPub, founderCapabilities, leafExtensions)
 	if err != nil {
 		return nil, err
 	}
@@ -710,11 +738,16 @@ func NewGroup(cfg *GroupConfig, signer SignaturePrivateKey, cred Credential) (*G
 }
 
 // v1Capabilities is what every v1 leaf advertises: one version, every registered suite, no optional
-// proposal types, the three URmessage extensions, and basic credentials only.
+// proposal types, every URmessage extension, and basic credentials only.
 //
 // Suites() rather than the group's own code point, for the reason lifecycle_fixtures_test.go's
 // testCapabilities gives: the vector says what this member CAN do and not what this group runs, and
 // a member advertising only its own group's suite is a member no other suite could ever add.
+//
+// The identity layer's two are listed by every leaf, which is what lets a group require them: a
+// leaf carrying urmessage_identity must list it (section 7.2), a member of a group whose context
+// carries urmessage_group_purpose must list that (section 13.4), and a group whose
+// required_capabilities names urmessage_identity admits no key package that does not list it.
 func v1Capabilities() Capabilities {
 	return Capabilities{
 		Versions:     []ProtocolVersion{ProtocolVersionMls10},
@@ -724,6 +757,8 @@ func v1Capabilities() Capabilities {
 			ExtensionTypeUrmessageLeafKeys,
 			ExtensionTypeUrmessageOwnerSuccessor,
 			ExtensionTypeUrmessageJoinSeal,
+			ExtensionTypeUrmessageIdentity,
+			ExtensionTypeUrmessageGroupPurpose,
 		},
 		Proposals:   []ProposalType{},
 		Credentials: []CredentialType{CredentialTypeBasic},
@@ -771,6 +806,20 @@ func (self *Group) OwnLeafNodeCopy() *LeafNode {
 		return nil
 	}
 	return leaf.Clone()
+}
+
+// LeafNodeCopy is the current tree's leaf node at one leaf, as a deep copy, and nil for a leaf
+// that is blank or outside the tree. It is OwnLeafNodeCopy for any leaf: the identity layer reads
+// a member's credential, signature key and extensions through it, for Spec A section 6's LeafAt
+// (identity phase 1's Task 12), and the copy is deep for OwnLeafNodeCopy's reason.
+func (self *Group) LeafNodeCopy(leaf LeafIndex) *LeafNode {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	node := self.tree.Leaf(leaf)
+	if node == nil {
+		return nil
+	}
+	return node.Clone()
 }
 
 // Members returns a snapshot of the membership with roles resolved from the group policy extension.
@@ -1798,16 +1847,20 @@ func (self *Group) ProposeRemove(leaf LeafIndex) ([]byte, error) {
 // signature is NewLeafNode's own discipline: a leaf that goes on sharing an array with anything is
 // a leaf that can change after it was signed.
 //
-// The device wrap key is read off the leaf being REPLACED and re-encoded, so an update publishes
-// the same urmessage_leaf_keys the group already wraps to. A member whose update quietly changed it
-// is a member the next commit wraps to a key it does not hold.
+// EVERY EXTENSION OF THE LEAF BEING REPLACED IS KEPT, unchanged and in its order: an Update replaces
+// one key, and the leaf's other facts are the member's own. So an update publishes the same
+// urmessage_leaf_keys the group already wraps to, and the same urmessage_identity every member
+// checks the leaf's binding against. A member whose update quietly dropped the first is a member the
+// next commit wraps to a key it does not hold; one whose update dropped the second is a leaf no
+// member can bind to an account any more. The leaf keys are still read first, so a leaf whose
+// wrap target does not parse is not refreshed into a second one.
 func (self *Group) ProposeUpdate() ([]byte, error) {
 	var crypto CryptoProvider
 	var signer SignaturePrivateKey
 	var cred Credential
 	var groupId []byte
 	var at LeafIndex
-	var leafKeysExt Extension
+	var extensions []Extension
 	var store StateStore
 	if err := func() error {
 		self.stateLock.Lock()
@@ -1820,16 +1873,7 @@ func (self *Group) ProposeUpdate() ([]byte, error) {
 			return fmt.Errorf("%w: this group holds no leaf at its own index %d",
 				ErrTreeMalformed, self.ownLeaf)
 		}
-		keys, err := LeafKeysOf(current)
-		if err != nil {
-			return err
-		}
-		// re-encoded through the extension's own Encode, which answers the tag and the body
-		// together and answers them as FRESH storage. The parse above hands back a body cut from
-		// the tree's own extension, and a replacement leaf carrying that array would be a leaf
-		// with a window onto the ratchet tree this epoch's tree hash was taken over.
-		encoded, err := keys.Encode()
-		if err != nil {
+		if _, err := LeafKeysOf(current); err != nil {
 			return err
 		}
 		crypto, signer, at, store = self.crypto, self.signer, self.ownLeaf, self.store
@@ -1840,7 +1884,10 @@ func (self *Group) ProposeUpdate() ([]byte, error) {
 			Identity:       cloneBytes(self.cred.Identity),
 		}
 		groupId = cloneBytes(self.context.GroupId)
-		leafKeysExt = encoded
+		// COPIED, every body: the tree's own extensions are what this epoch's tree hash was taken
+		// over, and a replacement leaf sharing an array with them would be a leaf with a window
+		// onto that tree.
+		extensions = cloneExtensions(current.Extensions)
 		return nil
 	}(); err != nil {
 		return nil, err
@@ -1863,7 +1910,7 @@ func (self *Group) ProposeUpdate() ([]byte, error) {
 		Credential:     cred,
 		Capabilities:   v1Capabilities(),
 		LeafNodeSource: LeafNodeSourceUpdate,
-		Extensions:     []Extension{leafKeysExt},
+		Extensions:     extensions,
 	}).Clone()
 	// the group id and the leaf index are what section 7.2's update arm binds and the key_package
 	// arm does not, so an update leaf signed with nil and 0 verifies against itself and against no
@@ -2252,6 +2299,11 @@ func (self *Group) CreateCommit(byReference [][]byte, byValue []Proposal, opts *
 		plan.Private.Zeroize()
 	}()
 	hasPath := CommitPathRequired(list) || opts.Force
+	// AN OWN-LEAF PATCH NEEDS A PATH, and a commit with none is refused here, before anything is
+	// drawn: it makes no leaf of the committer's, so there is nothing to apply the patch to.
+	if opts.OwnLeafPatch != nil && !hasPath {
+		return nil, errOwnLeafPatchWithoutPath
+	}
 	// the tree a RECEIVER judges this commit against, kept apart from the one the epoch ends up
 	// with. Section 12.4.2 applies the proposals, validates the path against THAT tree, and
 	// merges the path afterwards, and the two trees are not interchangeable here: ValSem207
@@ -2262,6 +2314,25 @@ func (self *Group) CreateCommit(byReference [][]byte, byValue []Proposal, opts *
 	postProposal := applied.Tree
 	if hasPath {
 		postProposal = applied.Tree.Clone()
+		// THE PATCH GOES INTO THE LEAF THE PATH LEAF IS MADE FROM, and only into the tree the path
+		// is built in. CreateUpdatePathSecrets makes the path leaf out of the committer's leaf in
+		// this tree and then signs it, and the tree hash below is taken after, so the patch is
+		// under both. The tree a receiver judges against was cloned above and keeps the leaf as it
+		// stood, which is the leaf every receiver holds until it takes this commit.
+		if opts.OwnLeafPatch != nil {
+			current := applied.Tree.Leaf(self.ownLeaf)
+			if current == nil {
+				return nil, fmt.Errorf("%w: this group holds no leaf at its own index %d to patch",
+					ErrTreeMalformed, self.ownLeaf)
+			}
+			patched, err := opts.OwnLeafPatch.applyTo(current)
+			if err != nil {
+				return nil, err
+			}
+			if err := applied.Tree.SetLeaf(self.ownLeaf, patched); err != nil {
+				return nil, err
+			}
+		}
 		plan, err = applied.Tree.CreateUpdatePathSecrets(self.crypto, self.ownLeaf,
 			self.signer, cloneBytes(self.context.GroupId))
 		if err != nil {
@@ -2416,6 +2487,21 @@ func (self *Group) CreateCommit(byReference [][]byte, byValue []Proposal, opts *
 		// that caller.
 		if err := ValSem205ConfirmationTag(commitInput); err != nil {
 			return nil, err
+		}
+		// RFC 9420 section 7.3's COMMIT DOOR, over this committer's own path, as every receiver
+		// runs it in stageInboundCommitLocked: in the same effective context, which carries the
+		// post-proposal extension set, and over the same leaf. ValidateCommit's list leaves this
+		// door to the inbound path, and until an OwnLeafPatch could change the path leaf that
+		// was safe, since the leaf was the committer's own validated leaf with a fresh key. A
+		// patch makes it reachable: a type the leaf does not list, a type no leaf may carry, or
+		// a body that does not parse, and this committer would stage and send a commit every
+		// receiver refuses, which halts the group for each of them. Here it is refused at home,
+		// before anything is staged.
+		if commit.Path != nil {
+			if err := ValidateUpdatePathLeafNode(self.crypto, commitInput.effectiveContext(),
+				self.ownLeaf, commit.Path); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -2759,6 +2845,13 @@ func (self *Group) MergePendingCommit() error {
 	self.ownPriv = staged.ownPriv
 	self.transcript = staged.transcript
 	self.restoreKind = staged.restoreKind
+	// THE CREDENTIAL THIS MEMBER NAMES ITSELF WITH IS ITS OWN LEAF'S, which LoadGroup already reads
+	// it from. An own-leaf patch is the one commit that changes it, and a member that went on naming
+	// itself with the old one would put that credential back at its next Update. Copied, for the
+	// reason LoadGroup copies it: the leaf is a view into a tree a later commit replaces.
+	if own := self.tree.Leaf(self.ownLeaf); own != nil {
+		self.cred = Credential{CredentialType: own.Credential.CredentialType, Identity: cloneBytes(own.Credential.Identity)}
+	}
 	// the update path plan is the one piece of key material in the staged commit that no field of
 	// this group receives, and it holds the commit secret and every path secret the update path
 	// was built from. Its private half is NOT erased here and must not be: it is the leaf state
@@ -2907,6 +3000,25 @@ func (self *Group) PendingRemovedLeaves() ([]LeafIndex, error) {
 		return nil, ErrNoPendingCommit
 	}
 	return self.pending.RemovedLeaves(), nil
+}
+
+// PendingLeafNode is the staged commit's leaf node at one leaf, as a deep copy: the leaf the epoch
+// the commit opens will hold there (identity phase 1's Task 12; LRI R68, the review's L3-5). For
+// this member's own leaf it is the committer's POST-commit leaf, its update path's and its
+// OwnLeafPatch's -- the leaf the sending side has to judge as every receiver will, before
+// anything is sent, where OwnLeafNodeCopy still answers the live tree's. ErrNoPendingCommit with
+// no staged commit, and ErrBlankLeaf for a leaf the staged tree holds no member at.
+func (self *Group) PendingLeafNode(leaf LeafIndex) (*LeafNode, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.pending == nil {
+		return nil, ErrNoPendingCommit
+	}
+	node := self.pending.LeafNodeAfter(leaf)
+	if node == nil {
+		return nil, fmt.Errorf("%w: leaf %d of the staged tree", ErrBlankLeaf, leaf)
+	}
+	return node, nil
 }
 
 // PendingGroupContext is the serialized GroupContext of the epoch the staged commit opens, which

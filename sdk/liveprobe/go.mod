@@ -6,6 +6,7 @@ require (
 	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/message v0.0.0
 	github.com/urnetwork/message/sdk v0.0.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -45,7 +46,6 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb // indirect
 	src.agwa.name/tlshacks v0.0.4 // indirect
 )

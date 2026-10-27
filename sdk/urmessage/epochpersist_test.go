@@ -48,7 +48,7 @@ func TestAnEpochChangeIsPersistedAndTheRestartComesBackAtItAndSeals(t *testing.T
 	bob := openRestoreDevice(t, filepath.Join(root, "bob"))
 	defer bob.close()
 
-	handle, err := alice.device.createMlsGroup(groupId)
+	handle, err := alice.device.createMlsGroup(groupId, false)
 	if err != nil {
 		t.Fatalf("createMlsGroup: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestAnUnopenedGroupEntersItsEpochWithoutWritingARecord(t *testing.T) {
 	bob := openRestoreDevice(t, filepath.Join(root, "bob"))
 	defer bob.close()
 
-	handle, err := alice.device.createMlsGroup(groupId)
+	handle, err := alice.device.createMlsGroup(groupId, false)
 	if err != nil {
 		t.Fatalf("createMlsGroup: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestTheDoorReportsAStoreThatWouldNotTakeTheRecord(t *testing.T) {
 	defer alice.streamStore.Close()
 	defer alice.device.Close()
 
-	handle, err := alice.device.createMlsGroup(groupId)
+	handle, err := alice.device.createMlsGroup(groupId, false)
 	if err != nil {
 		t.Fatalf("createMlsGroup: %v", err)
 	}

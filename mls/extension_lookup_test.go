@@ -337,7 +337,9 @@ var extensionTypeSelectionsOfBothPackages = map[string]extensionTypeSelection{
 			"the door that refuses the repeat is the lookup every accessor reaches -- which the creation " +
 			"path reaches one statement later, through GroupPolicyOf. What matters here is the property " +
 			"(*LeafNode).Validate's row names: the walk covers every entry, so an offending extension in " +
-			"the MIDDLE or at the END is refused rather than walked past",
+			"the MIDDLE or at the END is refused rather than walked past. Since the identity layer it walks " +
+			"the founder's own LeafExtensions the same way, every entry against the leaf profile and the " +
+			"founder's own capabilities, and asks the repeat of that vector of the lookup too",
 		refusesTheRepeat: false,
 		probe: func(t *testing.T) {
 			crypto := testCrypto(t)
@@ -349,6 +351,30 @@ var extensionTypeSelectionsOfBothPackages = map[string]extensionTypeSelection{
 			if group, err := NewGroup(trailing, owner.SigPriv, BasicCredential(owner.IdentityPub)); err == nil {
 				group.Close()
 				t.Error("a config whose LAST extension is a leaf extension founded a group; the profile rule is being applied to the first entry alone")
+			}
+			// and the founder's own LeafExtensions, the offending entry LAST again: a group
+			// context's type, which no leaf may carry, behind one a leaf may
+			leafTrailing := testGroupConfig(t, crypto, owner, "group-1")
+			leafTrailing.LeafExtensions = []Extension{
+				{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: []byte{0x01}},
+				{ExtensionType: ExtensionTypeUrmessageGroupPurpose, ExtensionData: []byte{0x02}},
+			}
+			if group, err := NewGroup(leafTrailing, owner.SigPriv, BasicCredential(owner.IdentityPub)); !errors.Is(err, errProfileLeafExtension) {
+				if err == nil {
+					group.Close()
+				}
+				t.Errorf("a config whose founder's LAST leaf extension is a group context type answered %v, want errProfileLeafExtension; the leaf walk is being applied to the first entry alone", err)
+			}
+			leafRepeated := testGroupConfig(t, crypto, owner, "group-1")
+			leafRepeated.LeafExtensions = []Extension{
+				{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: []byte{0x01}},
+				{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: []byte{0x02}},
+			}
+			if group, err := NewGroup(leafRepeated, owner.SigPriv, BasicCredential(owner.IdentityPub)); !errors.Is(err, ErrMalformedExtension) {
+				if err == nil {
+					group.Close()
+				}
+				t.Errorf("a config whose founder's leaf extensions carry one type twice answered %v, want the lookup's ErrMalformedExtension", err)
 			}
 			// and the repeat is somebody else's rule. Both entries are admitted here, and what
 			// refuses the group is the lookup GroupPolicyOf reaches one statement later.
@@ -362,6 +388,49 @@ var extensionTypeSelectionsOfBothPackages = map[string]extensionTypeSelection{
 			if !errors.Is(err, ErrMalformedExtension) {
 				t.Errorf("a config carrying the group policy twice was refused with %v, want ErrMalformedExtension; the repeat is the lookup's refusal and not this loop's",
 					err)
+			}
+		},
+	},
+	"(*OwnLeafPatch).applyTo": {
+		what: "sets a committer's own leaf's extensions BY TYPE: an entry of a type the leaf carries has its body " +
+			"replaced where it stands, and an entry of a type it does not carry is appended. It selects the entry " +
+			"to replace by its type, and that is the whole of its reading. The repeat is not its rule: it asks the " +
+			"lookup, over the patch and over the leaf, before it touches either, so a patch naming one type twice " +
+			"and a leaf carrying one twice are both refused by FindExtensionEntry's own sentence",
+		refusesTheRepeat: false,
+		probe: func(t *testing.T) {
+			keys := Extension{ExtensionType: ExtensionTypeUrmessageLeafKeys, ExtensionData: []byte{0x01}}
+			identity := Extension{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: []byte{0x02}}
+			other := Extension{ExtensionType: ExtensionTypeApplicationId, ExtensionData: []byte{0x03}}
+			leaf := &LeafNode{Extensions: []Extension{keys, identity, other}}
+			// the entry of the patch's type is replaced where it stands, and the LAST entry is
+			// reached as well as the first: a patch of each
+			patched, err := (&OwnLeafPatch{Extensions: []Extension{
+				{ExtensionType: ExtensionTypeUrmessageIdentity, ExtensionData: []byte{0x12}},
+				{ExtensionType: ExtensionTypeApplicationId, ExtensionData: []byte{0x13}},
+			}}).applyTo(leaf)
+			if err != nil {
+				t.Fatalf("a patch of two entries the leaf carries answered %v", err)
+			}
+			if got := testExtensionsString(patched.Extensions); got != "[0xf002=01 0xf005=12 0x0001=13]" {
+				t.Errorf("the patched leaf carries %s, want [0xf002=01 0xf005=12 0x0001=13]", got)
+			}
+			if got := testExtensionsString(leaf.Extensions); got != "[0xf002=01 0xf005=02 0x0001=03]" {
+				t.Errorf("the patch wrote through to the leaf it was applied to, which now carries %s", got)
+			}
+			// a type the leaf does not carry is appended
+			bare := &LeafNode{Extensions: []Extension{keys}}
+			appended, err := (&OwnLeafPatch{Extensions: []Extension{identity}}).applyTo(bare)
+			if err != nil || testExtensionsString(appended.Extensions) != "[0xf002=01 0xf005=02]" {
+				t.Errorf("a patch of a type the leaf does not carry answered %v and %v", appended, err)
+			}
+			// and the repeat is the lookup's, over the patch and over the leaf
+			if _, err := (&OwnLeafPatch{Extensions: []Extension{identity, identity}}).applyTo(bare); !errors.Is(err, ErrMalformedExtension) {
+				t.Errorf("a patch naming one type twice answered %v, want the lookup's ErrMalformedExtension", err)
+			}
+			twice := &LeafNode{Extensions: []Extension{identity, identity}}
+			if _, err := (&OwnLeafPatch{Extensions: []Extension{identity}}).applyTo(twice); !errors.Is(err, ErrMalformedExtension) {
+				t.Errorf("a patch over a leaf carrying its type twice answered %v, want the lookup's ErrMalformedExtension", err)
 			}
 		},
 	},

@@ -486,12 +486,20 @@ type seamMember struct {
 	reserver    messagegroup.StreamIndexReserver
 	engine      messagegroup.GroupEngine
 	identityPub []byte
-	handle      messagegroup.GroupHandle
-	session     *messagegroup.GroupSession
-	groupId     []byte
-	pqSecret    []byte
+	// the 0xF005 every leaf of this member carries (identity phase 1's Task 12; LRI R62)
+	identity messagegroup.ExtensionBytes
+	handle   messagegroup.GroupHandle
+	session  *messagegroup.GroupSession
+	groupId  []byte
+	pqSecret []byte
+	// the group_handle_key its join seal carried, which a wrap's target handle is derived from
+	groupHandleKey []byte
 	// the private half of the X-Wing key this member's leaf publishes, which a join seal is made to
 	xwing *messagegroup.XwingPrivateKey
+	// the key it signs with, and its public half: the author's key of a list it signs (identity phase
+	// 1's Task 13)
+	signer    mls.SignaturePrivateKey
+	signerPub []byte
 }
 
 // seamMember stands one up and says Hello through its own transport.
@@ -513,6 +521,35 @@ func (self *world) seamMember(t *testing.T, ctx context.Context, name string) *s
 // [world.seamMember]: a member whose credential is its own signer.
 func (self *world) seamMemberClaiming(t *testing.T, ctx context.Context, name string,
 	claimed []byte) *seamMember {
+
+	t.Helper()
+	return self.seamMemberMaking(t, ctx, name, func(signer mls.SignaturePrivateKey, signerPub []byte) ([]byte, messagegroup.ExtensionBytes) {
+		// THE SEAM'S LEAVES ARE BOUND (identity phase 1's Task 12; LRI R62). Every group this build
+		// founds requires urmessage_identity, so the seam's leaves carry a 0xF005 binding its key to the
+		// identity they name: a further device of the claimed identity, made from the words this world
+		// kept for it and naming the devices its newest list names, or, with nothing claimed, an
+		// identity of its own.
+		words, sibling := "", (*messagegroup.UrmessageIdentity)(nil)
+		var claimedIdentity *worldIdentity
+		if claimed != nil {
+			claimedIdentity = self.identityClaimed(t, claimed)
+			words, sibling = claimedIdentity.words, siblingIdentity(t, claimedIdentity)
+		} else {
+			words = newWords(t)
+		}
+		credential, identity := seamIdentity(t, name, words, signer, signerPub, sibling)
+		if claimedIdentity != nil {
+			claimedIdentity.tookList(t, identity)
+		}
+		return credential, identity
+	})
+}
+
+// seamMemberMaking is a seam member whose credential and 0xF005 the caller makes, from the key it
+// signs with: [world.seamMemberClaiming]'s, or a list a scenario signs itself (identity phase 1's
+// Task 13).
+func (self *world) seamMemberMaking(t *testing.T, ctx context.Context, name string,
+	makeIdentity func(signer mls.SignaturePrivateKey, signerPub []byte) ([]byte, messagegroup.ExtensionBytes)) *seamMember {
 
 	t.Helper()
 	client := self.connectClient(t)
@@ -543,10 +580,7 @@ func (self *world) seamMemberClaiming(t *testing.T, ctx context.Context, name st
 	if err != nil {
 		t.Fatalf("%s: the leaf keys extension: %v", name, err)
 	}
-	credential := signerPub
-	if claimed != nil {
-		credential = append([]byte(nil), claimed...)
-	}
+	credential, identity := makeIdentity(signer, signerPub)
 	engine, err := messagegroup.NewConnectMlsEngine(crypto, stateStore, signer, mls.BasicCredential(credential), leafKeys.ExtensionData)
 	if err != nil {
 		t.Fatalf("%s: the engine: %v", name, err)
@@ -563,14 +597,17 @@ func (self *world) seamMemberClaiming(t *testing.T, ctx context.Context, name st
 		// the identity this member is KNOWN BY, which is its credential's and not its signer's:
 		// the roster, the policy and every role decision are keyed on the credential identity.
 		identityPub: append([]byte(nil), credential...),
+		identity:    identity,
 		xwing:       xwing,
+		signer:      signer,
+		signerPub:   append([]byte(nil), signerPub...),
 	}
 }
 
 // keyPackage is the package an honest admin adds this member with.
 func (self *seamMember) keyPackage(t *testing.T) []byte {
 	t.Helper()
-	keyPackage, err := self.engine.NewKeyPackage()
+	keyPackage, err := self.engine.NewBoundKeyPackage([]messagegroup.ExtensionBytes{self.identity})
 	if err != nil {
 		t.Fatalf("%s's key package: %v", self.name, err)
 	}
@@ -607,6 +644,7 @@ func (self *seamMember) join(t *testing.T, invite *urmessage.Invite) {
 	self.handle, self.session = handle, session
 	self.groupId = append([]byte(nil), invite.GroupId...)
 	self.pqSecret = append([]byte(nil), pqSecret...)
+	self.groupHandleKey = append([]byte(nil), groupHandleKey...)
 }
 
 // commitAddAndSubmit builds an Add of one key package through the seam's by-value arm, merges it,

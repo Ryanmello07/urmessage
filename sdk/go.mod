@@ -6,6 +6,7 @@ require (
 	github.com/gopacket/gopacket v1.7.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/urnetwork/connect v0.0.0
+	github.com/urnetwork/glog v0.0.0
 	github.com/urnetwork/message v0.0.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -37,7 +38,6 @@ require (
 	github.com/quic-go/quic-go v0.61.0 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/theodorsm/covert-dtls v1.5.1 // indirect
-	github.com/urnetwork/glog v0.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect

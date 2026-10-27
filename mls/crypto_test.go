@@ -6411,6 +6411,10 @@ func realDeclaration(secret []byte, length int) []byte {
 	copy(answer, secret)
 	return answer
 }
+
+func (self redacted) Format(state fmt.State, verb rune) {
+	fmt.Fprint(state, "redacted")
+}
 `
 
 // A package holding one reached declaration and one nothing names, for the same reason the
@@ -7086,6 +7090,20 @@ func declarationAddress(where string, name string) string {
 	return where + "/" + name
 }
 
+// THE SHAPES THAT ARE NOT PLACEHOLDERS, scoped to a file and a shape, under LRI R65 item 7: no code
+// is spelled around a gate. A method an interface makes is handed every parameter the interface
+// names, and one whose body has no use for a parameter is not a stub for that. fmt.Formatter hands
+// Format a verb, and a redaction writes the same text under every verb (the review of identity
+// phase 1's Tasks 8 to 10, L1-4). Writing the parameter _ is refused by the provider's argument
+// builder above, which resolves arguments by name, so the parameter keeps its name and the row is
+// here. Held both ways; the shape control's own Format is the control, which the matcher reports.
+var providerShapesThatAreNotPlaceholders = map[string]string{
+	"../messagegroup/phrase.go: messagegroup.Format does not read verb": "(RecoveryPhrase).Format, " +
+		"fmt.Formatter's redaction of P34: the same text under every verb",
+	"../messagegroup/identity_keys.go: messagegroup.Format does not read verb": "(PhraseKeys).Format, " +
+		"the same redaction of a ceremony's keys",
+}
+
 // No declaration anywhere under the guardrail roots is a placeholder.
 //
 // The roots are the ones the primitive guardrails already walk, which is this package and
@@ -7116,7 +7134,12 @@ func TestNoStubShapesRemainInSource(t *testing.T) {
 		"control.stubThatPanics does not read secret",
 		"control.stubThatPanics panics as a statement of its body rather than inside a check",
 		"control.stubThatReadsOneOfTwo does not read secret",
+		// the control of providerShapesThatAreNotPlaceholders: a redaction's Format still reads as
+		// the shape, here, where no row names it
+		"control.Format does not read verb",
 	}
+	slices.Sort(control)
+	slices.Sort(want)
 	if !slices.Equal(control, want) {
 		t.Errorf("the shape matcher read %v out of the control, want %v", control, want)
 	}
@@ -7126,10 +7149,28 @@ func TestNoStubShapesRemainInSource(t *testing.T) {
 	}
 	scanned := 0
 	packages := map[string][]parsedSource{}
+	excusedShapes := map[string]bool{}
+	defer func() {
+		// the rows, held both ways: each names a shape the matcher still reports in its file
+		for row := range providerShapesThatAreNotPlaceholders {
+			if !excusedShapes[row] {
+				t.Errorf("providerShapesThatAreNotPlaceholders names %q, which the matcher does not report; a row that excuses nothing reads as coverage", row)
+			}
+		}
+	}()
 	for path, text := range productionSources(mustScanSources(t, urmessageScanRoots()).sourceTexts) {
 		scanned++
 		parsed := mustParseText(t, path, text)
-		if shapes := providerStubShapesIn(parsed); len(shapes) != 0 {
+		shapes := []string{}
+		for _, shape := range providerStubShapesIn(parsed) {
+			row := filepath.ToSlash(path) + ": " + shape
+			if _, notAPlaceholder := providerShapesThatAreNotPlaceholders[row]; notAPlaceholder {
+				excusedShapes[row] = true
+				continue
+			}
+			shapes = append(shapes, shape)
+		}
+		if len(shapes) != 0 {
 			t.Errorf("%s still holds a placeholder: %v", path, shapes)
 		}
 		where := filepath.ToSlash(filepath.Dir(path))
@@ -8220,7 +8261,19 @@ var cryptoImportPaths = []string{
 	`"crypto/sha256"`,
 	`"crypto/sha3"`,
 	`"crypto/subtle"`,
+	// embed is ../messagegroup's go:embed of bip39_english.txt, the BIP-39 English list the
+	// recovery phrase is written in (MASTER section 5.1 at Revision 10), pinned there by its
+	// SHA-256 at initialisation. It reads the one file the build put into the binary and nothing
+	// at run time, so it consults no environment, which is the property this list exists to keep
+	// true. It arrived with identity phase 1's Task 10, on the same terms as fmt.
+	`"embed"`,
 	`"encoding/binary"`,
+	// encoding/hex is ../messagegroup's lowercase hex for the account ID and the device ID, the
+	// two public IDs the app shows (identity_keys.go's String methods; D2 ID1 and DID1). It is
+	// pure go over the octets it is handed and consults no environment. It arrived with the fix
+	// round after the review of identity phase 1's Tasks 8 to 10 (LRI R68), when the IDs' hand
+	// written nibble arithmetic, spelled around message/record_test.go's gate, was retired.
+	`"encoding/hex"`,
 	`"errors"`,
 	`"fmt"`,
 	// mls itself, reached from ../messagegroup and in that direction only. It is what keeps the one
@@ -8234,6 +8287,12 @@ var cryptoImportPaths = []string{
 	`"github.com/urnetwork/message/message"`,
 	`"github.com/urnetwork/message/mls"`,
 	`"github.com/urnetwork/message/syntax"`,
+	// argon2 is ../messagegroup's Argon2id, the recovery phrase's one slow stretch (MASTER section
+	// 5.2 at Revision 10). It is x/crypto, which go.mod already requires, pure go over blake2b
+	// with assembly for one round on amd64, and consults nothing: its parameters are the
+	// caller's, and messagegroup's TestProductionStretchesWithTheFrozenParametersOnly holds them
+	// to the frozen ones. It arrived with identity phase 1's Task 10.
+	`"golang.org/x/crypto/argon2"`,
 	`"golang.org/x/crypto/chacha20poly1305"`,
 	`"io"`,
 	`"math"`,

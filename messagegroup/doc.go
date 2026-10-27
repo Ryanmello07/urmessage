@@ -196,6 +196,12 @@
 // that this package keeps the property connect/mls and connect/message have, of having no
 // timing-sensitive test in it at all.
 //
+// THE IDENTITY LAYER IS NOT HERE YET, AND ONE COST OF IT IS FILED AHEAD OF IT. Identity phase 1
+// brings the device list into this package. Two lock-outs typed at once on two devices of one
+// account will leave the later device holding a list no tree takes, until it is removed and added
+// again; that phase accepts the cost and files it now, as open item MG-16, and the citation moves
+// to the list's own code when the list lands.
+//
 // Two gates of other packages judge what lands here, and both had to be told this directory
 // exists. mls/crypto_forbidden_test.go's forbiddenScanRoots -- which five further mls gates
 // alias rather than restate -- covers this directory, so the hkdf entry-point confinement, the

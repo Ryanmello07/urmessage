@@ -1244,12 +1244,41 @@ func joinShadowsImports(function *ast.FuncDecl, names map[string]bool) bool {
 	return shadowed
 }
 
+// THE REVIEWED CONTEXTS OF THIS REPOSITORY'S OWN CODE, under the rule LRI R65 item 7 made: no code
+// is spelled around a gate. Where a gate's subject is not the code's subject, the code keeps its
+// natural spelling and the gate gains a row scoped to it, with its reason and a control. The
+// mechanism is the core sdk's above, verbatim: the reviewed declaration is in a fixture of its own,
+// testdata/reviewed-repository/<base name>, matched by its complete AST and its imports, so it
+// exempts the expressions inside exactly that body and nothing beside it, and a changed body faces
+// every rule again. TestEveryReviewedContextOfThisRepositoryIsLiveAndScoped holds each row both
+// ways and is its control.
+var joinReviewedRepositoryContexts = map[string]struct {
+	expressions   int
+	rangeFunction string
+}{
+	// ID1's octet 6, (id_hash[6] & 0x0F) | 0x80 (D2 ID1; MASTER section 5.2 at Revision 10):
+	// UUIDv8's version nibble over an octet of a SHA-256, and no retention byte. The review of
+	// identity phase 1's Tasks 8 to 10 found it spelled id_hash[6] % 16 to pass this gate (L2-07).
+	messagegroupRoot + "/identity_keys.go": {expressions: 1},
+}
+
+// Where a reviewed context's fixture is kept, by the map that names it.
+const (
+	joinReviewedSDKDir        = "testdata/reviewed-sdk"
+	joinReviewedRepositoryDir = "testdata/reviewed-repository"
+)
+
 func joinReviewedSDKExpressions(scan joinScan, path string) (map[token.Pos]bool, error) {
 	review, exists := joinReviewedSDKContexts[path]
+	fixtureDir := joinReviewedSDKDir
+	if !exists {
+		review, exists = joinReviewedRepositoryContexts[path]
+		fixtureDir = joinReviewedRepositoryDir
+	}
 	if !exists {
 		return nil, nil
 	}
-	fixture := filepath.Join("testdata", "reviewed-sdk", filepath.Base(path))
+	fixture := filepath.Join(fixtureDir, filepath.Base(path))
 	reference, err := parser.ParseFile(token.NewFileSet(), fixture, nil, parser.SkipObjectResolution)
 	if err != nil {
 		return nil, fmt.Errorf("read reviewed SDK context %s: %w", fixture, err)
@@ -1546,6 +1575,71 @@ func TestJoinRulesIgnoreTheDocumentedFixture(t *testing.T) {
 		if !strings.Contains(text, shape.name) {
 			t.Errorf("the documented fixture does not mention %s, so it controls nothing", shape.name)
 		}
+	}
+}
+
+// EVERY REVIEWED CONTEXT OF THIS REPOSITORY'S OWN CODE IS LIVE, AND SCOPED TO ITS BODY.
+//
+// Live, both ways: each row names a file the gate's scan read, and matches exactly its stated
+// number of expressions there by their whole AST; a row whose body changed matches nothing, which
+// would leave its expressions reported, and a row whose file is gone would excuse nothing while
+// reading as coverage.
+//
+// THE CONTROL, scoped: the same file, with one function more that writes the very shape the row
+// excuses, is reported for that function and not for the reviewed one; and with the reviewed body
+// changed by one constant, the row matches nothing and its own expression is reported again. So a
+// row exempts one body and nothing beside it.
+func TestEveryReviewedContextOfThisRepositoryIsLiveAndScoped(t *testing.T) {
+	roots := joinScanRoots(t)
+	scan := mustScanJoinSources(t, roots)
+	if len(joinReviewedRepositoryContexts) == 0 {
+		t.Fatal("this repository has no reviewed context, so this test holds nothing")
+	}
+	for _, path := range slices.Sorted(maps.Keys(joinReviewedRepositoryContexts)) {
+		if _, scanned := scan.syntax[path]; !scanned {
+			t.Errorf("the reviewed context %s names a file the scan did not read: the row is stale", path)
+			continue
+		}
+		reviewed, err := joinReviewedSDKExpressions(scan, path)
+		if err != nil {
+			t.Errorf("the reviewed context %s: %v", path, err)
+			continue
+		}
+		if len(reviewed) != joinReviewedRepositoryContexts[path].expressions {
+			t.Errorf("the reviewed context %s matched %d expressions, want %d", path, len(reviewed), joinReviewedRepositoryContexts[path].expressions)
+		}
+		t.Logf("reviewed context %s: %d expression(s) matched by their whole AST", path, len(reviewed))
+	}
+
+	// the control, over identity_keys.go
+	path := messagegroupRoot + "/identity_keys.go"
+	original := scan.sourceTexts[path]
+	if original == "" {
+		t.Fatalf("the scan holds no text for %s", path)
+	}
+	shape := classBucketJoinShapes[slices.IndexFunc(classBucketJoinShapes, func(one joinShape) bool { return one.name == "wire&0x0f" })]
+	reported := func(text string) []string {
+		one := joinScan{fileSet: token.NewFileSet(), sourceTexts: map[string]string{}, syntax: map[string]*ast.File{}, rootOf: map[string]string{}}
+		parsed, err := parser.ParseFile(one.fileSet, path, text, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse the control's %s: %v", path, err)
+		}
+		one.sourceTexts[path], one.syntax[path], one.rootOf[path] = text, parsed, messagegroupRoot
+		return joinShapeExpressions(one, path, shape)
+	}
+	if got := reported(original); len(got) != 0 {
+		t.Errorf("CONTROL: %s as it stands is reported for %s: %v", path, shape.name, got)
+	}
+	beside := original + "\nfunc joinControlNibbleBeside(octet byte) byte {\n\treturn octet & 0x0F\n}\n"
+	if got := reported(beside); len(got) != 1 || !strings.Contains(got[0], "octet & 0x0F") {
+		t.Errorf("CONTROL: a function beside the reviewed one, writing the same shape, is reported as %v; want exactly its own expression", got)
+	}
+	changed := strings.Replace(original, "(idHash[8] & 0x3F) | 0x80", "(idHash[8] & 0x7F) | 0x80", 1)
+	if changed == original {
+		t.Fatalf("CONTROL: the reviewed body's anchor is not in %s", path)
+	}
+	if got := reported(changed); len(got) != 1 || !strings.Contains(got[0], "idHash[6] & 0x0F") {
+		t.Errorf("CONTROL: with the reviewed body changed, the gate reports %v; want the body's own expression, under every rule again", got)
 	}
 }
 

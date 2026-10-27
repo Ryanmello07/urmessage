@@ -358,11 +358,16 @@ func urnet_message_client_close(self C.uint64_t) {
 
 // urnet_message_group_ensure_subscribed subscribes this group to the server's push when it holds
 // no current subscription (none, an older epoch, or a connection a Hello has replaced). Answers 1
-// when it subscribed now, 0 when the subscription was already current, and -1 with out_error when
-// the server refused. After a 1, receive once: the subscription only announces what arrives later.
+// when it subscribed now, 0 when the subscription was already current, and -1 when it did not
+// subscribe, with out_error when the server refused. After a 1, receive once: the subscription only
+// announces what arrives later.
+//
+// THE RESULT IS NAMED AND PRESET TO -1 (LRI R84 item 3): cgoGuard recovers a panic, and an unnamed
+// result then answers its zero value, which says the subscription is current.
 //
 //export urnet_message_group_ensure_subscribed
-func urnet_message_group_ensure_subscribed(self C.uint64_t, ctx C.uint64_t, outError **C.char) C.int32_t {
+func urnet_message_group_ensure_subscribed(self C.uint64_t, ctx C.uint64_t, outError **C.char) (state C.int32_t) {
+	state = -1
 	defer cgoGuard("urnet_message_group_ensure_subscribed")
 	self_, ok := resolveHandle[*urmessage.Group](uint64(self), "urnet_message_group_ensure_subscribed")
 	if !ok || self_ == nil {
@@ -717,6 +722,286 @@ func urnet_message_device_key_package(self C.uint64_t, out *C.uint8_t, inoutLen 
 	return copyOut(out, inoutLen, keyPackage)
 }
 
+// ── the identity (identity phase 1's Task 14; Spec A section 9.3a) ─────────────────────────
+//
+// FOUR EXPORTS, AND THE WORDS LEAVE BY ONE OF THEM (Property 2). urnet_message_device_create_identity
+// answers the 25 words, straight into the caller's buffer: no joined copy of them is made in Go's
+// memory, which this library cannot erase, and the slice that ordered them is cleared. No other
+// export answers them, or anything made from them but the public IDs, and no out_error names one:
+// a wrong word is named by its position. urnet_message_device_confirm_words takes them back,
+// urnet_message_device_check_word marks one word as it is typed, and urnet_message_device_identity
+// answers what the identity is.
+//
+// NO EXPORT ANSWERS A SYSTEM GROUP (Property 1): urnet_message_device_groups and _restore answer
+// urmessage's Groups and Restore, which answer conversations only, and the self group, a system
+// group, is held and answered by nothing.
+
+// The kinds urnet_message_device_confirm_words answers. THE HEADER'S URNET_MESSAGE_WORDS_* DEFINES
+// ARE THESE, by name and by value, and TestTheHeaderDefinesExactlyTheWordsKinds holds them equal.
+const (
+	messageWordsOk             int32 = 0
+	messageWordsWrong          int32 = 1
+	messageWordsNotOffered     int32 = 2
+	messageWordsIdentityExists int32 = 3
+	messageWordsFailed         int32 = 4
+)
+
+// deviceIdentityInfo is this device's identity as json: urmessage.Identity, with has_identity
+// telling a device that has none. THE FIELD SET IS urmessage.Identity's, and the header documents
+// its keys, held by TestTheHeaderDocumentsExactlyTheIdentityJsonKeys.
+type deviceIdentityInfo struct {
+	HasIdentity  bool                   `json:"has_identity"`
+	AccountId    string                 `json:"account_id"`
+	DeviceId     string                 `json:"device_id"`
+	PhraseDevice bool                   `json:"phrase_device"`
+	Devices      []deviceIdentityDevice `json:"devices"`
+}
+
+// deviceIdentityDevice is one device of the newest list, as json.
+type deviceIdentityDevice struct {
+	DeviceId     string `json:"device_id"`
+	PhraseDevice bool   `json:"phrase_device"`
+	ThisDevice   bool   `json:"this_device"`
+}
+
+// deviceIdentityInfoOf is the json of one identity.
+func deviceIdentityInfoOf(identity *urmessage.Identity) *deviceIdentityInfo {
+	info := &deviceIdentityInfo{
+		HasIdentity:  true,
+		AccountId:    identity.AccountId,
+		DeviceId:     identity.DeviceId,
+		PhraseDevice: identity.PhraseDevice,
+		Devices:      []deviceIdentityDevice{},
+	}
+	for _, device := range identity.Devices {
+		info.Devices = append(info.Devices, deviceIdentityDevice{
+			DeviceId:     device.DeviceId,
+			PhraseDevice: device.PhraseDevice,
+			ThisDevice:   device.ThisDevice,
+		})
+	}
+	return info
+}
+
+// urnet_message_device_identity answers this device's identity as json, and a json with has_identity
+// false before it has one, which is how a first run is told. NULL with out_error set when it cannot
+// be read -- urmessage's ErrIdentityUnreadable among those, which urnet_message_device_identity_state
+// answers apart -- and NULL with no error for an unknown handle. Free with urnet_free_string.
+//
+//export urnet_message_device_identity
+func urnet_message_device_identity(self C.uint64_t, outError **C.char) *C.char {
+	defer cgoGuard("urnet_message_device_identity")
+	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_identity")
+	if !ok || self_ == nil {
+		return nil
+	}
+	identity, err := self_.Identity()
+	if errors.Is(err, urmessage.ErrNoIdentity) {
+		return cJson(&deviceIdentityInfo{Devices: []deviceIdentityDevice{}}, "urnet_message_device_identity")
+	}
+	if err != nil {
+		setErrorOut(outError, err)
+		return nil
+	}
+	return cJson(deviceIdentityInfoOf(identity), "urnet_message_device_identity")
+}
+
+// THE FOUR ANSWERS OF urnet_message_device_identity_state (LRI R89 item 1), held equal to the header's
+// URNET_MESSAGE_IDENTITY_* by name and value (TestTheHeaderDefinesExactlyTheIdentityStates).
+const (
+	messageIdentityNone       int32 = 0
+	messageIdentityMade       int32 = 1
+	messageIdentityUnreadable int32 = 2
+	messageIdentityFailed     int32 = 3
+)
+
+// urnet_message_device_identity_state answers which of four states this device's identity is in, which
+// is what the app's first screen decides on (LRI R89 item 1; review D2L-1, L-D1, G-D1):
+//   - NONE: no identity yet, so set one up;
+//   - MADE: an identity, which urnet_message_device_identity answers;
+//   - UNREADABLE: urmessage's ErrIdentityUnreadable. This device's identity cannot be read: its
+//     records stand without its identity record, which something moved away. Nothing may be set up
+//     over it -- create_identity and confirm_words refuse -- and it opens whole once the record is
+//     back. out_error says which records stand;
+//   - FAILED: the state could not be read, with out_error set, or the handle does not resolve, with
+//     out_error NULL. A recovered panic answers FAILED.
+//
+//export urnet_message_device_identity_state
+func urnet_message_device_identity_state(self C.uint64_t, outError **C.char) (state C.int32_t) {
+	state = C.int32_t(messageIdentityFailed)
+	defer cgoGuard("urnet_message_device_identity_state")
+	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_identity_state")
+	if !ok || self_ == nil {
+		return C.int32_t(messageIdentityFailed)
+	}
+	_, err := self_.Identity()
+	switch {
+	case err == nil:
+		return C.int32_t(messageIdentityMade)
+	case errors.Is(err, urmessage.ErrNoIdentity):
+		return C.int32_t(messageIdentityNone)
+	case errors.Is(err, urmessage.ErrIdentityUnreadable):
+		setErrorOut(outError, err)
+		return C.int32_t(messageIdentityUnreadable)
+	}
+	setErrorOut(outError, err)
+	return C.int32_t(messageIdentityFailed)
+}
+
+// urnet_message_device_create_identity answers the 25 words of a new recovery phrase by the
+// buffer-out pattern, separated by single spaces: the same words asked again before the identity is
+// made, and a refusal once it is (urmessage's CreateIdentity). Nothing is made.
+//
+//export urnet_message_device_create_identity
+func urnet_message_device_create_identity(self C.uint64_t, out *C.uint8_t, inoutLen *C.int32_t, outError **C.char) C.bool {
+	defer cgoGuard("urnet_message_device_create_identity")
+	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_create_identity")
+	if !ok || self_ == nil {
+		return C.bool(false)
+	}
+	words, err := self_.CreateIdentity()
+	if err != nil {
+		if inoutLen != nil {
+			*inoutLen = 0
+		}
+		setErrorOut(outError, err)
+		return C.bool(false)
+	}
+	defer clear(words)
+	return copyWordsOut(out, inoutLen, words)
+}
+
+// copyWordsOut is copyOut over a phrase's words, joined by single spaces and written straight into
+// the caller's buffer, so that no joined copy of the phrase is made in Go's memory, whose collector
+// this library cannot erase. *inout_len is always set to the needed size.
+func copyWordsOut(out *C.uint8_t, inoutLen *C.int32_t, words []string) C.bool {
+	if inoutLen == nil {
+		return C.bool(false)
+	}
+	capacity := int(*inoutLen)
+	needed := 0
+	for at, word := range words {
+		if 0 < at {
+			needed += 1
+		}
+		needed += len(word)
+	}
+	*inoutLen = C.int32_t(needed)
+	if out == nil || capacity < needed {
+		return C.bool(false)
+	}
+	buffer := unsafe.Slice((*byte)(unsafe.Pointer(out)), needed)
+	at := 0
+	for index, word := range words {
+		if 0 < index {
+			buffer[at] = ' '
+			at += 1
+		}
+		at += copy(buffer[at:], word)
+	}
+	return C.bool(true)
+}
+
+// urnet_message_device_confirm_words takes the words typed back and makes the identity, BLOCKING on
+// the self group's founding (urmessage's ConfirmWords). It answers a URNET_MESSAGE_WORDS_* kind; on
+// WRONG the positions of the wrong words go back by the buffer-out pattern over int32s, capped at
+// the capacity passed in, with *inout_count the full count ([copyPositionsOut]).
+//
+// THE RESULT IS NAMED AND PRESET TO FAILED, AND THE COUNT TO NONE (LRI R84 item 3; review X-LIB-1):
+// cgoGuard recovers a panic, and an unnamed result then answers its zero value, which is
+// URNET_MESSAGE_WORDS_OK -- an identity a caller is told exists -- with *inout_count left at the
+// capacity the caller passed in.
+//
+// THE TYPED WORDS: the octets copied out of the caller's buffer are cleared before this returns. The
+// string ConfirmWords reads them as is a further copy, which nothing erases: Spec A section 8.4a's
+// residual, "a typed word is a Go string, and is not erased at all".
+//
+//export urnet_message_device_confirm_words
+func urnet_message_device_confirm_words(self C.uint64_t, ctx C.uint64_t, typed *C.uint8_t, typedLen C.int32_t, outPositions *C.int32_t, inoutCount *C.int32_t, outError **C.char) (kind C.int32_t) {
+	kind = C.int32_t(messageWordsFailed)
+	defer cgoGuard("urnet_message_device_confirm_words")
+	capacity := positionsCapacity(inoutCount)
+	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_confirm_words")
+	if !ok || self_ == nil {
+		return C.int32_t(messageWordsFailed)
+	}
+	ctx_, ok := messageCtx(ctx, "urnet_message_device_confirm_words")
+	if !ok {
+		return C.int32_t(messageWordsFailed)
+	}
+	octets := goBytes(typed, typedLen)
+	defer clear(octets)
+	err := self_.ConfirmWords(ctx_, string(octets))
+	var wrong *urmessage.WrongWords
+	if errors.As(err, &wrong) {
+		copyPositionsOut(outPositions, inoutCount, capacity, wrong.Positions)
+	}
+	if err != nil {
+		setErrorOut(outError, err)
+	}
+	return C.int32_t(messageWordsKindOf(err))
+}
+
+// positionsCapacity reads the capacity a caller passed in *inout_count, and sets the count to none
+// before anything else runs, so that every answer but a WRONG -- a recovered panic among them -- says
+// no position.
+func positionsCapacity(inoutCount *C.int32_t) int {
+	if inoutCount == nil {
+		return 0
+	}
+	capacity := int(*inoutCount)
+	*inoutCount = 0
+	return capacity
+}
+
+// copyPositionsOut hands the positions back by the buffer-out pattern over int32s, CAPPED AT THE
+// CALLER'S CAPACITY (LRI R84 item 4; review X-LIB-2): *inout_count is set to how many positions there
+// are, all of them, and the first of them, as many as the capacity holds, are copied when out is not
+// NULL. A count above the capacity says there are more than were copied: typed text of more than 25
+// words can name more than 25 positions.
+func copyPositionsOut(out *C.int32_t, inoutCount *C.int32_t, capacity int, positions []int) {
+	if inoutCount == nil {
+		return
+	}
+	*inoutCount = C.int32_t(len(positions))
+	copied := min(capacity, len(positions))
+	if out == nil || copied <= 0 {
+		return
+	}
+	slots := unsafe.Slice(out, copied)
+	for at := range copied {
+		slots[at] = C.int32_t(positions[at])
+	}
+}
+
+// messageWordsKindOf is the projection of ConfirmWords' error onto the kinds.
+func messageWordsKindOf(err error) int32 {
+	switch {
+	case err == nil:
+		return messageWordsOk
+	case errors.Is(err, urmessage.ErrWordsDoNotMatch):
+		return messageWordsWrong
+	case errors.Is(err, urmessage.ErrNoWordsOffered):
+		return messageWordsNotOffered
+	case errors.Is(err, urmessage.ErrIdentityExists):
+		return messageWordsIdentityExists
+	}
+	return messageWordsFailed
+}
+
+// urnet_message_device_check_word answers whether one typed word is a word of the recovery phrase's
+// list, through the phrase's own fold (messagegroup.CheckRecoveryPhraseWord; LRI R68's L3-10). It
+// takes no device: the list is the library's. The copy of the typed octets is cleared before it
+// returns; the string the check reads them as is Spec A section 8.4a's residual, and is not erased.
+//
+//export urnet_message_device_check_word
+func urnet_message_device_check_word(word *C.uint8_t, wordLen C.int32_t) C.bool {
+	defer cgoGuard("urnet_message_device_check_word")
+	octets := goBytes(word, wordLen)
+	defer clear(octets)
+	return C.bool(messagegroup.CheckRecoveryPhraseWord(string(octets)))
+}
+
 //export urnet_message_device_groups
 func urnet_message_device_groups(self C.uint64_t) C.uint64_t {
 	defer cgoGuard("urnet_message_device_groups")
@@ -794,24 +1079,41 @@ func urnet_message_device_create_group(self C.uint64_t, ctx C.uint64_t, groupId 
 //
 //export urnet_message_device_forget_group
 func urnet_message_device_forget_group(self C.uint64_t, groupId *C.uint8_t, groupIdLen C.int32_t, outError **C.char) (kind C.int32_t) {
-	kind = C.int32_t(messageForgetFailed)
+	kind = C.int32_t(messageForgetUnknown)
 	defer cgoGuard("urnet_message_device_forget_group")
+	// A RECOVERED PANIC IS NOT "NOT HELD" (LRI R89 item 7; review X-D2-3). It answers UNKNOWN, the
+	// preset above, and says so through out_error: the panic may have come before anything changed or
+	// after the group was closed, so the caller re-reads before it acts. The flag is set by every
+	// answer this function gives itself, so only a panic leaves it unset.
+	answered := false
+	defer func() {
+		if !answered {
+			setErrorOut(outError, errForgetStateUnknown)
+		}
+	}()
 	self_, ok := resolveHandle[*urmessage.Device](uint64(self), "urnet_message_device_forget_group")
 	if !ok || self_ == nil {
+		answered = true
 		return C.int32_t(messageForgetFailed)
 	}
 	err := self_.ForgetGroup(goBytes(groupId, groupIdLen))
 	setErrorOut(outError, err)
+	answered = true
 	return C.int32_t(messageForgetKindOf(err))
 }
 
-// THE FOUR ANSWERS OF urnet_message_device_forget_group, held equal to the header's
+// errForgetStateUnknown is out_error's sentence when forget_group answers UNKNOWN.
+var errForgetStateUnknown = errors.New("urmessage: the leave failed inside the library, and whether the group is still held is unknown: restore or read the group list again before acting")
+
+// THE FIVE ANSWERS OF urnet_message_device_forget_group, held equal to the header's
 // URNET_MESSAGE_FORGET_* by name and value (TestTheHeaderDefinesExactlyTheForgetKinds).
 const (
 	messageForgetOk         int32 = 0
 	messageForgetRefused    int32 = 1
 	messageForgetUnfinished int32 = 2
 	messageForgetFailed     int32 = 3
+	// UNKNOWN is answered by a recovered panic alone (LRI R89 item 7): never by messageForgetKindOf
+	messageForgetUnknown int32 = 4
 )
 
 // messageForgetKindOf is the projection of ForgetGroup's error onto the kinds above. UNFINISHED and
@@ -1410,6 +1712,10 @@ func urnet_message_group_close(self C.uint64_t, outError **C.char) C.bool {
 // (logged by name, not an out_error). The mapping is messageCommitKindOf, and a test holds the
 // header's defines equal to the go constants by name and value.
 //
+// EACH VERB'S RESULT IS NAMED AND PRESET TO FAILED (LRI R84 item 3; review X-LIB-1): cgoGuard
+// recovers a panic, and an unnamed result then answers its zero value, which is OK. sdk/cgo/gen's
+// TestEveryKindAnsweringExportPresetsItsFailure holds it over every kind-answering export.
+//
 // A SAME-ROLE set_role IS OK AND MOVES NOTHING (ruling 15): urmessage answers nil without building
 // a commit, so the epoch does not change and there is nothing to fetch.
 
@@ -1489,6 +1795,12 @@ type memberInfo struct {
 	Role string `json:"role"`
 	// True on this device's own leaf.
 	Mine bool `json:"mine"`
+	// The leaf's device ID, 19 characters: the ID a person reads for a device (identity phase 1's
+	// Task 14; Spec A section 9.3a). Empty for a leaf no identity binds.
+	DeviceId string `json:"device_id"`
+	// The root of the identity the leaf binds to, lower case hex: what groups one person's devices
+	// in a roster. Empty for a leaf no identity binds.
+	Identity string `json:"identity"`
 }
 
 func memberInfoOf(member urmessage.Member) *memberInfo {
@@ -1498,6 +1810,8 @@ func memberInfoOf(member urmessage.Member) *memberInfo {
 		IdentityPub:  hex.EncodeToString(member.IdentityPub),
 		Role:         member.Role,
 		Mine:         member.Mine,
+		DeviceId:     member.DeviceId,
+		Identity:     hex.EncodeToString(member.Identity),
 	}
 }
 
@@ -1560,7 +1874,8 @@ func urnet_message_group_my_role(self C.uint64_t, outError **C.char) *C.char {
 // it asked for (ruling 15). Naming the role the identity already holds is OK and moves nothing.
 //
 //export urnet_message_group_set_role
-func urnet_message_group_set_role(self C.uint64_t, ctx C.uint64_t, identityPubHex *C.char, role *C.char, outError **C.char) C.int32_t {
+func urnet_message_group_set_role(self C.uint64_t, ctx C.uint64_t, identityPubHex *C.char, role *C.char, outError **C.char) (kind C.int32_t) {
+	kind = C.int32_t(messageCommitFailed)
 	defer cgoGuard("urnet_message_group_set_role")
 	self_, ok := resolveHandle[*urmessage.Group](uint64(self), "urnet_message_group_set_role")
 	if !ok || self_ == nil {
@@ -1585,7 +1900,8 @@ func urnet_message_group_set_role(self C.uint64_t, ctx C.uint64_t, identityPubHe
 // owns the group is INVALID. Anybody but the owner is REFUSED (R5).
 //
 //export urnet_message_group_transfer_ownership
-func urnet_message_group_transfer_ownership(self C.uint64_t, ctx C.uint64_t, identityPubHex *C.char, outError **C.char) C.int32_t {
+func urnet_message_group_transfer_ownership(self C.uint64_t, ctx C.uint64_t, identityPubHex *C.char, outError **C.char) (kind C.int32_t) {
+	kind = C.int32_t(messageCommitFailed)
 	defer cgoGuard("urnet_message_group_transfer_ownership")
 	self_, ok := resolveHandle[*urmessage.Group](uint64(self), "urnet_message_group_transfer_ownership")
 	if !ok || self_ == nil {
@@ -1617,7 +1933,8 @@ func urnet_message_group_transfer_ownership(self C.uint64_t, ctx C.uint64_t, ide
 // text says so), and an identity no leaf carries.
 //
 //export urnet_message_group_remove_member
-func urnet_message_group_remove_member(self C.uint64_t, ctx C.uint64_t, identityPubHex *C.char, outError **C.char) C.int32_t {
+func urnet_message_group_remove_member(self C.uint64_t, ctx C.uint64_t, identityPubHex *C.char, outError **C.char) (kind C.int32_t) {
+	kind = C.int32_t(messageCommitFailed)
 	defer cgoGuard("urnet_message_group_remove_member")
 	self_, ok := resolveHandle[*urmessage.Group](uint64(self), "urnet_message_group_remove_member")
 	if !ok || self_ == nil {
@@ -2182,7 +2499,8 @@ func urnet_message_member_list_count(self C.uint64_t) C.int32_t {
 }
 
 // urnet_message_member_list_info is one member as json:
-// {"leaf_index":u32,"sender_handle":"<32 hex>","identity_pub":"<hex>","role":"owner","mine":bool}.
+// {"leaf_index":u32,"sender_handle":"<32 hex>","identity_pub":"<hex>","role":"owner","mine":bool,
+// "device_id":"<19>","identity":"<64 hex>"}.
 // NULL for an index out of range. Free with urnet_free_string.
 //
 //export urnet_message_member_list_info
