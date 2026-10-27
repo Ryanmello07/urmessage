@@ -169,8 +169,8 @@ var (
 )
 
 // groupExtensionProfile is the v1 disposition of every REGISTERED extension type as a GROUP
-// CONTEXT extension: nil for the four spec A section 3.1 admits, and the sentinel that names why
-// for the four it does not.
+// CONTEXT extension: nil for each type spec A section 3.1 admits, and the sentinel that names why
+// for each it does not.
 //
 // A map keyed by the registry's own constants rather than a switch listing four accepted names,
 // for proposalTypeProfile's reason next door: the accepted set is the complement of a refused set
@@ -180,9 +180,10 @@ var (
 // in BOTH directions: a ninth code point declared in extension.go with no row here fails, and a
 // row here for a code point that no longer exists fails too.
 //
-// application_id and urmessage_leaf_keys are LEAF extensions and are refused here rather than
-// omitted, because "not a group context extension" is a decision and a map with a hole in it is
-// not one. external_pub answers proposal_list.go's errProfileExternalCommit rather than a value of
+// application_id, urmessage_leaf_keys and urmessage_identity are LEAF extensions and are refused
+// here rather than omitted, because "not a group context extension" is a decision and a map with a
+// hole in it is not one; urmessage_group_purpose is the reverse, admitted here and refused in a
+// leaf by (*LeafNode).Validate. external_pub answers proposal_list.go's errProfileExternalCommit rather than a value of
 // its own: it is the key an external commit joins through, external commits are the feature v1
 // does not implement, and a second sentinel for the extension half would be two names for one
 // narrowing.
@@ -196,6 +197,8 @@ var groupExtensionProfile = map[ExtensionType]error{
 	ExtensionTypeUrmessageLeafKeys:       errProfileGroupExtension,
 	ExtensionTypeUrmessageOwnerSuccessor: nil,
 	ExtensionTypeUrmessageJoinSeal:       errProfileGroupExtension,
+	ExtensionTypeUrmessageIdentity:       errProfileGroupExtension,
+	ExtensionTypeUrmessageGroupPurpose:   nil,
 }
 
 // checkGroupExtension is the one refusal surface for a group context extension type, standing in

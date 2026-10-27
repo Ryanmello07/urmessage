@@ -98,7 +98,7 @@ func newRotWorld(t *testing.T, names ...string) *rotWorld {
 	keyPackages := [][]byte{}
 	for _, name := range names[1:] {
 		joiner := world.device(name)
-		keyPackage, err := joiner.engine.NewKeyPackage()
+		keyPackage, err := joiner.keyPackage()
 		if err != nil {
 			t.Fatalf("%s's key package: %v", name, err)
 		}
@@ -865,7 +865,7 @@ func TestARemovalTheSameCommitRefillsIsStillLeftOutOfTheFanOut(t *testing.T) {
 	// the newcomer exists only to be admitted: it never joins, because what this case measures is
 	// the COMMITTER's fan-out over the tree the commit has not been merged into yet.
 	dave := world.device("dave")
-	keyPackage, err := dave.engine.NewKeyPackage()
+	keyPackage, err := dave.keyPackage()
 	if err != nil {
 		t.Fatalf("the newcomer's key package: %v", err)
 	}

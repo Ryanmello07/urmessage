@@ -142,3 +142,12 @@ messagegroup/testdata/eph-window-kat.txt text eol=lf
 # the paragraph above gives, so a CRLF checkout does not turn the gate red; this line is what
 # keeps the OCTETS the same everywhere, which is the only thing an interop vector has to offer.
 messagegroup/testdata/envelope-wrap-kat.txt text eol=lf
+
+# messagegroup/bip39_english.txt is the BIP-39 English list the recovery phrase is written in,
+# built into the package with go:embed and pinned at initialisation by its SHA-256 (MASTER
+# section 5.1, Revision 10; ledger item 299). The pin is over the bytes as vendored, LF and no
+# fold, because those bytes ARE the list: a CRLF checkout, with core.autocrlf true at system
+# scope on the Windows boxes that build this repo, would embed a list whose digest is not the
+# pin, and the package would stop at initialisation rather than write words from it. -text keeps
+# git's conversion off the file in both directions. The blob is LF already.
+messagegroup/bip39_english.txt -text

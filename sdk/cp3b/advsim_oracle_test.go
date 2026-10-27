@@ -170,8 +170,14 @@ func advShor(t *testing.T, captured [][]byte, joinCode []byte, preJoinStateDir s
 	if err != nil {
 		advHarness(t, "the crypto provider: %v", err)
 	}
+	// the identity record, in the clear like the rest: its key is the credential the joiner's key
+	// package names (identity phase 1's Task 12)
+	identity, err := store.Identity()
+	if err != nil {
+		advHarness(t, "the shadow's copy holds no identity record: %v", err)
+	}
 	engine, err := messagegroup.NewConnectMlsEngine(crypto, store, mls.SignaturePrivateKey(signerPriv),
-		mls.BasicCredential(signerPub), leafKeys)
+		mls.BasicCredential(identity.CurrentKey), leafKeys)
 	if err != nil {
 		advHarness(t, "the shadow's engine: %v", err)
 	}

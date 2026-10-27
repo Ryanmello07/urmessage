@@ -4074,16 +4074,18 @@ func TestNoLabelThisPackageDeclaresIsAPrefixOfAnother(t *testing.T) {
 	t.Logf("%d labels declared in this package: %v", len(names), names)
 
 	// the positive control, inline: the four labels that were here before the sixth kind
-	// was, and the one it added. A derivation that quietly stopped matching would report an
+	// was, the one it added, and the rendezvous's six (identity phase 1's Task 7b). A derivation that quietly stopped matching would report an
 	// empty class, and the emptiness above is a Fatal for that reason; this is the stronger
 	// half, because a derivation that matched the wrong literals would report a full one.
-	for _, want := range []string{aadBodyLabel, aadHeadLabel, writeAuthLabel, requestAuthLabel, epochKeysLabel} {
+	for _, want := range []string{aadBodyLabel, aadHeadLabel, writeAuthLabel, requestAuthLabel, epochKeysLabel,
+		rendezvousLinkLabel, rendezvousRegisterLabel, rendezvousOpenLabel, rendezvousDepositLabel,
+		rendezvousCollectLabel, rendezvousRetireLabel} {
 		if _, declared := labels[want]; !declared {
 			t.Errorf("the walk did not find %q, which this package declares as a constant", want)
 		}
 	}
-	if len(names) != 5 {
-		t.Errorf("the walk found %d labels and this package declares 5; a label added is a label owed a line in the control above", len(names))
+	if len(names) != 11 {
+		t.Errorf("the walk found %d labels and this package declares 11; a label added is a label owed a line in the control above", len(names))
 	}
 
 	for _, left := range names {

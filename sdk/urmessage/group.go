@@ -743,8 +743,12 @@ type ownSealed struct {
 
 // Group is one group on one device.
 type Group struct {
-	device         *Device
-	id             []byte
+	device *Device
+	id     []byte
+	// system marks a system group: one whose context carries 0xF006, the self group among them. It is
+	// held like every group and answered by no list (identity phase 1's Task 12, Property 3). Set
+	// once, before the group is held, and never written after.
+	system         bool
 	handle         messagegroup.GroupHandle
 	groupHandleKey []byte
 
@@ -1314,8 +1318,15 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 	if err != nil {
 		return nil, err
 	}
+	return self.foundGroupLocked(groupId, false, nonce, nonceEpoch)
+}
 
-	handle, err := self.createMlsGroup(groupId)
+// foundGroupLocked founds one group and holds it: a conversation for [Device.CreateGroup], and the
+// self group, a system group, for [Device.ConfirmWords] (identity phase 1's Task 12). Both need the
+// identity, which [Device.createMlsGroup] asks for first ([ErrNoIdentity]). Called with admitMutex
+// held.
+func (self *Device) foundGroupLocked(groupId []byte, system bool, nonce []byte, nonceEpoch uint64) (*Group, error) {
+	handle, err := self.createMlsGroup(groupId, system)
 	if err != nil {
 		return nil, err
 	}
@@ -1347,6 +1358,7 @@ func (self *Device) CreateGroup(ctx context.Context, groupId []byte) (*Group, er
 	group := &Group{
 		device:         self,
 		id:             append([]byte(nil), groupId...),
+		system:         system,
 		handle:         handle,
 		groupHandleKey: groupHandleKey,
 		// AT EPOCH ZERO, WHICH IS THE ONE EPOCH A FOUNDING DRAW CAN FILE. The commit
@@ -1483,7 +1495,7 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 	}()
 	// BOUND TO THE GROUP THE INVITE NAMES. A Welcome that describes any other group is refused
 	// inside mls, ahead of its persist, and the engine puts the join code back itself.
-	handle, err = self.engine.JoinFromWelcomeInto(invite.Welcome, invite.RatchetTree, invite.GroupId)
+	handle, err = self.currentEngine().JoinFromWelcomeInto(invite.Welcome, invite.RatchetTree, invite.GroupId)
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: JoinFromWelcomeInto: %w", err)
 	}
@@ -1497,6 +1509,29 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 	}
 	// ONLY A GROUP THAT REQUIRES THE JOIN SEAL IS JOINED: see [ErrGroupPredatesJoinSeal].
 	if err := requireJoinSeal(handle); err != nil {
+		return nil, err
+	}
+	// THE JOIN DOOR (identity phase 1's Task 13; Property 5), INSIDE THE WINDOW, so each refusal
+	// writes nothing and keeps the join code. Only a group of the identity layer is joined
+	// ([ErrGroupPredatesIdentity]), as only one is restored; and the tree the Welcome hands over is
+	// read as every member's rules read one: a leaf that binds to no identity
+	// ([ErrGroupLeafUnbound]), two lists of one identity that fork ([ErrDeviceListEquivocation]),
+	// and, where the context carries 0xF006, a system group's membership that breaks R9
+	// ([ErrSystemGroupViolation]), each refuses the join. A system group is marked as one, off its own
+	// context, so that no list answers it.
+	if err := requireIdentityExtension(handle); err != nil {
+		return nil, err
+	}
+	joinedLists, err := verifyEveryLeaf(handle)
+	if err != nil {
+		return nil, err
+	}
+	joinedContext, err := groupContextExtensions(handle)
+	if err != nil {
+		return nil, err
+	}
+	system, err := groupIsSystem(handle)
+	if err != nil {
 		return nil, err
 	}
 	// THE JOIN SEAL: verified, opened and checked, in that order, before anything is honoured. See
@@ -1545,6 +1580,8 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 		session:      session,
 		sessionBound: nonceEpoch,
 		epoch:        handle.Epoch(),
+		// a system group, off its own context: see the Join door above
+		system: system,
 		// The founder opened it. A joiner cannot observe that and does not pretend to: if it
 		// has not, every send below is refused by the server and the refusal is returned.
 		opened: true,
@@ -1588,6 +1625,10 @@ func (self *Device) Join(ctx context.Context, invite *Invite) (joined *Group, er
 		return nil, self.abandonJoined(group, readd, fmt.Errorf(
 			"%w: this group joined and could not be filed on this device: %w", ErrJoinCodeSpent, err))
 	}
+	// THE HEADS RISE FROM THE TREE THIS DEVICE JOINED, off the lists the door read, and this
+	// identity's own only where the tree is its self group (heads.go). A write that failed is the
+	// next raise's to retry and fails nothing of the join, which has happened.
+	_ = self.raiseHeadsFrom(joinedLists, self.isOwnSelfGroup(seamExtensionsOf(joinedContext)))
 	return group, nil
 }
 
@@ -1695,9 +1736,13 @@ func (self *Group) AddMember(keyPackage []byte) (*Invite, error) {
 	// CommitAdd carries the Add inside the commit, attributed to the committer, and the SAME
 	// call takes N key packages: one commit admits N members. Nothing is staged on its refusal,
 	// and mls refuses the same things it refused through ProposeAdd, at the same call.
-	// THE JOIN CODE IS JUDGED BEFORE ANYTHING IS BUILT: see [Device.joinerOf].
+	// THE JOIN CODE IS JUDGED BEFORE ANYTHING IS BUILT: see [Device.joinerOf], and then the Add
+	// door's identity half, [Group.addDoorLocked].
 	joiner, err := self.device.joinerOf(keyPackage)
 	if err != nil {
+		return nil, err
+	}
+	if err := self.addDoorLocked(keyPackage); err != nil {
 		return nil, err
 	}
 	commit, welcome, ratchetTree, err := self.handle.CommitAdd([][]byte{keyPackage})
@@ -2059,18 +2104,22 @@ func (self *Group) AddMemberAndPublish(ctx context.Context, keyPackage []byte) (
 	}
 	// (0) THE SEND-SIDE AUTHORIZATION, before the connection is consulted and before anything is
 	// built: a refusal is a fact about this group and this device's role, and it costs no round
-	// trip and touches no session.
+	// trip and touches no session. R6e's refusal here is the join code's, since an add's committer
+	// keeps its own leaf, and it is answered with the Add door's name beside the rule's.
 	if _, err := self.authorizeOutgoingLocked(&outgoingCommit{addKeyPackages: [][]byte{keyPackage}}); err != nil {
-		return nil, joinerAlreadyHasALeaf(err)
+		return nil, joinerAlreadyHasALeaf(joinCodeUnbound(err))
 	}
 	if err := self.rebindLocked(); err != nil {
 		return nil, err
 	}
-	// THE JOIN CODE IS JUDGED BEFORE ANYTHING IS BUILT: see [Device.joinerOf]. The role model
-	// stands ahead of it, because who may add is a fact about this device and is answered the
-	// same way whatever the join code is.
+	// THE JOIN CODE IS JUDGED BEFORE ANYTHING IS BUILT: see [Device.joinerOf], and then the Add
+	// door's identity half, [Group.addDoorLocked]. The role model stands ahead of both, because who
+	// may add is a fact about this device and is answered the same way whatever the join code is.
 	joiner, err := self.device.joinerOf(keyPackage)
 	if err != nil {
+		return nil, err
+	}
+	if err := self.addDoorLocked(keyPackage); err != nil {
 		return nil, err
 	}
 
@@ -2521,6 +2570,9 @@ func (self *Group) publishCommitLocked(ctx context.Context, commit []byte,
 // epoch and whose epoch field names another, which every header this group seals would carry.
 func (self *Group) enterEpochLocked() error {
 	self.epoch = self.handle.Epoch()
+	// THE HEADS RISE FROM EVERY TREE A GROUP ENTERS, its own commits and those it follows (identity
+	// phase 1's Task 13; heads.go), from the one door every epoch change passes through.
+	self.raiseHeadsLocked()
 	// THE WINDOW IS A FUNCTION OF THIS FIELD, SO IT IS BOUNDED WHERE THIS FIELD MOVES. The
 	// pq_secret table's bound is `self.epoch - epoch > PastEpochWindow`, which cannot be evaluated
 	// correctly anywhere the epoch has not yet moved: [Group.filePqSecretLocked] runs BEFORE the
@@ -2780,7 +2832,7 @@ func (self *Group) Delete(ctx context.Context, target []byte) (*Message, error) 
 	if err != nil {
 		return nil, err
 	}
-	if !sameSender(self.ownHandleLocked(), self.device.identityPub, held) {
+	if !sameSender(self.ownHandleLocked(), self.device.credentialIdentity(), held) {
 		return nil, fmt.Errorf("%w: message %x was sealed by %x and this device may only delete its own",
 			ErrContentMalformed, target, held.SenderHandle)
 	}
@@ -3051,7 +3103,7 @@ func (self *Group) sendContentLocked(ctx context.Context, plaintext []byte, what
 	// stands at that leaf would be asking a question whose answer this function already IS, and it
 	// would make a line this device just wrote undeterminable at the window edge where the ask can
 	// come back short.
-	sent := newMessage(entry, recordId, record.Header.SenderHandle[:], self.device.identityPub,
+	sent := newMessage(entry, recordId, record.Header.SenderHandle[:], self.device.credentialIdentity(),
 		true, sentAtMs, messageId[:], senderRoleAtSend)
 	line := self.deliverLocked(sent, entry)
 	// THIS IS A SEND AND NOT A WALK, SO THE REBUILD CANNOT WAIT FOR ONE. A reaction or a tombstone
@@ -5046,12 +5098,12 @@ func (self *Group) openOwnFromCopyLocked(walk *pageWalk, recordId uint64, parsed
 	// off the tree would also make it empty exactly where the epoch has aged out, on the one road
 	// whose records this device is certain of.
 	senderRoleAtSend := self.roleAtSendLocked(header.Epoch, self.handle.OwnLeafIndex())
-	received := newMessage(entry, recordId, header.SenderHandle[:], self.device.identityPub, true,
+	received := newMessage(entry, recordId, header.SenderHandle[:], self.device.credentialIdentity(), true,
 		sealed.sentAtMs, messageId[:], senderRoleAtSend)
 	if verdict == ContentUnsupported {
 		self.stats.GapUnsupported += 1
 		received = newGap(GapUnsupported, entry, recordId, header.SenderHandle[:],
-			self.device.identityPub, true, sealed.sentAtMs, messageId[:], senderRoleAtSend)
+			self.device.credentialIdentity(), true, sealed.sentAtMs, messageId[:], senderRoleAtSend)
 	}
 	if self.deliverLocked(received, entry) {
 		walk.opened = append(walk.opened, received)
@@ -5092,6 +5144,15 @@ type CommitMember struct {
 	// keyless leaf outright rather than reporting it. R6d refuses a commit whose post-commit tree
 	// holds a leaf with false here.
 	HasLeafKeys bool
+
+	// SignatureKey and Extensions are the leaf's signature key and its extensions, copies, which
+	// the identity layer's binding rules read (identity phase 1's Task 13): the leaf's 0xF005 binds
+	// the signature key to the identity IdentityPub names. For [CommitAuthorization.Members] they
+	// are the live tree's, through the seam's LeafAt; for [CommitAuthorization.MembersAfter] the
+	// staged tree's, through [messagegroup.ProcessedMember]'s two fields, or on the committing side
+	// the would-be tree's, the committer's own leaf with its patch applied.
+	SignatureKey []byte
+	Extensions   []messagegroup.ExtensionBytes
 }
 
 // CommitAuthorization is everything a receiving client's authorization decision is handed about one
@@ -5489,7 +5550,8 @@ func (self *Group) commitAuthorizationLocked(processed *messagegroup.EngineProce
 	}
 	membersAfter := make([]CommitMember, 0, len(processed.MembersAfter))
 	for _, member := range processed.MembersAfter {
-		membersAfter = append(membersAfter, self.commitMemberLocked(member.Leaf, member.Identity, member.HasLeafKeys, policyAfter))
+		membersAfter = append(membersAfter, self.commitMemberLocked(member.Leaf, member.Identity, member.HasLeafKeys,
+			member.SignatureKey, member.Extensions, policyAfter))
 	}
 	return &CommitAuthorization{
 		GroupId:           append([]byte(nil), self.id...),
@@ -5525,14 +5587,21 @@ func (self *Group) membershipLocked(policy *mls.GroupPolicyExtension) ([]CommitM
 		if err != nil {
 			return nil, fmt.Errorf("urmessage: the group's member %d: %w", at, err)
 		}
-		members = append(members, self.commitMemberLocked(leaf, identity, true, policy))
+		// the leaf as the binding rules read it, off the same live tree (identity phase 1's Task 13)
+		view, err := self.handle.LeafAt(leaf)
+		if err != nil {
+			return nil, fmt.Errorf("urmessage: the group's member %d at leaf %d: %w", at, leaf, err)
+		}
+		members = append(members, self.commitMemberLocked(leaf, identity, true, view.SignatureKey, view.Extensions, policy))
 	}
 	return members, nil
 }
 
 // commitMemberLocked is one [CommitMember]: the leaf, its derived sender_handle, a copy of its
 // identity, whether the leaf carries leaf keys, and the role the policy gives that identity.
-func (self *Group) commitMemberLocked(leaf uint32, identity []byte, hasLeafKeys bool, policy *mls.GroupPolicyExtension) CommitMember {
+func (self *Group) commitMemberLocked(leaf uint32, identity []byte, hasLeafKeys bool, signatureKey []byte,
+	extensions []messagegroup.ExtensionBytes, policy *mls.GroupPolicyExtension) CommitMember {
+
 	handle := messagegroup.SenderHandle(self.groupHandleKey, leaf)
 	return CommitMember{
 		Leaf:         leaf,
@@ -5540,6 +5609,8 @@ func (self *Group) commitMemberLocked(leaf uint32, identity []byte, hasLeafKeys 
 		IdentityPub:  append([]byte(nil), identity...),
 		Role:         roleNameIn(policy, identity),
 		HasLeafKeys:  hasLeafKeys,
+		SignatureKey: append([]byte(nil), signatureKey...),
+		Extensions:   cloneExtensionBytes(extensions),
 	}
 }
 
@@ -5661,7 +5732,7 @@ func (self *Group) noteEpochGapLocked(walk *pageWalk, recordId uint64, header *m
 	mine := false
 	var senderIdentity []byte
 	if sealed, found := self.ownIndices[header.StreamIndex]; found && sealed.bodyHash == header.BodyHash {
-		mine, senderIdentity = true, self.device.identityPub
+		mine, senderIdentity = true, self.device.credentialIdentity()
 	}
 	entry := &Content{}
 	received := newGap(GapOutOfWindow, entry, recordId, header.SenderHandle[:], senderIdentity, mine, 0,
@@ -5797,7 +5868,7 @@ func (self *Group) recordIsOwnLocked(senderIdentity []byte, maybeMine bool) bool
 	if len(senderIdentity) == 0 {
 		return maybeMine
 	}
-	return bytes.Equal(senderIdentity, self.device.identityPub)
+	return bytes.Equal(senderIdentity, self.device.credentialIdentity())
 }
 
 // ── what a record becomes ────────────────────────────────────────────────────────────────────

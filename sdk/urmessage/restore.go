@@ -207,6 +207,11 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 	if !durable {
 		return nil, ErrNoDeviceStore
 	}
+	// AN IDENTITY THAT CANNOT BE READ RESTORES NOTHING (LRI R89 item 1): its groups wait, untouched, for
+	// its identity record to come back, as its heads and its phrase key do
+	if self.identityUnreadable != nil {
+		return nil, self.identityUnreadable
+	}
 	// ONE ADMISSION AT A TIME: a Join or a CreateGroup of a group this call is about to restore
 	// waits for it and reads the answer it leaves. See [Device.admitMutex].
 	self.admitMutex.Lock()
@@ -327,12 +332,47 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 			}
 			continue
 		}
-		restored = append(restored, group)
+		// CONVERSATIONS ONLY (identity phase 1's Task 12, Property 3): the self group is restored and
+		// held, and is in no list this answers
+		if !group.system {
+			restored = append(restored, group)
+		}
+	}
+	// THE SELF GROUP, FOUNDED AGAIN WHERE ITS RECORD IS MISSING (LRI R76 item 2). ConfirmWords writes
+	// the identity's records before it founds the self group (Property 1). So a device that stopped
+	// between the two -- killed, or refused the founding's writes -- holds an identity and no self
+	// group, and nothing would ever found it. It is founded here, at start, under this connection,
+	// from the device's key and the identity's own list. The words are not needed.
+	//
+	// ONLY WHEN EVERY RECORD CAME BACK. A record that did not may be the self group's own, and this
+	// would found a second beside it; the next Restore that reads every record decides.
+	if firstFailure == nil && self.holdsIdentity() && !self.holdsSystemGroup() {
+		if err := self.foundSelfGroupLocked(ctx, nonce, nonceEpoch); err != nil {
+			firstFailure = fmt.Errorf("%w: the self group, founded again: %w", ErrRestore, err)
+		}
 	}
 	if firstFailure == nil {
 		firstFailure = unfinished
 	}
 	return restored, firstFailure
+}
+
+// holdsIdentity answers whether this device runs under an identity.
+func (self *Device) holdsIdentity() bool {
+	_, err := self.requireIdentity()
+	return err == nil
+}
+
+// holdsSystemGroup answers whether this device holds a system group, which no list it answers shows.
+func (self *Device) holdsSystemGroup() bool {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	for _, group := range self.groups {
+		if group.system {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreOne rebuilds one group: the MLS state at the record's epoch, then the session over it.
@@ -353,13 +393,41 @@ func (self *Device) Restore(ctx context.Context) ([]*Group, error) {
 // rather than the one caller that remembered to make it. The wrap below carries the group id and
 // the epoch this record named, so an operator reading the refusal still sees which row asked.
 func (self *Device) restoreOne(store DeviceStore, record *GroupRecord, nonce []byte, nonceEpoch uint64) (*Group, error) {
-	handle, err := self.engine.LoadGroup(record.GroupId, record.Epoch)
+	handle, err := self.currentEngine().LoadGroup(record.GroupId, record.Epoch)
 	if err != nil {
 		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
 	}
 	// ONLY A GROUP THAT REQUIRES THE JOIN SEAL IS RESTORED: see [ErrGroupPredatesJoinSeal]. It is
 	// asked before a session is built, so nothing of the group is in memory when it is refused.
 	if err := requireJoinSeal(handle); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	// ONLY A GROUP OF THE IDENTITY LAYER IS RESTORED, AND EVERY LEAF OF IT IS RE-VERIFIED (identity
+	// phase 1's Task 12): its context requires 0xF005 ([ErrGroupPredatesIdentity]), every leaf binds
+	// ([ErrGroupLeafUnbound]), and the lists the leaves carry raise the heads. A system group is
+	// marked as one, off its own context, so that no list answers it.
+	if err := requireIdentityExtension(handle); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	verified, err := verifyEveryLeaf(handle)
+	if err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	contextExtensions, err := groupContextExtensions(handle)
+	if err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	// THIS IDENTITY'S OWN HEAD MOVES ONLY FROM ITS SELF GROUP (identity phase 1's Task 13): see heads.go
+	if err := self.raiseHeadsFrom(verified, self.isOwnSelfGroup(seamExtensionsOf(contextExtensions))); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("%w: group %x at epoch %d: the heads: %w", ErrRestore, record.GroupId, record.Epoch, err)
+	}
+	system, err := groupIsSystem(handle)
+	if err != nil {
 		handle.Close()
 		return nil, fmt.Errorf("%w: group %x at epoch %d: %w", ErrRestore, record.GroupId, record.Epoch, err)
 	}
@@ -436,6 +504,7 @@ func (self *Device) restoreOne(store DeviceStore, record *GroupRecord, nonce []b
 	restored := &Group{
 		device:         self,
 		id:             append([]byte(nil), record.GroupId...),
+		system:         system,
 		handle:         handle,
 		groupHandleKey: append([]byte(nil), record.GroupHandleKey...),
 		pqSecrets:      pqSecretsMapOf(table),
@@ -612,7 +681,7 @@ func (self *Device) persistPeerHeads(groupId []byte, heads []PeerHead) error {
 func (self *Device) pastEpochLoader(groupId []byte) messagegroup.PastEpochLoader {
 	id := append([]byte(nil), groupId...)
 	return func(epoch uint64) (messagegroup.GroupHandle, error) {
-		return self.engine.LoadGroup(id, epoch)
+		return self.currentEngine().LoadGroup(id, epoch)
 	}
 }
 

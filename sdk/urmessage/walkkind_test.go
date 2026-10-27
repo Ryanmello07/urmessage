@@ -64,7 +64,7 @@ func newKindWalk(t *testing.T) *kindWalk {
 	}
 	groupHandleKey := messagegroup.GroupHandleKey(messagegroup.StorageRoot(mlsSecret, pqSecret))
 
-	keyPackage, err := bob.engine.NewKeyPackage()
+	keyPackage, err := bob.keyPackage()
 	if err != nil {
 		t.Fatalf("bob's key package: %v", err)
 	}

@@ -27,7 +27,12 @@
 //	R0b  every extension but 0xF001 is byte identical before and after
 //	R6a  an Add claiming an identity already in the group is that identity's own
 //	R6c  no leaf changes identity; the leaf sets agree with the declared adds and removes
+//	R6e  every leaf added or updated, and the committer's own, carries a urmessage_identity
+//	     (0xF005) that binds it; a profile-1 leaf stands only in a link group (identityrules.go)
+//	R6c-sig  every leaf the commit keeps keeps its signature key
 //	R6d  every leaf of the post-commit tree carries urmessage_leaf_keys (0xF002)
+//	R8-EQ    no two lists of one identity in the post-commit tree fork
+//	R8-CUR   a leaf the newest list does not name is removed by the commit that brings that list
 //	R1   an Add of a new identity needs ADMIN or OWNER
 //	R2   a Remove of a MEMBER or OBSERVER, not one's own, needs ADMIN or OWNER
 //	R3   a Remove of an ADMIN or the OWNER, not one's own, needs the OWNER
@@ -36,7 +41,13 @@
 //	R4   admin-set changes and the server id need the OWNER; MEMBER/OBSERVER, retention and
 //	     disappearing bucket changes need ADMIN
 //	R7   a MEMBER's or an OBSERVER's commit is its own device leaves, or nothing, and no more
+//	R9   a system group's rule: a self group of its identity's leaves only; a link group of one
+//	     leaf of each profile, committed by its identity's leaf, at epoch 0 only
 //	caps 500 identities, 1,000 leaves, 10 leaves per identity
+//
+// THE IDENTITY LAYER'S RULES (identity phase 1's Task 13) run after R6c and before R1, in F1's order
+// less its legacy and succession steps, and R9 after R7 where F1 runs it. They read the two trees
+// and nothing else: see identityrules.go.
 //
 // R0c RUNS AFTER THE REMOVAL RULES AND NOT WITH THE OTHER STRUCTURAL ONES, and the reason is what
 // a removed owner leaves behind: a Remove of the owner's only leaf that carries no policy change
@@ -85,12 +96,19 @@ func authorizeCommit(a *CommitAuthorization) error {
 	}
 	before := leavesOf(a.Members)
 	after := leavesOf(a.MembersAfter)
+	boundBefore := boundLeavesOf(a.Members)
+	boundAfter := boundLeavesOf(a.MembersAfter)
+	purpose, purposeErr := groupPurposeIn(a.ExtensionsAfter)
 	rules := []func() error{
 		func() error { return rulePolicyValid(a) },
 		func() error { return ruleOtherExtensionsUnchanged(a) },
 		func() error { return ruleClaimedIdentityIsOwn(a, before, after) },
 		func() error { return ruleIdentityContinuity(a, before, after) },
+		func() error { return ruleLeavesBound(a, boundAfter, purpose) },
+		func() error { return ruleSignatureKeysKept(a, boundBefore, boundAfter) },
 		func() error { return ruleLeafKeysPresent(a) },
+		func() error { return ruleNoListFork(boundAfter) },
+		func() error { return ruleCurrentDevicesOnly(a, boundBefore, boundAfter) },
 		func() error { return ruleAddByAdmin(a, committer, before, after) },
 		func() error { return ruleRemoveByAdmin(a, committer, before) },
 		func() error { return ruleAdminRemovedByOwner(a, committer, before) },
@@ -98,6 +116,12 @@ func authorizeCommit(a *CommitAuthorization) error {
 		func() error { return ruleOwnerTransfer(a, committer, before, after) },
 		func() error { return ruleRoleChanges(a, committer) },
 		func() error { return ruleOwnDevicesOnly(a, committer, before, after) },
+		func() error {
+			if purposeErr != nil {
+				return fmt.Errorf("%w: the group's purpose: %w", ErrSystemGroupViolation, purposeErr)
+			}
+			return ruleSystemGroup(a, boundBefore, boundAfter, purpose)
+		},
 		func() error { return ruleCaps(a) },
 	}
 	for _, rule := range rules {

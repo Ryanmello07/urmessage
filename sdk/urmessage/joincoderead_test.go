@@ -47,6 +47,7 @@ func TestAJoinCodeTheStoreFailedToReadIsStillGoodAndOneItDoesNotHoldIsNot(t *tes
 	ctx := context.Background()
 	store := &unreadKeyPackageStore{DurableStateStore: openTestStore(t, t.TempDir()), failWith: heldKeyPackage()}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, _ := windowInvite(t, joiner)
 
 	store.armed = true
@@ -63,8 +64,10 @@ func TestAJoinCodeTheStoreFailedToReadIsStillGoodAndOneItDoesNotHoldIsNot(t *tes
 
 	// THE OTHER HALF: no join code of this device's was the invite made for
 	other := newAnsweringDeviceOver(t, NewMemoryStateStore(), []byte("another device's nonce"))
+	testIdentify(t, other)
 	elsewhere, _ := windowInvite(t, other)
 	stranger := newAnsweringDeviceOver(t, openTestStore(t, t.TempDir()), []byte("a stranger's nonce"))
+	testIdentify(t, stranger)
 	_, err = stranger.Join(ctx, elsewhere)
 	if !errors.Is(err, ErrNoJoinCodeForInvite) || errors.Is(err, ErrJoinRefused) {
 		t.Errorf("an invite made for another device's join code answered %v, want ErrNoJoinCodeForInvite and not ErrJoinRefused", err)
@@ -112,6 +115,7 @@ func TestAJoinCodeThatWillNeverReadOrWasRemovedIsNotSaidToBeStillGood(t *testing
 	} {
 		store := &unreadKeyPackageStore{DurableStateStore: openTestStore(t, t.TempDir()), failWith: one.failWith}
 		joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+		testIdentify(t, joiner)
 		honest, _ := windowInvite(t, joiner)
 		store.armed = true
 		_, err := joiner.Join(ctx, honest)

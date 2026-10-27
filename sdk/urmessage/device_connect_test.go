@@ -12,6 +12,7 @@ import (
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/messagegroup"
 	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 )
@@ -76,9 +77,10 @@ func newUnansweredDevice(t *testing.T, policy ConnectPolicy) (*Device, *acceptin
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport: transport,
-		Reserver:  sdk.NewStreamIndexReserver(streamStore),
-		Connect:   policy,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		Connect:       policy,
 	})
 	if err != nil {
 		t.Fatalf("NewDevice: %v", err)
@@ -352,8 +354,9 @@ func TestAnAttemptThatFailsAtOnceIsNotRetriedInATightLoop(t *testing.T) {
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport: newSilentTransport(t),
-		Reserver:  sdk.NewStreamIndexReserver(streamStore),
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     newSilentTransport(t),
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
 		Connect: ConnectPolicy{
 			Budget:         300 * time.Millisecond,
 			AttemptTimeout: time.Second,
@@ -436,6 +439,13 @@ type answeringClient struct {
 	reason  messageprotocol.Reason
 	nonce   []byte
 	answers int
+	// frames is every frame this client was handed, of every type, fragments included: what reaching
+	// the server is, where [answeringClient.answers] counts only the requests it answered (LRI R84
+	// item 2; review G-4)
+	frames int
+	// helloOnly refuses every frame but a Hello at once, so that a frame that should never have been
+	// sent fails in the call that sent it rather than after the transport's deadline
+	helloOnly bool
 }
 
 func (self *answeringClient) AddReceiveCallback(receiveCallback connect.ReceiveFunction) func() {
@@ -448,11 +458,18 @@ func (self *answeringClient) AddReceiveCallback(receiveCallback connect.ReceiveF
 func (self *answeringClient) SendWithTimeout(frame *connectprotocol.Frame, destination connect.Id,
 	ackCallback connect.AckFunction, timeout time.Duration, opts ...any) bool {
 
+	self.mutex.Lock()
+	self.frames += 1
+	helloOnly := self.helloOnly
+	self.mutex.Unlock()
 	if frame.GetMessageType() != connectprotocol.MessageType_MessageMessageServerRequest {
-		return true
+		return !helloOnly
 	}
 	request := &messageprotocol.MessageServerRequest{}
 	if proto.Unmarshal(frame.GetMessageBytes(), request) != nil {
+		return false
+	}
+	if helloOnly && request.GetHello() == nil {
 		return false
 	}
 	self.mutex.Lock()
@@ -487,6 +504,20 @@ func (self *answeringClient) answered() int {
 	return self.answers
 }
 
+// handed is every frame this client was handed, of every type, fragments included.
+func (self *answeringClient) handed() int {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	return self.frames
+}
+
+// refuseAllButHello makes this client refuse every frame but a Hello from now on.
+func (self *answeringClient) refuseAllButHello() {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	self.helloOnly = true
+}
+
 func newAnsweringDevice(t *testing.T, reason messageprotocol.Reason, nonce []byte) (*Device, *answeringClient) {
 	t.Helper()
 	client := &answeringClient{reason: reason, nonce: nonce}
@@ -505,8 +536,9 @@ func newAnsweringDevice(t *testing.T, reason messageprotocol.Reason, nonce []byt
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport: transport,
-		Reserver:  sdk.NewStreamIndexReserver(streamStore),
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
 		// a budget long enough that one trip through the retry loop would be
 		// UNMISTAKABLE in the elapsed time below.
 		Connect: ConnectPolicy{

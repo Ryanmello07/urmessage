@@ -2,6 +2,7 @@ package urmessage
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/urnetwork/glog"
 	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
 	"github.com/urnetwork/message/protocol"
@@ -75,6 +77,14 @@ type DeviceConfig struct {
 	// or not this is set; nil means "nothing beyond §11" and not "allow every commit", which is
 	// what it meant before R1 landed. See [CommitAuthorizer].
 	CommitAuthorizer CommitAuthorizer
+
+	// The stretch [Device.ConfirmWords] runs the words under. LEAVE IT ZERO: the zero value is the
+	// frozen stretch, MASTER section 5.2's, and the only one production runs.
+	// messagegroup.FastPhraseStretchForTests is the test seam's, for suites that make identities by
+	// the hundred (LRI R76 item 10). No production source of this module names it, which the sdk
+	// module's TestNoProductionSourceOfTheSdkNamesTheTestStretch holds. An identity made under it
+	// is not the one its words make at the frozen stretch.
+	PhraseStretch messagegroup.PhraseStretch
 }
 
 // ── §4.3.1's Hello, across an operator window this package does not own ──────────────────────
@@ -225,9 +235,37 @@ type Device struct {
 	// existed only to feed that call has been deleted rather than left as state nothing reads.
 	stateStore mls.StateStore
 
-	// The credential identity this device founds and joins under: its signer's public half. See
-	// [NewDevice] for why it is that value and not another.
+	// The credential identity this device founds and joins under: its signer's public half until it
+	// has an identity, and the identity key from then on (identity phase 1's Task 12). See
+	// [NewDevice] for why it is that value and not another. Guarded by identityLock, with engine,
+	// since [Device.ConfirmWords] replaces both: read them through [Device.credentialIdentity] and
+	// [Device.currentEngine].
 	identityPub []byte
+
+	// THE IDENTITY (identity phase 1's Task 12), guarded by identityLock: the identity this device
+	// runs under once [Device.ConfirmWords] has made it, or [NewDevice] read it back; the words
+	// [Device.CreateIdentity] offered, until they are typed back; and the heads, the newest list of
+	// every root seen, as 0xF005 bodies by root.
+	identityLock sync.RWMutex
+	identity     *deviceIdentityState
+	// identityUnreadable is set at start where the identity's records stand and no identity record or
+	// setup mark explains them ([ErrIdentityUnreadable], LRI R89 item 1); nil otherwise. It never changes.
+	identityUnreadable error
+	offered            *messagegroup.RecoveryPhrase
+	heads              map[string][]byte
+	// whether the last write of the heads failed, so that the next raise writes them whether or not a
+	// head rose (identity phase 1's Task 13; heads.go)
+	headsUnwritten bool
+
+	// signer is this device's own signing key, device_sig, and devicePub its public half: the key
+	// every leaf this device makes is signed with, and the author's key of every list this device
+	// signs. The engine holds a copy of its own; this one signs the lists, which no engine method
+	// does. Guarded by [Device.mutex], and erased by [Device.Close] as the wrap seed is.
+	signer    mls.SignaturePrivateKey
+	devicePub ed25519.PublicKey
+
+	// the stretch the identity's ceremony runs under: [DeviceConfig.PhraseStretch], set once
+	phraseStretch messagegroup.PhraseStretch
 
 	// wrapSeed is the PRIVATE half of the X-Wing key pair whose public half is inside
 	// [Device.leafKeys], as the 32 octet seed [messagegroup.XwingKeyGenFromSeed] expands. It is
@@ -433,10 +471,15 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	// analysis a reader has to redo after each new return -- which is the whole of what
 	// TestEveryPathThatDropsTheDeviceErasesItsWrapSeed asserts, over this function and not over a
 	// list of its exits.
+	//
+	// AND THE SIGNING KEY, BY THE SAME COVER (LRI R84 item 12; review L-5). The Device holds it from
+	// identity phase 1's Task 12, and Close erases it there; an exit that builds no Device drops it
+	// here, so the refusals below -- the identity that does not read back, and the engine -- erase it.
 	held := false
 	defer func() {
 		if !held {
 			zeroizeState(wrapSeed)
+			zeroizeState(signer)
 		}
 	}()
 	if err != nil {
@@ -453,8 +496,47 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	// and writes still reaches stateStore, call for call; what the stage adds is that a join's
 	// first epoch state waits in memory until [Device.Join] commits it. See [joinStage].
 	stage := newJoinStage(stateStore)
+	// THE IDENTITY, READ BACK (identity phase 1's Task 12): a durable store that holds one answers it
+	// with its heads, and the engine is built under its identity key; with none, the device runs
+	// under its own key until [Device.ConfirmWords] makes one, and makes no leaf before it.
+	identity, heads := (*deviceIdentityState)(nil), map[string][]byte{}
+	var identityUnreadable error
+	if store, durable := stateStore.(DeviceStore); durable {
+		if identity, heads, err = loadIdentity(store, ed25519.PublicKey(signerPub)); err != nil {
+			return nil, err
+		}
+		// A SETUP'S ORPHANS ARE SWEPT AT START, ON THE SETUP MARK (LRI R85, R86; erase authority (j)):
+		// where the mark a making wrote first stands with no identity record, the heads and the phrase
+		// key that making left are erased, and where it stands beside the identity record, the mark
+		// alone goes. With no mark, nothing is erased. A removal that fails leaves what it did not take
+		// for the next start, and this start goes on: nothing reads an orphan while no identity record
+		// stands. A sweep that took something, or failed, says so in one line, with names only (LRI R89
+		// item 3; review D2L-4, L-D2).
+		if erased, err := store.SweepIdentityOrphans(); err != nil {
+			glog.Warningf("urmessage: the start could not finish the sweep of a setup's leftovers, and the next start tries again: %v", err)
+		} else if len(erased) != 0 {
+			glog.Infof("urmessage: the start erased what a setup that stopped part way left: %v", erased)
+		}
+		// RECORDS NO MARK EXPLAINS ARE AN IDENTITY THAT CANNOT BE READ, NEVER "NO IDENTITY" (LRI R89 item
+		// 1; review D2L-1, L-D1, G-D1). The heads or the phrase key standing with no identity record and no
+		// setup mark are a live identity's whose record was moved away. The device starts, so the app can
+		// say so; it makes nothing, and no setup writes over them.
+		if identity == nil {
+			standing, err := store.UnexplainedIdentityRecords()
+			switch {
+			case err != nil:
+				identityUnreadable = fmt.Errorf("%w: %w", ErrIdentityUnreadable, err)
+			case len(standing) != 0:
+				identityUnreadable = fmt.Errorf("%w: %v stand with no identity record and no setup mark", ErrIdentityUnreadable, standing)
+			}
+		}
+	}
+	credential := []byte(signerPub)
+	if identity != nil {
+		credential = identity.record.CurrentKey
+	}
 	engine, err := messagegroup.NewConnectMlsEngine(crypto, stage, signer,
-		mls.BasicCredential(signerPub), leafKeys)
+		mls.BasicCredential(credential), leafKeys)
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: the mls engine: %w", err)
 	}
@@ -463,23 +545,29 @@ func NewDevice(config DeviceConfig) (*Device, error) {
 	inbox := newPushInbox(config.Transport)
 	held = true
 	return &Device{
-		transport:        config.Transport,
-		reserver:         config.Reserver,
-		connect:          config.Connect.withDefaults(),
-		crypto:           crypto,
-		engine:           engine,
-		leafKeys:         leafKeys,
-		stateStore:       stateStore,
-		identityPub:      append([]byte(nil), signerPub...),
-		wrapSeed:         wrapSeed,
-		nowMs:            nowMs,
-		random:           random,
-		commitAuthorizer: config.CommitAuthorizer,
-		groups:           map[string]*Group{},
-		unrestored:       map[string]bool{},
-		notRead:          map[string]readClass{},
-		joinStage:        stage,
-		inbox:            inbox,
+		transport:          config.Transport,
+		reserver:           config.Reserver,
+		connect:            config.Connect.withDefaults(),
+		crypto:             crypto,
+		engine:             engine,
+		leafKeys:           leafKeys,
+		stateStore:         stateStore,
+		identityPub:        append([]byte(nil), credential...),
+		identity:           identity,
+		identityUnreadable: identityUnreadable,
+		heads:              heads,
+		signer:             signer,
+		devicePub:          ed25519.PublicKey(append([]byte(nil), signerPub...)),
+		wrapSeed:           wrapSeed,
+		nowMs:              nowMs,
+		random:             random,
+		commitAuthorizer:   config.CommitAuthorizer,
+		phraseStretch:      config.PhraseStretch,
+		groups:             map[string]*Group{},
+		unrestored:         map[string]bool{},
+		notRead:            map[string]readClass{},
+		joinStage:          stage,
+		inbox:              inbox,
 	}, nil
 }
 
@@ -721,9 +809,17 @@ func (self *Device) pause(ctx context.Context, howLong time.Duration) error {
 	}
 }
 
-// rebindAll moves every live session onto the nonce this transport now holds.
+// rebindAll moves every live session onto the nonce this transport now holds: every group this
+// device holds, its system groups included (LRI R84 item 11). Groups answers conversations only, so a
+// rebind that walked it left the self group's sessions bound to a nonce the server had dropped.
 func (self *Device) rebindAll() error {
-	for _, group := range self.Groups() {
+	self.mutex.Lock()
+	held := make([]*Group, 0, len(self.groups))
+	for _, group := range self.groups {
+		held = append(held, group)
+	}
+	self.mutex.Unlock()
+	for _, group := range held {
 		if err := group.rebind(); err != nil {
 			return err
 		}
@@ -750,7 +846,13 @@ func (self *Device) KeyPackage() ([]byte, error) {
 	if seedless {
 		return nil, fmt.Errorf("%w, and so it publishes no join code: an invite to one is sealed to that leaf", ErrNoDeviceWrapKey)
 	}
-	keyPackage, err := self.engine.NewKeyPackage()
+	// A DEVICE WITH NO IDENTITY PUBLISHES NO JOIN CODE (identity phase 1's Task 12, Property 2): every
+	// group this build founds requires 0xF005, and a key package is this device's leaf in one.
+	identity, err := self.requireIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("%w, and so it publishes no join code", err)
+	}
+	keyPackage, err := self.currentEngine().NewBoundKeyPackage([]messagegroup.ExtensionBytes{identity.extension})
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: this device's key package: %w", err)
 	}
@@ -841,6 +943,11 @@ func (self *Device) Groups() []*Group {
 	defer self.mutex.Unlock()
 	groups := make([]*Group, 0, len(self.groups))
 	for _, group := range self.groups {
+		// CONVERSATIONS ONLY (identity phase 1's Task 12, Property 3): a system group, the self group
+		// among them, is held and never answered
+		if group.system {
+			continue
+		}
 		groups = append(groups, group)
 	}
 	return groups
@@ -902,7 +1009,15 @@ func (self *Device) Close() error {
 	self.groups = map[string]*Group{}
 	zeroizeState(self.wrapSeed)
 	self.wrapSeed = nil
+	zeroizeState(self.signer)
+	self.signer = nil
 	self.mutex.Unlock()
+	self.identityLock.Lock()
+	if self.offered != nil {
+		self.offered.Erase()
+		self.offered = nil
+	}
+	self.identityLock.Unlock()
 	var first error
 	for _, group := range groups {
 		if err := group.Close(); err != nil && first == nil {
@@ -928,9 +1043,13 @@ func (self *Device) nonce() ([]byte, uint64, error) {
 // before there is a second member and is what mls.GroupPolicyExtension.Validate requires. It is
 // canonicalized before it is encoded, because the extension travels inside the group context and
 // two members that encoded it differently would export different secrets.
-func (self *Device) createMlsGroup(groupId []byte) (messagegroup.GroupHandle, error) {
+func (self *Device) createMlsGroup(groupId []byte, system bool) (messagegroup.GroupHandle, error) {
+	identity, err := self.requireIdentity()
+	if err != nil {
+		return nil, err
+	}
 	policy := &mls.GroupPolicyExtension{
-		Roles: []mls.RoleEntry{{MemberId: self.identityPub, Role: mls.RoleOwner}},
+		Roles: []mls.RoleEntry{{MemberId: self.credentialIdentity(), Role: mls.RoleOwner}},
 	}
 	if err := policy.Canonicalize(); err != nil {
 		return nil, fmt.Errorf("urmessage: the group policy: %w", err)
@@ -939,9 +1058,21 @@ func (self *Device) createMlsGroup(groupId []byte) (messagegroup.GroupHandle, er
 	if err != nil {
 		return nil, fmt.Errorf("urmessage: the group policy: %w", err)
 	}
-	handle, err := self.engine.CreateGroup(groupId, encoded.ExtensionData, self.leafKeys)
+	// EVERY GROUP THIS BUILD FOUNDS IS BOUND (identity phase 1's Task 12, Property 2): the founder's
+	// leaf carries this identity's 0xF005, and the engine requires 0xF004 and 0xF005 of every member;
+	// a system group's context carries 0xF006 {1, root}, which the engine then requires as well.
+	var context []messagegroup.ExtensionBytes
+	if system {
+		purpose, err := selfGroupPurpose(identity.record.Root)
+		if err != nil {
+			return nil, fmt.Errorf("urmessage: the self group's purpose: %w", err)
+		}
+		context = []messagegroup.ExtensionBytes{purpose}
+	}
+	handle, err := self.currentEngine().CreateBoundGroup(groupId, encoded.ExtensionData, self.leafKeys,
+		[]messagegroup.ExtensionBytes{identity.extension}, context)
 	if err != nil {
-		return nil, fmt.Errorf("urmessage: CreateGroup: %w", err)
+		return nil, fmt.Errorf("urmessage: CreateBoundGroup: %w", err)
 	}
 	return handle, nil
 }

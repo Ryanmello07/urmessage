@@ -11,6 +11,10 @@
 //     repository it may import, exactly, and the modules beyond the standard library it may
 //     import. A package with no row fails, and so does a row with no package: the map is a
 //     disposition of the whole tree, checked both ways.
+//   - A row may also name an import that ONE TEST FILE of the package makes and no other file of it
+//     does, with its reason (testFiles): a test's server double, say, whose import is the double's and
+//     not the package's. It is held both ways like the rows: it names a _test.go file of the package
+//     that makes an import the row does not already allow, and it says why.
 //   - No package imports its own descendant (CODESTYLE.md, "Package layering"): the six
 //     immediate packages are peers, and a parent facade importing sdk/urmessage would be the
 //     violation the promotion of mls/syntax to syntax removed.
@@ -54,6 +58,17 @@ type layeringRule struct {
 	// packages of this repository, as repository-relative directories, exactly
 	module []string
 	// modules or packages outside it, each allowing its own subtree (a path boundary applies)
+	external []string
+	// imports ONE TEST FILE of the package may make beyond the above, and no other file of it:
+	// repository-relative path -> what it may import and why. A row-wide allowance would admit
+	// the package's own files too, and they are what the row is about (R65 item 7)
+	testFiles map[string]testFileAllowance
+	reason    string
+}
+
+// What one test file may import beyond its package's row, and why that is the file's alone.
+type testFileAllowance struct {
+	// modules or packages outside the repository, each allowing its own subtree
 	external []string
 	reason   string
 }
@@ -101,13 +116,22 @@ var layeringRules = map[string]layeringRule{
 	},
 	"sdk/urmessage": {
 		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "syntax"},
-		external: []string{"github.com/urnetwork/connect", "google.golang.org/protobuf"},
-		reason:   "the device and group orchestration over the SDK's transport and stores",
+		external: []string{"github.com/urnetwork/connect", "github.com/urnetwork/glog", "google.golang.org/protobuf"},
+		reason:   "the device and group orchestration over the SDK's transport and stores; glog, the logger the library's host routes to its log directory, for the start's one-line notes on the setup mark (LRI R89 item 3)",
 	},
 	"sdk/cgo": {
 		module:   []string{"messagegroup", "protocol", "sdk", "sdk/urmessage"},
 		external: []string{"github.com/urnetwork/connect", "github.com/urnetwork/message-server"},
-		reason:   "the messaging half of the native C ABI, built laid over the core SDK's cgo package main by the composition build; the loopback harness (ctest/testdata/loopback_test_world.go, laid into this package by a build overlay, with its own modfile) runs a message server in-process",
+		testFiles: map[string]testFileAllowance{
+			"sdk/cgo/identity_exports_test.go": {
+				external: []string{"google.golang.org/protobuf"},
+				reason: "the identity exports' server double, which answers a Hello so that a device can make its " +
+					"identity: an identity's self group is founded under a connection (identity phase 1's Task 14). " +
+					"The answer is a protobuf message, and protobuf is the double's alone: the package's own files " +
+					"reach the server through sdk",
+			},
+		},
+		reason: "the messaging half of the native C ABI, built laid over the core SDK's cgo package main by the composition build; the loopback harness (ctest/testdata/loopback_test_world.go, laid into this package by a build overlay, with its own modfile) runs a message server in-process",
 	},
 	"sdk/cgo/gen": {
 		module:   []string{"sdk", "sdk/urmessage"},
@@ -115,19 +139,41 @@ var layeringRules = map[string]layeringRule{
 		reason:   "the composed library's .def generator and its tests: the C header's text limits against urmessage's, and the one test that links both SDKs, MessageServiceUrls against the core SDK's ServiceUrl",
 	},
 	"sdk/cp3b": {
-		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "sdk/urmessage"},
+		module:   []string{"message", "messagegroup", "mls", "protocol", "sdk", "sdk/urmessage", "syntax"},
 		external: []string{"github.com/urnetwork/connect", "github.com/urnetwork/message-server", "google.golang.org/protobuf"},
-		reason:   "the cross-process suite: devices against a real message server and its store",
+		reason: "the cross-process suite: devices against a real message server and its store. syntax is how its " +
+			"cases read a join code's leaf, with the identity it carries, as every receiver reads it (identity " +
+			"phase 1's Task 12)",
 	},
 	"sdk/livepeer": {
 		module:   []string{"protocol", "sdk", "sdk/urmessage"},
 		external: []string{"github.com/urnetwork/connect"},
-		reason:   "the live peer command: one device on a real network",
+		testFiles: map[string]testFileAllowance{
+			"sdk/livepeer/main_test.go": {
+				external: []string{"google.golang.org/protobuf"},
+				reason: "the live peer's tests' server double, which answers Hello so that a device can make its " +
+					"identity: an identity's self group is founded under a connection (identity phase 1's Task 12). " +
+					"The answer is a protobuf message, and protobuf is the double's alone: the peer reaches the " +
+					"server through sdk (LRI R84 item 9; review G-1)",
+			},
+		},
+		reason: "the live peer command: one device on a real network",
 	},
 	"sdk/liveprobe": {
-		module:   []string{"messagegroup", "mls", "protocol", "sdk", "sdk/urmessage"},
+		module:   []string{"messagegroup", "mls", "protocol", "sdk", "sdk/urmessage", "syntax"},
 		external: []string{"github.com/urnetwork/connect"},
-		reason:   "the live probe command: a group's round trips against a deployment",
+		testFiles: map[string]testFileAllowance{
+			"sdk/liveprobe/main_test.go": {
+				external: []string{"google.golang.org/protobuf"},
+				reason: "the probe's identity test's server double, which answers a Hello so that a party can make " +
+					"its identity: an identity's self group is founded under a connection (identity phase 1's " +
+					"Task 15). The answer is a protobuf message, and protobuf is the double's alone: the probe " +
+					"reaches the server through sdk",
+			},
+		},
+		reason: "the live probe command: a group's round trips against a deployment. syntax is how step 11 reads " +
+			"C's own list off a key package C's device makes, as every receiver reads a join code's leaf, so that " +
+			"C's second device is bound by the next base of that list (identity phase 1's Task 15)",
 	},
 }
 
@@ -446,6 +492,8 @@ func layeringViolations(scan repositoryScan, rules map[string]layeringRule, serv
 	}
 	edges := map[string][]string{}
 	externals := map[string][]importRecord{}
+	// the test files' own allowances an import used: "file\x00prefix"
+	usedTestAllowances := map[string]bool{}
 	for _, dir := range sortedKeys(scan.files) {
 		rule, found := rules[dir]
 		if dir != "." && !found {
@@ -485,8 +533,39 @@ func layeringViolations(scan repositoryScan, rules map[string]layeringRule, serv
 					allowed = true
 				}
 			}
+			// a test file's own allowance, for what the row does not already allow; a file the
+			// package builds is judged by the row whatever names it
+			if allowance, scoped := rule.testFiles[record.file]; scoped && !allowed && strings.HasSuffix(record.file, "_test.go") {
+				for _, prefix := range allowance.external {
+					if underPath(record.path, prefix) {
+						allowed = true
+						usedTestAllowances[record.file+"\x00"+prefix] = true
+					}
+				}
+			}
 			if !allowed {
 				report("%s imports %s (%s), outside the standard library and its row", dir, record.path, record.file)
+			}
+		}
+	}
+	// the test files' own allowances, both ways: each names a test file of its package that makes an
+	// import the row does not already allow, and says why
+	for _, dir := range sortedKeys(rules) {
+		for _, file := range sortedKeys(rules[dir].testFiles) {
+			allowance := rules[dir].testFiles[file]
+			if !strings.HasSuffix(file, "_test.go") {
+				report("%s's row allows %s an import of its own, and it is not a test file: a file the package builds is judged by the package's row", dir, file)
+			}
+			if !slices.Contains(scan.files[dir], file) {
+				report("%s's row allows %s an import of its own, and it is not a Go file of %s: a row nothing uses", dir, file, dir)
+			}
+			if strings.TrimSpace(allowance.reason) == "" {
+				report("%s's row allows %s an import of its own and says nothing of why", dir, file)
+			}
+			for _, prefix := range allowance.external {
+				if !usedTestAllowances[file+"\x00"+prefix] {
+					report("%s's row allows %s to import %s, and it imports nothing under it that the row does not already allow: a disposition nothing uses", dir, file, prefix)
+				}
 			}
 		}
 	}
@@ -675,6 +754,87 @@ func TestAnOverlaidSourceIsJudgedByThePackageItIsLaidInto(t *testing.T) {
 	}
 	if problems := overlaidDirectoryProblems(nil, []string{"sdk/cgo/ctest/testdata"}); len(problems) != 1 || !strings.Contains(problems[0], "a row nothing uses") {
 		t.Errorf("a declared directory no overlay uses: %q", problems)
+	}
+}
+
+// A TEST FILE'S OWN ALLOWANCE IS THAT FILE'S ALONE, on a fixture. The package's own file and its other
+// test file make imports under the same module and are judged by the row as ever; the file the
+// allowance names is admitted. Without the allowance that file is judged too, and with the module in
+// the row instead -- the rejected design, a package-wide allowance for one test's double -- the
+// package's own file is admitted with it. Then each declaration a gate could be fooled by is refused
+// for its own reason.
+func TestATestFilesAllowanceIsThatFilesAlone(t *testing.T) {
+	root := t.TempDir()
+	write := func(relative string, body string) {
+		at := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module "+modulePath+"\n")
+	write("double/own.go", "package double\n\nimport _ \"google.golang.org/protobuf/proto\"\n")
+	write("double/server_test.go", "package double\n\nimport _ \"google.golang.org/protobuf/proto\"\n")
+	write("double/other_test.go", "package double\n\nimport _ \"google.golang.org/protobuf/encoding/protowire\"\n")
+	const protobuf = "google.golang.org/protobuf"
+	allowance := map[string]testFileAllowance{"double/server_test.go": {external: []string{protobuf}, reason: "the test's server double"}}
+	own := "double imports google.golang.org/protobuf/proto (double/own.go), outside the standard library and its row"
+	other := "double imports google.golang.org/protobuf/encoding/protowire (double/other_test.go), outside the standard library and its row"
+	server := "double imports google.golang.org/protobuf/proto (double/server_test.go), outside the standard library and its row"
+	scan := scanRepository(t, root, nil)
+	judge := func(rule layeringRule) []string {
+		return layeringViolations(scan, map[string]layeringRule{"double": rule}, nil, map[string]string{})
+	}
+
+	if got := judge(layeringRule{testFiles: allowance}); !slices.Equal(got, []string{other, own}) {
+		t.Errorf("the allowance must admit its own file and nothing else: %q", got)
+	}
+	// THE CONTROL: without the allowance the file it names is judged like the others
+	if got := judge(layeringRule{}); !slices.Equal(got, []string{other, own, server}) {
+		t.Errorf("with no allowance every file is judged by the row: %q", got)
+	}
+	// THE REJECTED DESIGN: the module in the row admits the package's own file with the double
+	if got := judge(layeringRule{external: []string{protobuf}}); len(got) != 0 {
+		t.Errorf("a row-wide allowance admits every file of the package, the package's own included: %q", got)
+	}
+
+	// the declarations, each refused for its own reason
+	for _, c := range []struct {
+		name string
+		rule layeringRule
+		want string
+	}{
+		{"a file the package builds", layeringRule{testFiles: map[string]testFileAllowance{
+			"double/own.go": {external: []string{protobuf}, reason: "a production file"}}},
+			"double's row allows double/own.go an import of its own, and it is not a test file"},
+		{"a file the package does not hold", layeringRule{testFiles: map[string]testFileAllowance{
+			"double/gone_test.go": {external: []string{protobuf}, reason: "a file that is not there"}}},
+			"double's row allows double/gone_test.go an import of its own, and it is not a Go file of double"},
+		{"no reason", layeringRule{testFiles: map[string]testFileAllowance{
+			"double/server_test.go": {external: []string{protobuf}}}},
+			"double's row allows double/server_test.go an import of its own and says nothing of why"},
+		{"an import the file does not make", layeringRule{testFiles: map[string]testFileAllowance{
+			"double/server_test.go": {external: []string{protobuf, "github.com/gorilla/websocket"}, reason: "the double"}}},
+			"double's row allows double/server_test.go to import github.com/gorilla/websocket, and it imports nothing under it that the row does not already allow"},
+		{"an import the row already allows", layeringRule{external: []string{protobuf}, testFiles: allowance},
+			"double's row allows double/server_test.go to import google.golang.org/protobuf, and it imports nothing under it that the row does not already allow"},
+	} {
+		got := judge(c.rule)
+		reported := false
+		for _, violation := range got {
+			if strings.HasPrefix(violation, c.want) {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("%s: want a violation beginning %q, got %q", c.name, c.want, got)
+		}
+	}
+	// a production file named in an allowance is still judged by the row
+	if got := judge(layeringRule{testFiles: map[string]testFileAllowance{"double/own.go": {external: []string{protobuf}, reason: "a production file"}}}); !slices.Contains(got, own) {
+		t.Errorf("an allowance naming a file the package builds admitted that file's import: %q", got)
 	}
 }
 

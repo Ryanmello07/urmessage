@@ -683,3 +683,86 @@ var (
 	// other's body before it reaches either.
 	ErrWrapPayloadTypeCollision = errors.New("messagegroup: the two device wraps of one target take two payload types")
 )
+
+// ---------------------------------------------------------------------------
+// the recovery phrase and the keys it derives, MASTER section 5.1 and 5.2 at Revision 10
+// ---------------------------------------------------------------------------
+
+var (
+	// Fires, at initialisation and as a panic, when bip39_english.txt is not the list its
+	// SHA-256 pins. Words read off any other file are words no other device reads back to the
+	// same phrase.
+	ErrRecoveryPhraseList = errors.New("messagegroup: the vendored word list is not the BIP-39 English list its SHA-256 pins")
+	// Fires when typed words, each of them on the list, are not 25 of them. MASTER section 5.1's
+	// phrase is 25 words and no other count, so 24 or 26 words are not a phrase with a word
+	// missing or added: nothing is inserted or dropped to make one.
+	ErrRecoveryPhraseWordCount = errors.New("messagegroup: a recovery phrase has 25 words")
+	// Fires when typed words hold one or more that are not on the list. ParseRecoveryPhrase
+	// answers their positions beside it, from 1, and never the words: no part of a phrase reaches
+	// an error string or anything that logs one.
+	ErrRecoveryPhraseWord = errors.New("messagegroup: a word of the recovery phrase is not one of the 2048 words")
+	// Fires when 25 words of the list fail their checksum. It says that one or more words are
+	// wrong and never which, since an 8-bit checksum cannot say, and it names no candidate: no
+	// word is ever guessed (OD section 3).
+	ErrRecoveryPhraseChecksum = errors.New("messagegroup: one or more words of the recovery phrase are wrong")
+	// Fires when an ID is asked of a key that is not the thirty two octets of an Ed25519 public
+	// key: the root an account ID or a device ID is taken over, or the device key a device ID
+	// names. An ID over any other octets is well formed, and no other device computes it.
+	ErrIdentityPublicKeyLength = errors.New("messagegroup: an ID is taken over an Ed25519 public key of thirty two octets")
+	// Fires when the phrase's keys are asked for without a phrase, or without the ceremony that
+	// is to use them.
+	ErrPhraseKeysCeremony = errors.New("messagegroup: the phrase's keys are derived for a phrase and a ceremony, and one was not given")
+)
+
+// ---------------------------------------------------------------------------
+// the identity extensions and the checks over them, MASTER section 5.3 and 11 at Revision 10
+// ---------------------------------------------------------------------------
+
+var (
+	// Fires when the phrase's keys are asked for a signature after their ceremony ended and erased
+	// them.
+	ErrPhraseKeysErased = errors.New("messagegroup: the phrase's keys were erased when their ceremony ended")
+	// Fires when a ceremony is asked for no key number, for 0, for one number twice, or for a key
+	// number outside the set it derived.
+	ErrPhraseKeyNumber = errors.New("messagegroup: a key number outside the ceremony's set, or a set that is empty, holds 0 or names one twice")
+	// Fires when an identity object does not encode or decode as version 1: a field, a version, an
+	// alg_id or a trailing octet.
+	ErrIdentityEncoding = errors.New("messagegroup: an identity object does not encode as version 1")
+	// Fires when a 0xF005 body is over 6,144 octets, the bound VerifyLeafBinding enforces and mls
+	// does not.
+	ErrIdentityExtensionSize = errors.New("messagegroup: an identity extension is over 6,144 octets")
+	// Fires when a 0xF006 body does not encode or decode as version 1 with a known purpose.
+	ErrGroupPurposeEncoding = errors.New("messagegroup: a group purpose is not version 1 with a known purpose")
+	// Fires when a step is of a form other than 1. Form 2, the 7-day change's, ships in a later
+	// release and is refused (D2 VID2).
+	ErrIdentityStepForm = errors.New("messagegroup: an identity step is not of form 1")
+	// Fires when a signer is handed a key that is not a whole Ed25519 private key.
+	ErrIdentitySigningKey = errors.New("messagegroup: an identity object's signer is not an Ed25519 private key")
+	// Fires when a chain does not lead from its root to its key by form-1 steps, each signed by
+	// the key before it.
+	ErrIdentityChain = errors.New("messagegroup: the identity chain does not verify")
+	// Fires when a list is not well formed: its devices out of order, repeated, more than 10 or
+	// none, an unknown flag, more than 16 amendments, or an amendment that does not fit.
+	ErrDeviceListShape = errors.New("messagegroup: the device list is not well formed")
+	// Fires when an addition finds no place: the list names 10 devices, or 16 changes wait on its
+	// base. A self-removal never fires it.
+	ErrDeviceListFull = errors.New("messagegroup: the device list has no place for an addition")
+	// The binding check's seven refusals, one for each step of Spec A A-36's order.
+	ErrBindingExtension    = errors.New("messagegroup: binding step 1: the leaf's identity extension")
+	ErrBindingCertificate  = errors.New("messagegroup: binding step 2: the certificate")
+	ErrBindingChain        = errors.New("messagegroup: binding step 3: the chain")
+	ErrBindingList         = errors.New("messagegroup: binding step 4: the list's signatures")
+	ErrBindingWellFormed   = errors.New("messagegroup: binding step 5: the list's form")
+	ErrBindingSignatureKey = errors.New("messagegroup: binding step 6: the leaf's signature key")
+	ErrBindingKeyReuse     = errors.New("messagegroup: binding step 7: an identity key reused")
+	// Fires when VerifyDeviceList is handed a list that does not verify.
+	ErrDeviceListInvalid = errors.New("messagegroup: a device list to compare does not verify")
+	// Fires when two lists to compare are of two roots.
+	ErrDeviceListRoot = errors.New("messagegroup: two device lists of two identities")
+	// Fires when two lists of one identity fork: two chains that part, two bases of one number,
+	// two certificates of one key number, or one version with two encodings.
+	ErrDeviceListFork = errors.New("messagegroup: two device lists of one identity fork")
+	// Fires when the emoji are asked of inputs that cannot make them: no exporter, no group id or
+	// key package ref, or a nonce that is not 32 octets.
+	ErrLinkSasInput = errors.New("messagegroup: the link emoji's inputs are not whole")
+)

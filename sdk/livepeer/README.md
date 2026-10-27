@@ -81,6 +81,20 @@ made by an older build (`ErrInviteVersion`), and a code that is not an invitatio
 one (`ErrInviteDamaged` and the parse's other refusals; this peer's own join code pasted back is
 told apart by its octets).
 
+## Its identity
+
+Every group this build founds requires an identity of each member, and a device with no identity
+publishes no join code. So on a first run over a `-dir`, once it is connected, livepeer makes its
+identity as a person does: the 25 words offered, typed back at once, and the identity made, its
+self group founded under the connection. **The words are cleared as soon as they are typed back,
+and never printed, logged or written.** A restart over the same `-dir` reads the identity back off
+the disk. Either way it prints the identity as digests only: the SHA-256 of its account ID and of
+its device ID, never either one.
+
+The roster is printed **by identity**: one line per person, with each of their devices (its leaf,
+its role, and the digest of its device ID), this peer's own identity marked. A conversation of two
+people reads as two lines however many devices each has.
+
 ## Talking, and deletes
 
 On either road, every line appended to the `-outbox` file is sent. A line that is exactly `/delete`

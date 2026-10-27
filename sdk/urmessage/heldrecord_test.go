@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/mls"
 	messageprotocol "github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
@@ -141,9 +142,10 @@ func newAnsweringDeviceOver(t *testing.T, store mls.StateStore, nonce []byte) *D
 	}
 	t.Cleanup(func() { streamStore.Close() })
 	device, err := NewDevice(DeviceConfig{
-		Transport:  transport,
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: store,
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    store,
 		Connect: ConnectPolicy{
 			Budget:         30 * time.Second,
 			AttemptTimeout: 2 * time.Second,
@@ -188,8 +190,10 @@ func TestAStoreThatCannotAnswerRefusesTheJoinAndTheFoundingOfThatGroupAndOfNoOth
 	durable := openTestStore(t, t.TempDir())
 	store := &deafStore{DurableStateStore: durable}
 	device := newAnsweringDeviceOver(t, store, []byte("the device's nonce"))
+	testIdentify(t, device)
 	inviteInto := func(groupId []byte) *Invite {
 		founder, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("a founder's nonce"))
+		testIdentify(t, founder)
 		if err := founder.Connect(ctx); err != nil {
 			t.Fatalf("a founder's Connect: %v", err)
 		}

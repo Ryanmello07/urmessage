@@ -147,7 +147,7 @@ import (
 func (self *rotWorld) admit(committer *rotMember, name string, receivers ...*rotMember) (*rotMember, *rotation) {
 	self.t.Helper()
 	dev := self.device(name)
-	keyPackage, err := dev.engine.NewKeyPackage()
+	keyPackage, err := dev.keyPackage()
 	if err != nil {
 		self.t.Fatalf("%s's key package: %v", name, err)
 	}
@@ -220,7 +220,7 @@ func (self *rotWorld) bundleAddAndRemove(committer *rotMember, removing uint32, 
 
 	self.t.Helper()
 	dev := self.device(joining)
-	keyPackage, err := dev.engine.NewKeyPackage()
+	keyPackage, err := dev.keyPackage()
 	if err != nil {
 		self.t.Fatalf("%s's key package: %v", joining, err)
 	}
@@ -1299,7 +1299,7 @@ func buildAdminCommitter(t *testing.T) *removalPage {
 		// M7), so an identity holds exactly one leaf, and mls refuses a second leaf under one
 		// signature key by name. The control is in the same call: the refusal is the mls error
 		// and not some other failure.
-		keyPackage, err := victim.dev.engine.NewKeyPackage()
+		keyPackage, err := victim.dev.keyPackage()
 		if err != nil {
 			t.Fatalf("the victim's key package: %v", err)
 		}

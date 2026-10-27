@@ -162,6 +162,7 @@ func TestAStrayCopyFolderInTheGroupsRootIsNotReportedByRestore(t *testing.T) {
 	}
 	strayCopyOf(t, store, groupId, stateGroupRecordName, record)
 	device := newAnsweringDeviceOver(t, store, []byte("the restarted device's nonce"))
+	testIdentify(t, device)
 	restored, err := device.Restore(context.Background())
 	t.Logf("Restore beside a stray copy folder: %d group(s), %v", len(restored), err)
 	if errors.Is(err, ErrGroupRecordDamaged) {

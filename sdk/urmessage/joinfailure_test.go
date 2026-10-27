@@ -19,6 +19,7 @@ func TestAJoinAbandonedAfterItsCommitIsClosedWithItsTableErased(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStateStore()
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	honest, groupId := windowInvite(t, joiner)
 	group, err := joiner.Join(ctx, honest)
 	if err != nil {
@@ -88,6 +89,7 @@ func TestAHoldRefusedAfterTheCommitSaysTheJoinCodeIsSpent(t *testing.T) {
 	ctx := context.Background()
 	store := &holdBlockingStore{DurableStateStore: openTestStore(t, t.TempDir())}
 	joiner := newAnsweringDeviceOver(t, store, []byte("the joiner's nonce"))
+	testIdentify(t, joiner)
 	store.device = joiner
 	honest, groupId := windowInvite(t, joiner)
 	store.armed = true
@@ -111,6 +113,7 @@ func TestAHoldRefusedAfterTheCommitSaysTheJoinCodeIsSpent(t *testing.T) {
 // WHAT WOULD GO RED: a ForgetGroup outside the mutex, which answers at once.
 func TestForgetGroupWaitsForAnAdmissionInProgress(t *testing.T) {
 	device := newAnsweringDeviceOver(t, NewMemoryStateStore(), []byte("the device's nonce"))
+	testIdentify(t, device)
 	device.admitMutex.Lock()
 	answered := make(chan error, 1)
 	go func() { answered <- device.ForgetGroup(bytes.Repeat([]byte{0x71}, GroupIdBytes)) }()

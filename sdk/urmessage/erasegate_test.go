@@ -35,6 +35,12 @@ import (
 //	    past, on the commit that moved it (RFC 9420 section 5.12). It is not in R33's list, and it
 //	    is an erase of a group's files all the same, decided on an epoch this library committed
 //	    itself; so it is named here rather than left out.
+//	(j) A SETUP'S ORPHANS (LRI R85, R86): the heads and the phrase key records, erased at start only
+//	    where the store's own setup mark stands with no identity record, both read under the store's
+//	    lock at the erase ([DurableStateStore.SweepIdentityOrphans]). The mark is a fact the store
+//	    wrote itself, before an identity's making wrote anything, and with no mark nothing is erased:
+//	    an absence alone decides nothing (R86). They are not a group's files; the phrase key is a
+//	    phrase secret, and this list is where every erase names its authority.
 //
 // WHAT AN ERASE IS, AND WHY THE LIST OF THEM IS DERIVED. The primitives are package os's Remove,
 // RemoveAll and Truncate, and any Truncate method. A function with a site this list calls a STEP --
@@ -142,6 +148,7 @@ const (
 	eraseOwnMark     = "(c) the store's own pending mark"
 	eraseOwnAdmitted = "(d) a failed admission erasing what it wrote itself"
 	eraseWindow      = "(e) the epoch window"
+	eraseSetupOrphan = "(j) a setup's orphans, on the setup mark standing with no identity record"
 	eraseStep        = "a step of an erase, whose authority is its caller's"
 	eraseNotGroup    = "not a group's file"
 )
@@ -192,6 +199,10 @@ var eraseGateAllowList = map[string]eraseGateEntry{
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.deleteGroupStateAt|os.Remove(self.groupDir(groupId))#1":                                          {eraseNotGroup, "the group directory, only when empty."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.eraseGroupsWithNoRecord|os.Remove(epochDir)#1":                                                   {eraseNotGroup, "the epoch directory, only when empty."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.eraseGroupsWithNoRecord|os.Remove(dir)#1":                                                        {eraseNotGroup, "the group directory, only when empty."},
+	"sdk/urmessage/statestore_durable.go|DurableStateStore.SweepIdentityOrphans|removeLocked(self.phraseKeyPath())#1":                                       {eraseSetupOrphan, "the phrase key record, isk_seed[1], where the setup mark reads as this store's and no identity record stands, both read under the store's lock at the erase: a making that stopped before its commit point wrote it, and it is a phrase secret on the disk of a device with no identity (LRI R85, R86; P15)."},
+	"sdk/urmessage/statestore_durable.go|DurableStateStore.SweepIdentityOrphans|removeLocked(self.identityHeadsPath())#1":                                   {eraseSetupOrphan, "the heads record, where the setup mark reads as this store's and no identity record stands, both read under the store's lock at the erase: what a making that stopped before its commit point wrote after the mark (LRI R85, R86)."},
+	"sdk/urmessage/statestore_durable.go|DurableStateStore.SweepIdentityOrphans|removeLocked(self.setupMarkPath())#1":                                       {eraseNotGroup, "the setup mark, last: once the orphans it authorized are gone, or beside an identity record that stands. The store's note about its own writes; with it gone, (j) erases nothing (LRI R86)."},
+	"sdk/urmessage/statestore_durable.go|DurableStateStore.ClearSetupMark|removeLocked(self.setupMarkPath())#1":                                             {eraseNotGroup, "the setup mark, taken away by the making once its identity record stands: the store's note about its own writes; with it gone, (j) erases nothing (LRI R86)."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.DeletePrivateKey|removeLocked(self.privatePath(pub))#1":                                          {eraseNotGroup, "one MLS private key, at mls's own request through mls.StateStore (J1-12: nothing calls it today)."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.TakeKeyPackage|removeLocked(path)#1":                                                             {eraseNotGroup, "a join code, single use by mls.StateStore's contract: the take removes it."},
 	"sdk/urmessage/statestore_durable.go|DurableStateStore.writeRecord|os.Remove(tempPath)#1":                                                               {eraseNotGroup, "this call's own temporary file, when the write did not finish: never a named value."},
@@ -439,9 +450,12 @@ func eraseGatePrint(t *testing.T, found map[string]bool, tracked []string) {
 		byClass[class] = append(byClass[class], key+"  -- "+entry.why)
 	}
 	for _, class := range []string{eraseLeaveMark, eraseFreshProof, eraseOwnMark, eraseOwnAdmitted, eraseWindow,
-		eraseStep, eraseNotGroup, "UNLISTED"} {
+		eraseSetupOrphan, eraseStep, eraseNotGroup, "UNLISTED"} {
 		heading := "THE GROUP ERASES, by authority"
-		if class == eraseStep || class == eraseNotGroup || class == "UNLISTED" {
+		switch class {
+		case eraseSetupOrphan:
+			heading = "THE IDENTITY ERASES, by authority"
+		case eraseStep, eraseNotGroup, "UNLISTED":
 			heading = "THE COMPLEMENT, which is no group erase of its own"
 		}
 		t.Logf("%s: %s (%d):", heading, class, len(byClass[class]))

@@ -10,15 +10,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
+	"github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
+	"google.golang.org/protobuf/proto"
 )
 
 // THIS PACKAGE HAS TESTS SO THAT ITS TEST BINARY EXISTS AND STARTS. A main package with no test is
@@ -257,11 +262,12 @@ func TestAnInviteCodeFileIsWaitedForReadAndDeleted(t *testing.T) {
 }
 
 // THE JOIN CODE IS THE TEXT THE APP'S ADD DIALOG TAKES. The key package is a real one, from a real
-// Device over a transport that never reaches a server (KeyPackage is local). Its join code must be
+// Device with an identity, over a transport whose server answers Hello and nothing else (KeyPackage is
+// local; the identity's self group is founded under the connection). Its join code must be
 // byte for byte the text the app's own encoder makes of the same octets, must decode under the
 // app's own reader, and must be written to -joincodeout exactly, with nothing around it.
 func TestTheJoinCodeIsTheTextTheAppsAddDialogTakes(t *testing.T) {
-	keyPackage, err := offlineDevice(t).KeyPackage()
+	keyPackage, err := identifiedDevice(t).KeyPackage()
 	if err != nil {
 		t.Fatalf("KeyPackage: %v", err)
 	}
@@ -305,7 +311,7 @@ func TestTheJoinCodeIsTheTextTheAppsAddDialogTakes(t *testing.T) {
 // before it reaches its window, so the live run is what drives the real one); the rest are
 // ParseInvite's own refusals of real octets.
 func TestEachRefusalOfTheJoinRoadSaysWhatToDo(t *testing.T) {
-	ownJoinCode, err := offlineDevice(t).KeyPackage()
+	ownJoinCode, err := identifiedDevice(t).KeyPackage()
 	if err != nil {
 		t.Fatalf("KeyPackage: %v", err)
 	}
@@ -565,25 +571,83 @@ func withChecksum(octets []byte) []byte {
 	return append(append([]byte(nil), octets...), sum[:]...)
 }
 
-// silentClient is a connect client that sends nothing and hears nothing.
-type silentClient struct{}
-
-func (silentClient) SendWithTimeout(*connectprotocol.Frame, connect.Id, connect.AckFunction, time.Duration, ...any) bool {
-	return false
+// helloClient is a connect client whose server answers Hello, with a nonce, and nothing else: the
+// smallest thing a device can be connected through. The answer is delivered on another goroutine,
+// because the transport is still inside its own send when the request leaves it.
+type helloClient struct {
+	mutex   sync.Mutex
+	receive connect.ReceiveFunction
 }
 
-func (silentClient) AddReceiveCallback(connect.ReceiveFunction) func() {
+func (self *helloClient) AddReceiveCallback(receive connect.ReceiveFunction) func() {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	self.receive = receive
 	return func() {}
 }
 
-// offlineDevice is a real urmessage.Device over durable stores in a temp directory and a transport
-// whose client never reaches a server: enough for KeyPackage, which is local, and for nothing that
-// needs a Hello.
-func offlineDevice(t *testing.T) *urmessage.Device {
+func (self *helloClient) SendWithTimeout(frame *connectprotocol.Frame, destination connect.Id,
+	ack connect.AckFunction, timeout time.Duration, opts ...any) bool {
+
+	if frame.GetMessageType() != connectprotocol.MessageType_MessageMessageServerRequest {
+		return true
+	}
+	request := &protocol.MessageServerRequest{}
+	if proto.Unmarshal(frame.GetMessageBytes(), request) != nil || request.GetHello() == nil {
+		return false
+	}
+	self.mutex.Lock()
+	receive := self.receive
+	self.mutex.Unlock()
+	if receive == nil {
+		return false
+	}
+	encoded, err := proto.Marshal(&protocol.MessageServerResponse{
+		RequestId: request.GetRequestId(),
+		Reason:    protocol.Reason_REASON_OK,
+		Body: &protocol.MessageServerResponse_Hello{
+			Hello: &protocol.HelloResponse{ServerNonce: []byte("livepeer's test server nonce")},
+		},
+	})
+	if err != nil {
+		return false
+	}
+	go receive(connect.TransferPath{}, []*connectprotocol.Frame{{
+		MessageType:  connectprotocol.MessageType_MessageMessageServerResponse,
+		MessageBytes: encoded,
+	}}, connect.Peer{})
+	return true
+}
+
+// identifiedDevice is a real urmessage.Device over durable stores in a temp directory, connected
+// through a [helloClient], with the identity a person sets up: the words offered, typed back, and the
+// identity made (identity phase 1's Task 12). A device with no identity publishes no join code.
+func identifiedDevice(t *testing.T) *urmessage.Device {
+	t.Helper()
+	device := deviceOver(t, &helloClient{})
+	ctx := context.Background()
+	if err := device.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	words, err := device.CreateIdentity()
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	typed := strings.Join(words, " ")
+	clear(words)
+	if err := device.ConfirmWords(ctx, typed); err != nil {
+		t.Fatalf("ConfirmWords: %v", err)
+	}
+	return device
+}
+
+// deviceOver is a real urmessage.Device over durable stores in a temp directory and a transport over
+// the client given.
+func deviceOver(t *testing.T, client sdk.MessageTransportClient) *urmessage.Device {
 	t.Helper()
 	root := t.TempDir()
 	transport, err := sdk.NewMessageTransport(&sdk.MessageTransportConfig{
-		Client: silentClient{}, Server: connect.NewId(), ProtocolVersion: 1, Timeout: time.Second,
+		Client: client, Server: connect.NewId(), ProtocolVersion: 1, Timeout: time.Second,
 	})
 	if err != nil {
 		t.Fatalf("transport: %v", err)
@@ -616,4 +680,107 @@ func offlineDevice(t *testing.T) *urmessage.Device {
 		transport.Close()
 	})
 	return device
+}
+
+// ── the peer's identity (identity phase 1's Task 15) ──────────────────────────────────────────
+
+// THE PEER MAKES ITS IDENTITY AS A PERSON DOES (LRI R81): connected, the words offered, typed back, and
+// the identity made, its self group founded under the connection; and a second call, as a restart
+// over the same -dir makes, reads it back and makes nothing. A device that is not connected makes
+// none. What it prints is digests only, in a line whose whole shape is fixed, so that no word of the
+// phrase has room in it (Property 1).
+func TestAPeerMakesItsIdentityAsAPersonDoes(t *testing.T) {
+	ctx := context.Background()
+	device := deviceOver(t, &helloClient{})
+	if _, _, err := ensureIdentity(ctx, device); err == nil {
+		t.Fatalf("a device that is not connected made an identity")
+	}
+	if _, err := device.Identity(); !errors.Is(err, urmessage.ErrNoIdentity) {
+		t.Fatalf("after the refused typing back the device's identity answers %v, want ErrNoIdentity", err)
+	}
+	if err := device.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	line, made, err := ensureIdentity(ctx, device)
+	if err != nil || !made {
+		t.Fatalf("ensureIdentity answered made %v, %v", made, err)
+	}
+	identity, err := device.Identity()
+	if err != nil || len(identity.AccountId) != 36 || len(identity.DeviceId) != 19 || !identity.PhraseDevice {
+		t.Fatalf("the identity made is %v (%v)", identity, err)
+	}
+	digests := "account " + digestOf([]byte(identity.AccountId)) + ", device " + digestOf([]byte(identity.DeviceId))
+	shape := regexp.MustCompile(`^an identity, made as a person makes one: account sha256:[0-9a-f]{16}, device sha256:[0-9a-f]{16}; its words typed back and cleared$`)
+	// a failure names the line by its size and digest and never prints it: a line that carried the
+	// words would put them in the log (LRI R84 item 6; review X-LIB-7)
+	if !shape.MatchString(line) || !strings.Contains(line, digests) {
+		t.Errorf("the line (%d octets, %s) is not exactly %q with the identity's digests", len(line), digestOf([]byte(line)), shape)
+	}
+	again, made, err := ensureIdentity(ctx, device)
+	if err != nil || made {
+		t.Fatalf("a second call answered made %v, %v: want the identity read back", made, err)
+	}
+	if want := "this peer's identity, read back: " + digests; again != want {
+		t.Errorf("the second line (%d octets, %s) is not the read-back line with the identity's digests", len(again), digestOf([]byte(again)))
+	}
+}
+
+// THE ROSTER IS PRINTED BY IDENTITY: a line per identity, in the order of its first leaf, with its
+// devices, each its leaf, role and device ID's digest; this peer's own identity marked; a leaf no
+// identity binds said to be one; digests only.
+func TestTheRosterIsPrintedByIdentity(t *testing.T) {
+	alice, bob := bytes.Repeat([]byte{0xA1}, 32), bytes.Repeat([]byte{0xB0}, 32)
+	members := []urmessage.Member{
+		{LeafIndex: 0, IdentityPub: []byte("alice's key"), Role: "owner", Identity: alice, DeviceId: "aaaa-aaaa-aaaa-aaa1"},
+		{LeafIndex: 1, IdentityPub: []byte("bob's key"), Role: "member", Mine: true, Identity: bob, DeviceId: "bbbb-bbbb-bbbb-bbb1"},
+		{LeafIndex: 2, IdentityPub: []byte("alice's key"), Role: "owner", Identity: alice, DeviceId: "aaaa-aaaa-aaaa-aaa2"},
+		{LeafIndex: 3, IdentityPub: []byte("a key"), Role: "member"},
+	}
+	want := []string{
+		"identity " + digestOf(alice) + ": 2 devices: leaf 0 owner device " + digestOf([]byte("aaaa-aaaa-aaaa-aaa1")) +
+			", leaf 2 owner device " + digestOf([]byte("aaaa-aaaa-aaaa-aaa2")),
+		"identity " + digestOf(bob) + " (this peer): 1 device: leaf 1 member device " + digestOf([]byte("bbbb-bbbb-bbbb-bbb1")),
+		"a leaf no identity binds: leaf 3 member",
+	}
+	lines := rosterByIdentity(members)
+	if !slices.Equal(lines, want) {
+		t.Fatalf("the roster by identity is\n%q\nwant\n%q", lines, want)
+	}
+	for _, line := range lines {
+		for _, plain := range []string{fmt.Sprintf("%x", alice[:4]), fmt.Sprintf("%x", bob[:4]), "aaaa-aaaa", "bbbb-bbbb"} {
+			if strings.Contains(line, plain) {
+				t.Errorf("the line %q carries %q itself, and not its digest", line, plain)
+			}
+		}
+	}
+}
+
+// A REFUSAL AND A RECEIVE'S ERROR ARE PRINTED WITH NO KEY IN HEX (LRI R89 item 8; review X2-6). The
+// identity rules name a refused leaf by its identity key in hex, and an identity key is made from its
+// party's words: every such run is printed as its digest, on every line that prints a refusal or a
+// receive's error, the lines that do not end the run among them.
+//
+// THE CONTROLS: the source pattern that printed them by %v is found where it is planted, and an error
+// with no hex in it is printed as it is.
+func TestARefusalIsPrintedWithNoKeyInHex(t *testing.T) {
+	key := bytes.Repeat([]byte{0xC3, 0x5A, 0x91, 0x0E}, 8)
+	refusal := fmt.Errorf("urmessage: a commit breaks the identity rules: leaf 2 (%x) added by a member", key)
+	printed := printable(refusal)
+	if strings.Contains(strings.ToLower(printed), "c35a910e") || !strings.Contains(printed, "sha256:") {
+		t.Errorf("the refusal is printed as %d octets that still carry the key, or no digest of it", len(printed))
+	}
+	if plain := errors.New("urmessage: the group is closed"); printable(plain) != plain.Error() {
+		t.Errorf("CONTROL FAILED: an error with no hex in it is printed as %q", printable(plain))
+	}
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byText := regexp.MustCompile(`(REFUSED|reported): %v`)
+	if found := byText.FindAllString(string(source), -1); len(found) != 0 {
+		t.Errorf("main.go still prints %d refusal or receive line(s) by their text: %v", len(found), found)
+	}
+	if !byText.MatchString(`fmt.Printf("  -> REFUSED: %v\n", err)`) {
+		t.Error("CONTROL FAILED: the source pattern does not find a planted line")
+	}
 }

@@ -394,6 +394,7 @@ func TestADeviceWithNoWrapSeedPublishesNoJoinCode(t *testing.T) {
 	}
 
 	lit, _ := newAnsweringDevice(t, messageprotocol.Reason_REASON_OK, []byte("a nonce"))
+	testIdentify(t, lit)
 	joinCode, err := lit.KeyPackage()
 	if err != nil {
 		t.Fatalf("CONTROL FAILED: a device that holds its seed answered %v from KeyPackage", err)

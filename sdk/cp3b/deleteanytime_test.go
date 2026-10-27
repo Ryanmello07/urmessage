@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/urnetwork/message/messagegroup"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
 )
@@ -36,16 +37,18 @@ func (self *world) clockPersona(t *testing.T, name string, clock *atomic.Int64) 
 		t.Fatalf("%s: OpenDurableStateStore: %v", name, err)
 	}
 	device, err := urmessage.NewDevice(urmessage.DeviceConfig{
-		Transport:  transport,
-		Reserver:   sdk.NewStreamIndexReserver(streamStore),
-		StateStore: stateStore,
-		NowMs:      func() int64 { return clock.Load() },
+		PhraseStretch: messagegroup.FastPhraseStretchForTests(),
+		Transport:     transport,
+		Reserver:      sdk.NewStreamIndexReserver(streamStore),
+		StateStore:    stateStore,
+		NowMs:         func() int64 { return clock.Load() },
 	})
 	if err != nil {
 		stateStore.Close()
 		streamStore.Close()
 		t.Fatalf("%s: NewDevice: %v", name, err)
 	}
+	self.identify(t, name, device)
 	current := &persona{
 		name: name, stateDir: stateDir, streamDir: streamDir,
 		client: client, transport: transport,

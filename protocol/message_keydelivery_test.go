@@ -1677,6 +1677,13 @@ var servedOpaqueFields = map[string]string{
 		"the arm; it is handed back to the collector who holds the key, and this file carries no key for it.",
 	"bringyour.RendezvousOpenResponse.card_xwing_pub": "an X-Wing PUBLIC key. Publishing it is " +
 		"what opening a rendezvous card IS: the depositor encrypts to it.",
+	"bringyour.RendezvousOpenResponse.public_ct": "kind 4's sealed card, as the field's own comment " +
+		"says: Spec A section 5.14's nonce[12] and AEAD under card_key, 4,124 octets, which the " +
+		"registration carried in. A CIPHERTEXT, handed back to whoever opens the link box under the " +
+		"code's deposit key; card_key derives from the code, and this file carries no key for it.",
+	"bringyour.RendezvousDepositResponse.deposit_hash": "H(deposit_ct), as the field's own comment " +
+		"says: the hash of the ciphertext the depositor itself just sent, which is the deposit's " +
+		"idempotency key (Spec B section 4.3.11). A hash.",
 
 	// ── transport framing ──
 	"bringyour.MessageServerFragment.part": "one slice of a fragmented envelope's own octets, " +

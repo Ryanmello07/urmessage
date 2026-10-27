@@ -13,13 +13,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +33,7 @@ import (
 	"github.com/urnetwork/message/protocol"
 	"github.com/urnetwork/message/sdk"
 	"github.com/urnetwork/message/sdk/urmessage"
+	"github.com/urnetwork/message/syntax"
 )
 
 type party struct {
@@ -61,6 +65,11 @@ type dialer struct {
 	// connect is handed to every device this dialer stands up, so that a re-dial rides out the
 	// operator's reconnect window instead of reporting it as a failure.
 	connect urmessage.ConnectPolicy
+
+	// words is each party's words, in this process's memory and nowhere else (LRI R81): step 11 binds
+	// C's second device with C's. They cross a restart here, since a restart reads the identity back
+	// off the disk and the words were never written there.
+	words map[string][]string
 }
 
 var (
@@ -102,6 +111,19 @@ type transcriptLog struct {
 	// reach it" is an argument about today's call graph and not a property of the type. Under the
 	// lock it needs no argument.
 	announced bool
+
+	// phrases is every party's words, the needles [phraseHeld] reads the transcript with (LRI R81,
+	// R83): this run's copy, held in memory and nowhere else, as the party's own is.
+	phrases map[string][]string
+	// phrasesAnnounced is whether the words' disclosure sentence has been printed, under the same
+	// lock as the octets it is about, as announced is for the credentials'.
+	phrasesAnnounced bool
+
+	// keys is every identity key this run has seen, as the needle [keyNeedle] makes of it (LRI R84
+	// item 5): a key is made from its party's words, and only its digest is ever printed
+	keys map[string]string
+	// keysAnnounced is whether the keys' disclosure sentence has been printed
+	keysAnnounced bool
 }
 
 // tee is a writer that goes to `to` AND into this transcript.
@@ -171,6 +193,384 @@ const credentialNeedle = "eyJ"
 // rather than a property of a scanner that matches nothing, and it is never written to `out`.
 const credentialControl = "eyJhbGciOiJIUzI1NiJ9.THIS-IS-NOT-A-CREDENTIAL.not-a-signature"
 
+// ── the parties' words, read for as needles (identity phase 1's Task 15) ────────────────────
+
+// phraseHeld answers how a text carries a phrase's words, or "" when it does not (LRI R83): any TWO
+// CONSECUTIVE WORDS of the phrase, in their order, with one to four characters that are not letters
+// between them -- a space, ", ", "\" \"", a line break and a number -- or HALF of the phrase's words,
+// 13 of 25, as words of the text in any order. Case is folded, and a word is a run of the letters a to
+// z. What it answers names positions and counts, never a word.
+//
+// A SINGLE WORD DOES NOT FIRE, BY DESIGN. The words are the BIP-39 English list's, and everything this
+// probe prints is English: measured over 100,000 random phrases against a live run's own transcript,
+// one word of a phrase is in the honest output for 86.7% of phrases, which is 99.76% of three-party
+// runs, and a needle that fires on nearly every run says nothing about a leak. The two shapes here
+// fire on 0.24% and at most 0.003% of honest runs (LRI R83), and between them they find the words
+// however a formatted error or a stray %v prints them: the phrase joined, a list of them in any
+// format Go or json gives one, a column of them, half of them in any order.
+func phraseHeld(words []string, text string) string {
+	if len(words) == 0 {
+		return ""
+	}
+	// each pair of consecutive words, to the position of its first
+	pairs := map[string]int{}
+	for at := len(words) - 2; 0 <= at; at -= 1 {
+		pairs[strings.ToLower(words[at])+" "+strings.ToLower(words[at+1])] = at + 1
+	}
+	lower := strings.ToLower(text)
+	tokens := map[string]bool{}
+	previous, previousEnd := "", 0
+	for at := 0; at < len(lower); {
+		if lower[at] < 'a' || 'z' < lower[at] {
+			at += 1
+			continue
+		}
+		start := at
+		for at < len(lower) && 'a' <= lower[at] && lower[at] <= 'z' {
+			at += 1
+		}
+		token := lower[start:at]
+		if previous != "" && start-previousEnd <= 4 {
+			if position, found := pairs[previous+" "+token]; found {
+				return fmt.Sprintf("its words %d and %d in a row", position, position+1)
+			}
+		}
+		tokens[token] = true
+		previous, previousEnd = token, at
+	}
+	held := 0
+	for _, word := range words {
+		if tokens[strings.ToLower(word)] {
+			held += 1
+		}
+	}
+	if len(words) <= 2*held {
+		return fmt.Sprintf("%d of its %d words", held, len(words))
+	}
+	return ""
+}
+
+// holdPhrase makes a party's words needles of this transcript: its own copy, read by
+// [transcriptLog.phrasesHeld]. [identify] calls it before the words are typed back, so that
+// everything printed from then on, a FAIL line of the typing back included, is read for them.
+func (self *transcriptLog) holdPhrase(name string, words []string) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	if self.phrases == nil {
+		self.phrases = map[string][]string{}
+	}
+	self.phrases[name] = slices.Clone(words)
+}
+
+// phraseOf is a copy of a party's words as this transcript holds them, or nil.
+func (self *transcriptLog) phraseOf(name string) []string {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	return slices.Clone(self.phrases[name])
+}
+
+// phraseCount is how many parties' words are needles here.
+func (self *transcriptLog) phraseCount() int {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	return len(self.phrases)
+}
+
+// phrasesHeld answers, for each party whose words everything written so far carries, how it carries
+// them, and whether THIS caller is the one that announces it. THE TWO ANSWERS COME OUT OF ONE
+// CRITICAL SECTION, as [transcriptLog.count]'s do, and for its reason.
+func (self *transcriptLog) phrasesHeld() (found map[string]string, announce bool) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	found = map[string]string{}
+	written := string(self.held)
+	for name, words := range self.phrases {
+		if how := phraseHeld(words, written); how != "" {
+			found[name] = how
+		}
+	}
+	announce = 0 < len(found) && !self.phrasesAnnounced
+	if announce {
+		self.phrasesAnnounced = true
+	}
+	return found, announce
+}
+
+// keyNeedle is what the transcript reads for one identity key: the lower case hex of its first four
+// octets, which every print of the key in hex -- whole, as the library's refusals format a leaf's
+// identity, or its head, as rosters used to -- begins with. The transcript is read with its case
+// folded. Four octets of a random key stand in an honest run's hex by chance about once in two
+// million runs.
+func keyNeedle(key []byte) string {
+	return hex.EncodeToString(key[:min(4, len(key))])
+}
+
+// holdKey makes an identity key a needle of this transcript (LRI R84 item 5; review X-LIB-3).
+func (self *transcriptLog) holdKey(name string, key []byte) {
+	if len(key) == 0 {
+		return
+	}
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	if self.keys == nil {
+		self.keys = map[string]string{}
+	}
+	self.keys[name] = keyNeedle(key)
+}
+
+// keyCount is how many identity keys are needles here.
+func (self *transcriptLog) keyCount() int {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	return len(self.keys)
+}
+
+// keysHeld answers whose identity keys everything written so far carries in hex, sorted, and whether
+// THIS caller announces it: one critical section, as [transcriptLog.count]'s answers are.
+func (self *transcriptLog) keysHeld() (found []string, announce bool) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+	written := strings.ToLower(string(self.held))
+	found = []string{}
+	for name, needle := range self.keys {
+		if strings.Contains(written, needle) {
+			found = append(found, name)
+		}
+	}
+	slices.Sort(found)
+	announce = 0 < len(found) && !self.keysAnnounced
+	if announce {
+		self.keysAnnounced = true
+	}
+	return found, announce
+}
+
+// scanForKeys is [scanForCredentials] for the identity keys (LRI R84 item 5): it reads everything this
+// run has written so far for any identity key in hex, announces a disclosure if it finds one, and
+// answers how many keys it found. It has the same two callers, and prints nothing of what it looks
+// for.
+func scanForKeys(about string) int {
+	found, announce := transcript.keysHeld()
+	if announce {
+		fmt.Fprintf(errOut, "\n"+
+			"IDENTITY KEY DISCLOSURE: the identity key of %s, in hex, in %s.\n"+
+			"  An identity key is made from its party's words, and a SHA-256 digest is all this probe\n"+
+			"  prints of an identity. Keep this output out of every ticket.\n", strings.Join(found, ", "), about)
+	}
+	return len(found)
+}
+
+// refusalClass is how this probe prints a refusal a step expects: by the sentinels it wraps, among
+// the ones the steps assert, and never by its text, which names the refused identity by its key in
+// hex (Property 1; LRI R84 item 5; review X-LIB-3).
+func refusalClass(err error) string {
+	names := []string{}
+	for _, one := range []struct {
+		name     string
+		sentinel error
+	}{
+		{"ErrCommitUnauthorized", urmessage.ErrCommitUnauthorized},
+		{"ErrCommitAddByNonAdmin", urmessage.ErrCommitAddByNonAdmin},
+		{"ErrCommitRemoveByNonAdmin", urmessage.ErrCommitRemoveByNonAdmin},
+		{"ErrRemoveOwner", urmessage.ErrRemoveOwner},
+		{"ErrRemoveSelf", urmessage.ErrRemoveSelf},
+		{"ErrNoSuchMember", urmessage.ErrNoSuchMember},
+	} {
+		if errors.Is(err, one.sentinel) {
+			names = append(names, one.name)
+		}
+	}
+	if len(names) == 0 {
+		return "a refusal of no class this probe names"
+	}
+	return strings.Join(names, " wrapping ")
+}
+
+// scanForPhrases is [scanForCredentials] for the parties' words (LRI R81, R83): it reads everything
+// this run has written so far for any party's words, announces a disclosure if it finds them, and
+// answers how many parties' words it found. It has the same two callers, the last step and [fail],
+// for the same reason, and like it, it prints nothing of what it looks for: the disclosure names the
+// party and the shape, a position or a count, and never a word.
+func scanForPhrases(about string) int {
+	found, announce := transcript.phrasesHeld()
+	if announce {
+		names := make([]string, 0, len(found))
+		for name := range found {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		for _, name := range names {
+			fmt.Fprintf(errOut, "\n"+
+				"PHRASE DISCLOSURE: the words of %s, %s, in %s.\n"+
+				"  A RECOVERY PHRASE HAS REACHED THE LOG. The words are the identity: treat %s's identity as\n"+
+				"  DISCLOSED, keep this output out of every ticket, and delete this run's -dir.\n",
+				name, found[name], about, name)
+		}
+	}
+	return len(found)
+}
+
+// digestOf is how this probe prints a value made from a party's words (Property 1): the first 8
+// octets of its SHA-256, in hex, marked as a digest. Equal values print equal, so a reader can still
+// follow one identity through a run, and nothing of the value is printed.
+func digestOf(value []byte) string {
+	sum := sha256.Sum256(value)
+	return "sha256:" + hex.EncodeToString(sum[:8])
+}
+
+// identify gives a device its identity as a person sets one up (LRI R81): the words offered, typed
+// back, and the identity made, its self group founded under the device's connection, so the device
+// must be connected. THE WORDS ARE NEEDLES OF THE TRANSCRIPT BEFORE THEY ARE TYPED BACK, so that
+// everything printed from then on, a FAIL line of the typing back included, is read for them. They
+// are answered to the caller, which keeps them in this process's memory for step 11, where C's second
+// device is bound with C's words, and nowhere else: they are never printed, logged or written.
+func identify(ctx context.Context, name string, device *urmessage.Device) (*urmessage.Identity, []string, error) {
+	words, err := device.CreateIdentity()
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s CreateIdentity: %w", name, err)
+	}
+	transcript.holdPhrase(name, words)
+	if err := device.ConfirmWords(ctx, strings.Join(words, " ")); err != nil {
+		return nil, words, fmt.Errorf("%s ConfirmWords: %w", name, err)
+	}
+	identity, err := device.Identity()
+	if err != nil {
+		return nil, words, fmt.Errorf("%s Identity, once its words were typed back: %w", name, err)
+	}
+	// THE PARTY'S IDENTITY KEY IS A NEEDLE FROM THE MOMENT IT IS MADE (LRI R89 item 8; review X2-5), not
+	// from its first roster read: read off a bound key package, whose credential is the identity key, as
+	// strangerPackage reads the stranger's. A failure line of any later step that names it in hex is then
+	// announced.
+	keyPackage, err := device.KeyPackage()
+	if err != nil {
+		return nil, words, fmt.Errorf("%s KeyPackage, once its identity was made: %w", name, err)
+	}
+	_, credential, err := keyPackageList(keyPackage)
+	if err != nil {
+		return nil, words, fmt.Errorf("%s's key package does not read back: %w", name, err)
+	}
+	transcript.holdKey(name+"'s identity", credential)
+	return identity, words, nil
+}
+
+// identityLine is what this probe prints of a party's identity: digests only (Property 1).
+func identityLine(name string, identity *urmessage.Identity) string {
+	return fmt.Sprintf("  %s  an identity, made as a person makes one: account %s, device %s; its words typed "+
+		"back, and held in this process's memory only", name, digestOf([]byte(identity.AccountId)),
+		digestOf([]byte(identity.DeviceId)))
+}
+
+// seamKeyPackage is a key package for a leaf this probe builds at the seam, BOUND to an identity by
+// the ceremony a device runs (identity phase 1's Task 15): its own signature and X-Wing keys, a
+// credential naming the identity key the phrase makes, and the 0xF005 that binds the one to the
+// other. With no sibling it is an identity of its own, a first base naming this leaf alone. With a
+// sibling -- the list a device of the same identity publishes -- it is a further device of that
+// identity: the next base, naming the sibling's devices and this one, each a phrase device as the
+// sibling's list marks it and this one too, since a base's author is a phrase device of it; and words
+// that make another identity are refused. It is cp3b's seamIdentity one module over, run under the
+// stretch it is handed: the zero value, the frozen stretch, on every run; its test hands the test
+// seam's. It answers an error rather than failing, so that its test can drive the refusal.
+func seamKeyPackage(phrase *messagegroup.RecoveryPhrase, sibling *messagegroup.UrmessageIdentity,
+	stretch messagegroup.PhraseStretch) ([]byte, error) {
+
+	crypto, err := mls.NewCryptoProvider(mls.CipherSuiteX25519ChaCha20Sha256Ed25519)
+	if err != nil {
+		return nil, fmt.Errorf("the mls crypto provider: %w", err)
+	}
+	signer, signerPub, err := crypto.SignatureKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("the signature key pair: %w", err)
+	}
+	xwing, err := messagegroup.XwingGenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("the x-wing key: %w", err)
+	}
+	leafKeys, err := (&mls.LeafKeysExtension{AlgId: mls.AlgIdXwing, DeviceXwingPub: xwing.Public().Bytes()}).Encode()
+	if err != nil {
+		return nil, fmt.Errorf("the leaf keys extension: %w", err)
+	}
+	// the author's key of the base, expanded from the signer's seed for its one signature
+	author := ed25519.NewKeyFromSeed(signer)
+	defer clear(author)
+	devices := []messagegroup.DeviceEntry{{DeviceKey: bytes.Clone(signerPub), Flags: messagegroup.DeviceFlagPhraseDevice}}
+	baseNumber := uint64(1)
+	if sibling != nil {
+		devices = append(slices.Clone(sibling.Base.Devices), devices...)
+		slices.SortFunc(devices, func(a, b messagegroup.DeviceEntry) int { return bytes.Compare(a.DeviceKey, b.DeviceKey) })
+		baseNumber = sibling.Base.BaseNumber + 1
+	}
+	var identityKey []byte
+	var own *messagegroup.UrmessageIdentity
+	err = messagegroup.WithPhraseKeysUnder(stretch, phrase, []uint32{1}, func(keys *messagegroup.PhraseKeys) error {
+		if sibling != nil && !bytes.Equal(keys.IdentityKey(), sibling.Base.IdentityKey) {
+			return errors.New("the words make another identity key than the one the sibling's list is under")
+		}
+		cert, err := keys.SignIskCert(1)
+		if err != nil {
+			return err
+		}
+		base := &messagegroup.DeviceListBase{
+			IdentityKey: keys.IdentityKey(),
+			KeyNumber:   1,
+			BaseNumber:  baseNumber,
+			IssuedAtMs:  uint64(time.Now().UnixMilli()),
+			Devices:     devices,
+			AuthorKey:   bytes.Clone(signerPub),
+		}
+		if err := messagegroup.SignBaseAuthor(base, author); err != nil {
+			return err
+		}
+		if err := keys.SignBase(1, base); err != nil {
+			return err
+		}
+		identityKey = bytes.Clone(keys.IdentityKey())
+		own = &messagegroup.UrmessageIdentity{IskCert: *cert, Base: *base}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("the identity's ceremony: %w", err)
+	}
+	extension, err := own.Encode()
+	if err != nil {
+		return nil, fmt.Errorf("the identity extension: %w", err)
+	}
+	if _, err := messagegroup.VerifyLeafBinding(identityKey, signerPub, []messagegroup.ExtensionBytes{extension}); err != nil {
+		return nil, fmt.Errorf("the leaf's own binding does not hold: %w", err)
+	}
+	engine, err := messagegroup.NewConnectMlsEngine(crypto, urmessage.NewMemoryStateStore(), signer,
+		mls.BasicCredential(identityKey), leafKeys.ExtensionData)
+	if err != nil {
+		return nil, fmt.Errorf("the engine: %w", err)
+	}
+	return engine.NewBoundKeyPackage([]messagegroup.ExtensionBytes{extension})
+}
+
+// keyPackageList is the identity a key package's leaf carries, checked as every receiver checks a
+// join code's leaf: its credential, its signature key, and the 0xF005 that binds the one to the other.
+// It answers the verified list and the credential. It is how step 11 reads C's own list, off a key
+// package C's device makes: the one place outside urmessage a device's 0xF005 is public.
+func keyPackageList(keyPackage []byte) (*messagegroup.VerifiedIdentity, []byte, error) {
+	decoded := &mls.KeyPackage{}
+	if err := syntax.Unmarshal(keyPackage, decoded); err != nil {
+		return nil, nil, fmt.Errorf("the key package does not decode: %w", err)
+	}
+	extensions := []messagegroup.ExtensionBytes{}
+	for _, extension := range decoded.LeafNode.Extensions {
+		extensions = append(extensions, messagegroup.ExtensionBytes{Type: uint16(extension.ExtensionType), Data: extension.ExtensionData})
+	}
+	verified, err := messagegroup.VerifyLeafBinding(decoded.LeafNode.Credential.Identity, decoded.LeafNode.SignatureKey, extensions)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the key package's leaf does not bind: %w", err)
+	}
+	return verified, bytes.Clone(decoded.LeafNode.Credential.Identity), nil
+}
+
+// rosterRow is one roster row as a comparable string: the leaf, the digest of the identity key its
+// credential names, and the role.
+func rosterRow(member urmessage.Member) string {
+	return fmt.Sprintf("leaf%d/%s/%s", member.LeafIndex, digestOf(member.IdentityPub), member.Role)
+}
+
 func main() {
 	aJwt := flag.String("a", "", "file holding party A's by_client_jwt")
 	bJwt := flag.String("b", "", "file holding party B's by_client_jwt")
@@ -211,7 +611,8 @@ func main() {
 	// user still waits the sixty seconds.
 	mesh := &dialer{ctx: ctx, server: server, host: *host, root: *dir, timeout: *timeout,
 		route: *route, endpoint: *endpoint, pin: *pin,
-		connect: urmessage.ConnectPolicy{Budget: *reconnect, OnAttempt: printConnectAttempt}}
+		connect: urmessage.ConnectPolicy{Budget: *reconnect, OnAttempt: printConnectAttempt},
+		words:   map[string][]string{}}
 
 	a := mesh.dial("A", *aJwt)
 	b := mesh.dial("B", *bJwt)
@@ -219,7 +620,7 @@ func main() {
 	defer b.close()
 
 	// ── 1 ────────────────────────────────────────────────────────────────────────────────
-	step("Hello on both parties, and the capabilities the server advertises")
+	step("Hello on both parties, the capabilities the server advertises, and an identity on each")
 	for _, p := range []*party{a, b} {
 		hctx, hcancel := context.WithTimeout(ctx, *timeout)
 		reason, hello, err := p.transport.Hello(hctx, 1)
@@ -242,6 +643,9 @@ func main() {
 		if err := p.device.Connect(ctx); err != nil {
 			fail("%s Connect: %v", p.name, err)
 		}
+		// AN IDENTITY, AS A PERSON MAKES ONE (identity phase 1's Task 15): every group this build founds
+		// requires one of each member, and a device with none publishes no join code
+		mesh.identifyParty(p)
 	}
 
 	// ── 2 ────────────────────────────────────────────────────────────────────────────────
@@ -343,6 +747,8 @@ func main() {
 	back := receive(aGroup, ctx, "A")
 	check(len(back) == 1 && back[0].Text == reply, "A read %s for B's one answer", texts(back))
 	fmt.Fprintf(out, "  the string crossed both ways; B's sender_handle %x\n", back[0].SenderHandle)
+	boundRoster(aGroup, "A", 2, 2)
+	boundRoster(bGroup, "B", 2, 2)
 
 	// ── the join seal, 3 of 4 ────────────────────────────────────────────────────────────
 	step("the invitation B already joined is pasted again and is refused, and B's group is the one it holds")
@@ -415,6 +821,7 @@ func main() {
 	if err := c.device.Connect(ctx); err != nil {
 		fail("C Connect: %v", err)
 	}
+	mesh.identifyParty(c)
 	thirdKeyPackage, err := c.device.KeyPackage()
 	if err != nil {
 		fail("C KeyPackage: %v", err)
@@ -508,6 +915,9 @@ func main() {
 			member.name, member.group.Stats().FailedOpen)
 	}
 	fmt.Fprintf(out, "  six directions at epoch 2: A->B A->C B->A B->C C->A C->B, each opened on the far side with the exact text\n")
+	for _, one := range []*namedGroup{{"A", aGroup}, {"B", bGroup}, {"C", cGroup}} {
+		boundRoster(one.group, one.name, 3, 3)
+	}
 
 	// ── 6 ────────────────────────────────────────────────────────────────────────────────
 	step(fmt.Sprintf("a %d octet message, which no live test has ever fragmented", *bigBytes))
@@ -558,12 +968,17 @@ func main() {
 	}
 	bHandle := append([]byte(nil), back[0].SenderHandle...)
 	bEpoch := bGroup.Epoch()
+	bAccount := accountOf(b)
 	b = mesh.restart(b)
 	defer b.close()
 	// THIS IS THE CALL THAT MEETS THE RECONNECT WINDOW, every run: B has just re-dialled under
 	// the same client_id. See connectAcrossTheReconnectWindow, which is where the sentence that
 	// separates the operator's window from a broken restore lives, once.
 	connectAcrossTheReconnectWindow(ctx, b, "the restarted B", "the restore itself")
+	// THE IDENTITY CAME BACK OFF THE DISK, and the words did not: they were never written there
+	check(accountOf(b) == bAccount, "the restarted B reads its account as %s, and it was %s before the restart",
+		accountOf(b), bAccount)
+	fmt.Fprintf(out, "  B's identity came back off the disk: account %s, as before the restart\n", bAccount)
 	restored, err := b.device.Restore(ctx)
 	if err != nil {
 		fail("the restarted B Restore: %v", err)
@@ -805,10 +1220,7 @@ func main() {
 	// every party after a Receive that finds nothing to ingest.
 	stranger := mesh.stranger(c)
 	defer stranger.close()
-	strangerKeyPackage, err := stranger.device.KeyPackage()
-	if err != nil {
-		fail("the stranger's KeyPackage: %v", err)
-	}
+	strangerKeyPackage := strangerPackage()
 	refusedBefore := cGroup.Stats().CommitRefusedOwn
 	_, err = cGroup.AddMemberAndPublish(ctx, strangerKeyPackage)
 	check(err != nil, "C, a MEMBER, ADDED A STRANGER TO THE GROUP: the send-side arm of the role model is not running")
@@ -816,7 +1228,7 @@ func main() {
 	check(errors.Is(err, urmessage.ErrCommitAddByNonAdmin), "C's add was refused with %v, which does not wrap R1's ErrCommitAddByNonAdmin", err)
 	check(cGroup.Stats().CommitRefusedOwn == refusedBefore+1, "C's Stats.CommitRefusedOwn went %d -> %d over one refused add, want one more",
 		refusedBefore, cGroup.Stats().CommitRefusedOwn)
-	fmt.Fprintf(out, "  C's AddMemberAndPublish as a member was refused on the SEND side: %v\n", err)
+	fmt.Fprintf(out, "  C's AddMemberAndPublish as a member was refused on the SEND side: %s\n", refusalClass(err))
 	for _, one := range []*namedGroup{{"A", aGroup}, {"B", bGroup}} {
 		got := receive(one.group, ctx, one.name)
 		check(len(got) == 0, "%s fetched %d entries after C's refused add; something was published: %s", one.name, len(got), texts(got))
@@ -942,12 +1354,11 @@ func main() {
 	// leaf left standing reads every epoch and writes to the group. So the victim is given a second
 	// leaf and the assertion is that BOTH go, in ONE commit.
 	//
-	// AND IT IS A LEAF AND NOT A FOURTH urmessage.Device, WHICH IS A REAL LIMIT AND IS STATED. A
-	// Device's credential identity IS its signature key (device.go says so in as many words), and
-	// one Device mints one identity per state store, so there is no door in that package onto a
-	// SECOND leaf of an EXISTING identity. What can carry one is the seam: a key package whose
-	// credential names C's identity and whose signer is its own, which is exactly what cp3b's
-	// world.seamMemberClaiming builds and what its removal case is driven with. THAT IS NOT A
+	// AND IT IS A LEAF AND NOT A FOURTH urmessage.Device, WHICH IS A REAL LIMIT AND IS STATED. One
+	// Device is one device, and until a later slice links a second one (Task 27) there is no door in
+	// that package onto a SECOND leaf of an EXISTING identity. What can carry one is the seam: a key
+	// package whose credential names C's identity and whose signer is its own, which is exactly what
+	// cp3b's world.seamMemberClaiming builds and what its removal case is driven with. THAT IS NOT A
 	// FORGERY WHEN THAT IDENTITY COMMITS THE ADD: §11's self-service rule gives every member its own
 	// device leaves, and R6a requires an Add claiming an identity already in the group to be
 	// committed BY that identity -- so C's own AddMemberAndPublish is the only call that can land it,
@@ -957,7 +1368,11 @@ func main() {
 	// fetches. A fourth reading party would need a fourth credential, and this deployment has three
 	// accounts. What the step needs from it is that it OCCUPIES A LEAF -- which is what the removal
 	// vector is about -- and every reading assertion below is made at a party that really reads.
-	laptop := secondLeafFor("C's second device", cId)
+	//
+	// AND IT IS BOUND (identity phase 1's Task 15): every leaf of a group this build founds carries an
+	// identity that verifies, so the second device is a further device of C's identity, made from the
+	// words C typed back in step 5, the next base of the list C's own device publishes.
+	laptop := mesh.secondLeafFor("C's second device", c, cId)
 	epochBeforeTheLaptop := cGroup.Epoch()
 	if _, err := cGroup.AddMemberAndPublish(ctx, laptop); err != nil {
 		fail("C's AddMemberAndPublish of its OWN second device: %v\n"+
@@ -992,6 +1407,9 @@ func main() {
 	}
 	victimLeaves := leavesOf(bGroup, cId, "B")
 	fmt.Fprintf(out, "  C's identity holds leaves %v at every party, and A and B hold one each\n", victimLeaves)
+	for _, one := range parties {
+		boundRoster(one.group, one.name, 4, 3)
+	}
 
 	// ── STAGE 3: THE SURVIVOR IS DEMOTED TO MEMBER, SO THE REFUSAL BELOW IS A MEMBER'S ─────────
 	if err := bGroup.SetRole(ctx, aId, "member"); err != nil {
@@ -1043,7 +1461,7 @@ func main() {
 	check(aGroup.Stats().CommitRefusedOwn == ownRefusedBefore+1,
 		"A's Stats.CommitRefusedOwn went %d -> %d over one rule refusal, want one more",
 		ownRefusedBefore, aGroup.Stats().CommitRefusedOwn)
-	fmt.Fprintf(out, "  A's RemoveMember as a MEMBER was refused on the SEND side: %v\n", refusal)
+	fmt.Fprintf(out, "  A's RemoveMember as a MEMBER was refused on the SEND side: %s\n", refusalClass(refusal))
 
 	// AND THE THREE BY-NAME DOORS, which are about the SUBJECT and are true whoever asks
 	refusal = aGroup.RemoveMember(ctx, bId)
@@ -1384,7 +1802,7 @@ func main() {
 	report("C", cGroup)
 
 	// ── the log this run leaves behind, read back by the run ─────────────────────────────
-	step("this run's own output, read back for credentials")
+	step("this run's own output, read back for credentials and for every party's words")
 	fmt.Fprintf(out, "  WHAT THIS IS FOR: the three things this binary is given are bearer credentials\n"+
 		"  for real network clients on a live operator, and this output gets redirected into files,\n"+
 		"  pasted into tickets and left in scrollback. No reading of the source can promise that no\n"+
@@ -1411,6 +1829,38 @@ func main() {
 		transcript.octets())
 	fmt.Fprintf(out, "  the same scanner runs inside the failure path, so a run that FAILS is scanned over\n"+
 		"  its own FAIL line rather than exiting before the check\n")
+
+	// THE PARTIES' WORDS (LRI R81, R83). Each party's words are needles of the same transcript, held
+	// since before they were typed back. The needle is two of a party's words in a row, or half of
+	// them, and never one word alone: the words are English, and so is everything above.
+	fmt.Fprintf(out, "  WHAT THE WORDS ARE FOR: each party's identity was made from words typed back in this\n"+
+		"  process, and they are held in its memory and nowhere else. The needle is two of a party's\n"+
+		"  words in a row, or half of them in any order. ONE WORD IS NOT A NEEDLE: the list is English\n"+
+		"  and so is this output, which holds single words of every phrase on almost every run.\n")
+	check(transcript.phraseCount() == len(mesh.words) && len(mesh.words) == 3,
+		"CONTROL FAILED: the transcript holds the words of %d part(ies) as needles, and this run made %d identit(ies) "+
+			"of the 3 it makes", transcript.phraseCount(), len(mesh.words))
+	for _, name := range []string{"A", "B", "C"} {
+		words := mesh.words[name]
+		// THE CONTROLS, planted in memory and never in the output: the whole phrase, and two of its words in a row
+		check(phraseHeld(words, strings.Join(words, " ")) != "",
+			"CONTROL FAILED: the reader does not find %s's whole phrase where it is planted", name)
+		check(phraseHeld(words, "a planted line, "+words[11]+", "+words[12]+", and the rest of it") != "",
+			"CONTROL FAILED: the reader does not find two of %s's words in a row where they are planted", name)
+	}
+	// AND EVERY IDENTITY KEY (LRI R84 item 5): the needle is a key's first four octets in hex
+	check(transcript.keyCount() != 0,
+		"CONTROL FAILED: the transcript holds no identity key as a needle, and every roster this run read holds some")
+	keysInTheLog := scanForKeys("this run's output")
+	check(keysInTheLog == 0,
+		"THIS RUN'S OWN OUTPUT CARRIES %d IDENTITY KEY(S) IN HEX, and the disclosure sentence above says what "+
+			"to do about it", keysInTheLog)
+	wordsInTheLog := scanForPhrases("this run's output")
+	check(wordsInTheLog == 0,
+		"THIS RUN'S OWN OUTPUT CARRIES THE WORDS OF %d PART(IES), and the disclosure sentence above says what "+
+			"to do about it", wordsInTheLog)
+	fmt.Fprintf(out, "  and no party's words: the reader finds each of the 3 phrases whole and two words of it in a row\n"+
+		"  where they are planted, and neither in the %d octets written\n", transcript.octets())
 
 	fmt.Fprintf(out, "\n=== %d STEPS, %d ASSERTIONS, ALL HELD ===\n", steps, checks)
 	fmt.Fprintf(out, "WHAT THIS PROBE DOES NOT ASSERT, and it needs a database credential this binary must\n"+
@@ -1595,13 +2045,14 @@ func (self *dialer) kill(previous *party) {
 	previous.close()
 }
 
-// stranger is a device with a FRESH identity that never connects: its one job is a key package
-// naming an identity the group has never seen, which is what a member's refused add (step 10) has
-// to carry -- a key package from any existing member would be that member's own second device,
-// which a member of any role MAY add (MASTER 11's self-service rule). It rides the transport of
-// the party it is built beside because a Device needs one, and it never speaks over it; its state
-// store is the in-memory one, and its stream store is a directory of its own under -dir so that
-// nothing of the real party's is touched.
+// stranger is a device that never connects, beside the key package of an identity the group has
+// never seen, which is what a member's refused add (step 10) has to carry -- a key package from any
+// existing member would be that member's own second device, which a member of any role MAY add
+// (MASTER 11's self-service rule). A device makes its identity only under a connection, so that key
+// package is made at the seam ([strangerPackage]); what is left of the device's job is step 11's
+// stage 0, which erases it. It rides the transport of the party it is built beside because a Device
+// needs one, and it never speaks over it; its state store is the in-memory one, and its stream
+// store is a directory of its own under -dir so that nothing of the real party's is touched.
 func (self *dialer) stranger(beside *party) *party {
 	dir := self.root + "/stranger"
 	if err := os.MkdirAll(dir+"/stream", 0o700); err != nil {
@@ -1957,7 +2408,7 @@ func rostersAgree(stage string, parties []*namedGroup, identities map[string]str
 		for _, member := range members {
 			name, known := identities[string(member.IdentityPub)]
 			if !known {
-				name = "?" + fmt.Sprintf("%x", member.IdentityPub[:4])
+				name = "?" + digestOf(member.IdentityPub)
 			}
 			mine := ""
 			if member.Mine {
@@ -2039,13 +2490,16 @@ func assertRemoved(what string, err error) {
 }
 
 // secondLeafFor is a key package for a SECOND DEVICE LEAF of an identity that is already in the
-// group: its own signature key, its own X-Wing key, and a credential naming the identity handed in.
+// group: its own signature key, its own X-Wing key, a credential naming the identity handed in, and,
+// from identity phase 1's Task 15, the 0xF005 that BINDS it -- a further device of the identity, the
+// next base of the list the identity's own device publishes, made from the words the owner typed
+// back when it made the identity, which this process holds for it ([seamKeyPackage]).
 //
 // IT IS THE ONLY WAY THIS BINARY CAN PUT TWO LEAVES OF ONE IDENTITY IN A GROUP, and the reason is a
-// decision and not a gap: a urmessage.Device's credential identity IS its signature key, and one
-// Device mints one identity per state store, so that package has no door onto a second leaf of an
-// existing identity. cp3b's world.seamMemberClaiming is the same construction one module over, and
-// cp3b's TestOneCallRemovesEveryLeafOfOneIdentityAndTheRemovedMemberCannotFollow is driven with it.
+// decision and not a gap: one urmessage.Device is one device, and that package has no door onto a
+// second leaf of an identity but the link a later slice builds (Task 27 makes this device a linked
+// one). cp3b's world.seamMemberClaiming is the same construction one module over, and cp3b's
+// TestOneCallRemovesEveryLeafOfOneIdentityAndTheRemovedMemberCannotFollow is driven with it.
 //
 // IT IS NOT A FORGERY, AND WHAT MAKES IT NOT ONE IS WHO COMMITS THE ADD. MASTER §11's self-service
 // rule gives every member its own device leaves (ruling 2, and ruling 5 for an OBSERVER), and R6a
@@ -2056,33 +2510,113 @@ func assertRemoved(what string, err error) {
 // IT HOLDS NO TRANSPORT AND NEVER READS. The engine is built over an in-memory state store because
 // nothing restores this leaf: what the step needs from it is that it OCCUPIES A LEAF, which is what
 // a removal vector is about. A leaf that also fetched would need a fourth credential.
-func secondLeafFor(what string, identity []byte) []byte {
-	crypto, err := mls.NewCryptoProvider(mls.CipherSuiteX25519ChaCha20Sha256Ed25519)
-	if err != nil {
-		fail("%s: the mls crypto provider: %v", what, err)
+func (self *dialer) secondLeafFor(what string, owner *party, identity []byte) []byte {
+	words := self.words[owner.name]
+	if len(words) == 0 {
+		fail("%s: this run holds no words for %s, whose identity it is", what, owner.name)
 	}
-	signer, _, err := crypto.SignatureKeyPair()
+	// THE OWNER'S OWN LIST, read off a key package its device makes, as every receiver reads a join code
+	ownKeyPackage, err := owner.device.KeyPackage()
 	if err != nil {
-		fail("%s: the signature key pair: %v", what, err)
+		fail("%s: %s's own key package, which carries its list: %v", what, owner.name, err)
 	}
-	xwing, err := messagegroup.XwingGenerateKey(rand.Reader)
+	sibling, credential, err := keyPackageList(ownKeyPackage)
 	if err != nil {
-		fail("%s: the x-wing key: %v", what, err)
+		fail("%s: %s's own key package: %v", what, owner.name, err)
 	}
-	leafKeys, err := (&mls.LeafKeysExtension{AlgId: mls.AlgIdXwing, DeviceXwingPub: xwing.Public().Bytes()}).Encode()
+	check(bytes.Equal(credential, identity),
+		"%s: %s's own key package names the identity key %s, and its roster row names %s", what, owner.name,
+		digestOf(credential), digestOf(identity))
+	phrase, _, err := messagegroup.ParseRecoveryPhrase(strings.Join(words, " "))
 	if err != nil {
-		fail("%s: the leaf keys extension: %v", what, err)
+		fail("%s: %s's words do not read back as a phrase: %v", what, owner.name, err)
 	}
-	engine, err := messagegroup.NewConnectMlsEngine(crypto, urmessage.NewMemoryStateStore(), signer,
-		mls.BasicCredential(identity), leafKeys.ExtensionData)
+	defer phrase.Erase()
+	keyPackage, err := seamKeyPackage(phrase, sibling.Identity, messagegroup.PhraseStretch{})
 	if err != nil {
-		fail("%s: the engine: %v", what, err)
+		fail("%s: %v", what, err)
 	}
-	keyPackage, err := engine.NewKeyPackage()
+	fmt.Fprintf(out, "  %s: a further device of %s's identity, bound by base %d of its list, made from the words %s typed back\n",
+		what, owner.name, sibling.Identity.Base.BaseNumber+1, owner.name)
+	return keyPackage
+}
+
+// strangerPackage is the stranger's key package (step 10): an identity of its own, made at the seam
+// from words drawn here and erased, never printed and never held as text. It is BOUND, so that what
+// refuses it below is the role model and nothing else: an admin's add of the same package would
+// stand.
+func strangerPackage() []byte {
+	phrase, err := messagegroup.NewRecoveryPhrase()
 	if err != nil {
-		fail("%s: the key package: %v", what, err)
+		fail("the stranger's words: %v", err)
+	}
+	defer phrase.Erase()
+	keyPackage, err := seamKeyPackage(phrase, nil, messagegroup.PhraseStretch{})
+	if err != nil {
+		fail("the stranger's key package: %v", err)
+	}
+	// the stranger's identity key is a needle too: a refusal of its add names it
+	if _, credential, err := keyPackageList(keyPackage); err == nil {
+		transcript.holdKey("the stranger", credential)
+	} else {
+		fail("the stranger's key package does not read back: %v", err)
 	}
 	return keyPackage
+}
+
+// identifyParty is [identify] for a party of this run, with the checks a first device's identity
+// answers to, the words kept in this process's memory, and its line printed: digests only.
+func (self *dialer) identifyParty(p *party) {
+	identity, words, err := identify(self.ctx, p.name, p.device)
+	if errors.Is(err, urmessage.ErrIdentityExists) {
+		fail("%v\n  %s's -dir already holds an identity: give every run a FRESH, EMPTY directory, as the README says",
+			err, p.name)
+	}
+	if err != nil {
+		fail("%v", err)
+	}
+	check(len(identity.AccountId) == 36, "%s's account ID is %d characters, want 36", p.name, len(identity.AccountId))
+	check(len(identity.DeviceId) == 19, "%s's device ID is %d characters, want 19", p.name, len(identity.DeviceId))
+	check(identity.PhraseDevice && len(identity.Devices) == 1 && identity.Devices[0].ThisDevice,
+		"%s's first device is phrase device %v in a list of %d device(s): want its identity's one device, the phrase device",
+		p.name, identity.PhraseDevice, len(identity.Devices))
+	self.words[p.name] = words
+	fmt.Fprintln(out, identityLine(p.name, identity))
+}
+
+// accountOf is a party's account ID as this probe prints it: its digest.
+func accountOf(p *party) string {
+	identity, err := p.device.Identity()
+	if err != nil {
+		fail("%s Identity: %v", p.name, err)
+	}
+	return digestOf([]byte(identity.AccountId))
+}
+
+// boundRoster holds that every leaf of a party's roster is bound (identity phase 1's Task 15): each
+// row carries the root of its identity and a device ID, the rows hold the identities wanted, and no
+// two rows share a device ID. It prints the counts, and nothing of the values.
+func boundRoster(group *urmessage.Group, who string, rows int, identities int) {
+	members, err := group.Members()
+	if err != nil {
+		fail("%s Members: %v", who, err)
+	}
+	roots, devices := map[string]bool{}, map[string]bool{}
+	for _, member := range members {
+		// EVERY IDENTITY KEY A ROSTER SHOWS IS A NEEDLE, the credential's and the root's
+		transcript.holdKey(fmt.Sprintf("the identity at leaf %d of %s's roster", member.LeafIndex, who), member.IdentityPub)
+		transcript.holdKey(fmt.Sprintf("the root at leaf %d of %s's roster", member.LeafIndex, who), member.Identity)
+		check(len(member.Identity) == ed25519.PublicKeySize && len(member.DeviceId) == 19,
+			"%s's roster row at leaf %d carries an identity of %d octets and a device ID of %d characters: every "+
+				"leaf of a group this build founds is bound", who, member.LeafIndex, len(member.Identity), len(member.DeviceId))
+		roots[string(member.Identity)] = true
+		devices[member.DeviceId] = true
+	}
+	check(len(members) == rows && len(roots) == identities && len(devices) == rows,
+		"%s's roster holds %d row(s), %d identity(ies) and %d device ID(s): want %d, %d and %d",
+		who, len(members), len(roots), len(devices), rows, identities, rows)
+	fmt.Fprintf(out, "  %s's roster: %d row(s), every one bound, %d identity(ies), %d device ID(s)\n",
+		who, len(members), len(roots), len(devices))
 }
 
 // leavesOf is every leaf one identity holds in a group's roster, in leaf order. It is the reading
@@ -2117,7 +2651,7 @@ func textsPresent(messages []*urmessage.Message) map[string]bool {
 }
 
 // rosterRows is one party's roster as comparable strings, in the leaf order Members() answers: the
-// leaf, the head of the identity and the role.
+// leaf, the digest of the identity and the role ([rosterRow]).
 func rosterRows(group *urmessage.Group, who string) []string {
 	members, err := group.Members()
 	if err != nil {
@@ -2125,7 +2659,7 @@ func rosterRows(group *urmessage.Group, who string) []string {
 	}
 	rows := []string{}
 	for _, member := range members {
-		rows = append(rows, fmt.Sprintf("leaf%d/%x/%s", member.LeafIndex, member.IdentityPub[:4], member.Role))
+		rows = append(rows, rosterRow(member))
 	}
 	return rows
 }
@@ -2286,5 +2820,7 @@ func fail(format string, args ...any) {
 	// the step line above it are already octets the scan can see. That is why this costs one call and
 	// no duplicated formatting -- and why deleting the tee on `errOut` would silently narrow it.
 	scanForCredentials("this run's output, including the FAIL line above")
+	scanForPhrases("this run's output, including the FAIL line above")
+	scanForKeys("this run's output, including the FAIL line above")
 	os.Exit(1)
 }

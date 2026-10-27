@@ -21,6 +21,7 @@ package urmessage
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"path/filepath"
@@ -69,12 +70,24 @@ func openRestoreDevice(t *testing.T, root string) *restoreDevice {
 	if err != nil {
 		t.Fatalf("deviceIdentity: %v", err)
 	}
-	engine, err := messagegroup.NewConnectMlsEngine(crypto, store, signer,
-		mls.BasicCredential(signerPub), leafKeys)
+	// THE IDENTITY, AS NewDevice READS IT BACK (identity phase 1's Task 12): a store that holds one
+	// answers it, and the engine is built under its identity key; a store with none gets one, made
+	// by the same making ConfirmWords runs, since every group this build founds is bound.
+	identity, heads, err := loadIdentity(store, ed25519.PublicKey(signerPub))
+	if err != nil {
+		t.Fatalf("loadIdentity: %v", err)
+	}
+	credential := []byte(signerPub)
+	if identity != nil {
+		credential = identity.record.CurrentKey
+	}
+	stage := newJoinStage(store)
+	engine, err := messagegroup.NewConnectMlsEngine(crypto, stage, signer,
+		mls.BasicCredential(credential), leafKeys)
 	if err != nil {
 		t.Fatalf("the mls engine: %v", err)
 	}
-	return &restoreDevice{
+	opened := &restoreDevice{
 		device: &Device{
 			reserver:    sdk.NewStreamIndexReserver(streamStore),
 			crypto:      crypto,
@@ -82,7 +95,12 @@ func openRestoreDevice(t *testing.T, root string) *restoreDevice {
 			leafKeys:    leafKeys,
 			wrapSeed:    wrapSeed,
 			stateStore:  store,
-			identityPub: append([]byte(nil), signerPub...),
+			identityPub: append([]byte(nil), credential...),
+			identity:    identity,
+			heads:       heads,
+			signer:      signer,
+			devicePub:   ed25519.PublicKey(append([]byte(nil), signerPub...)),
+			joinStage:   stage,
 			nowMs:       func() int64 { return time.Now().UnixMilli() },
 			random:      rand.Reader,
 			groups:      map[string]*Group{},
@@ -90,6 +108,10 @@ func openRestoreDevice(t *testing.T, root string) *restoreDevice {
 		store:       store,
 		streamStore: streamStore,
 	}
+	if identity == nil {
+		testIdentify(t, opened.device)
+	}
+	return opened
 }
 
 func (self *restoreDevice) close() {
@@ -114,7 +136,7 @@ func TestRestoredGroupIngestsACommitAndEntersEpochTwo(t *testing.T) {
 	bob := openRestoreDevice(t, filepath.Join(root, "bob"))
 	defer bob.close()
 
-	handle, err := alice.device.createMlsGroup(groupId)
+	handle, err := alice.device.createMlsGroup(groupId, false)
 	if err != nil {
 		t.Fatalf("createMlsGroup: %v", err)
 	}

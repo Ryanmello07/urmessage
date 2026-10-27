@@ -3126,10 +3126,31 @@ func leafValidationEntryOf(t *testing.T, extensionType ExtensionType) Extension 
 // type the leaf does not list is refused unless section 7.2 forbids listing it, and the same
 // type listed is accepted. A validator that demanded every type would fail the default rows; one
 // that demanded none would fail every other row.
+//
+// A THIRD CLASS stands ahead of both: a type leafExtensionProfile does not admit in a leaf is
+// refused LISTED OR NOT, with the profile's own sentinel, and every row of that table is reached
+// by this sweep -- so a row for a type the registry no longer holds fails here too.
 func TestLeafNodeValidateDemandsEveryNonDefaultExtensionTheLeafCarriesAndNoDefaultOne(t *testing.T) {
 	crypto := leafValidationCrypto(t)
-	demanded, exempt := 0, 0
+	demanded, exempt, profiled := 0, 0, 0
 	for _, extensionType := range leafValidationExtensionTypeSweep(t) {
+		if refusal := leafExtensionProfile[extensionType]; refusal != nil {
+			for name, listed := range map[string][]ExtensionType{
+				"does not list it": {ExtensionTypeUrmessageLeafKeys},
+				"lists it":         {ExtensionTypeUrmessageLeafKeys, extensionType},
+			} {
+				leaf := leafValidationSignedLeaf(t, crypto, LeafNodeSourceCommit, func(leaf *LeafNode) {
+					leaf.Capabilities.Extensions = listed
+					leaf.Extensions = []Extension{leafValidationLeafKeysEntry(t), leafValidationEntryOf(t, extensionType)}
+				})
+				if err := leaf.Validate(leafValidationContextFor(crypto, LeafNodeSourceCommit)); !errors.Is(err, refusal) {
+					t.Errorf("the leaf carries %#04x, which no leaf may, and %s: err = %v, want %v",
+						extensionType, name, err, refusal)
+				}
+			}
+			profiled++
+			continue
+		}
 		unlisted := leafValidationSignedLeaf(t, crypto, LeafNodeSourceCommit, func(leaf *LeafNode) {
 			leaf.Capabilities.Extensions = []ExtensionType{ExtensionTypeUrmessageLeafKeys}
 			leaf.Extensions = []Extension{leafValidationLeafKeysEntry(t), leafValidationEntryOf(t, extensionType)}
@@ -3159,6 +3180,10 @@ func TestLeafNodeValidateDemandsEveryNonDefaultExtensionTheLeafCarriesAndNoDefau
 	if demanded == 0 || exempt == 0 {
 		t.Fatalf("the sweep demanded %d extension types and exempted %d; with either side empty it holds one rule rather than two",
 			demanded, exempt)
+	}
+	if profiled != len(leafExtensionProfile) {
+		t.Errorf("the sweep reached %d of leafExtensionProfile's %d rows; a row the registry sweep does not reach is a refusal for a type nothing declares",
+			profiled, len(leafExtensionProfile))
 	}
 }
 
