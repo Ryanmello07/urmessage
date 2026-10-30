@@ -130,7 +130,7 @@ tested on the maintainers' own hardware, and [test.sh](test.sh) is the whole run
   tested. `compose.sh --clean` removes what the compose added.
 
 **The toolchain is pinned, and the pin is forced.** The cryptographic code is reviewed, and
-its vectors, known answers and guardrails are run, under one compiler: Go 1.27.2, the
+its vectors, known answers and guardrails are run, under one compiler: Go 1.27.3, the
 `toolchain` line of `go.mod`, which `mls/pins_test.go` holds every test binary to. That
 line is a minimum. A newer go command builds with itself and says nothing (connect's own
 toolchain line moved to go1.27.1 while this pin was still go1.26.5), and no module's `go`

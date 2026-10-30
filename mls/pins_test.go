@@ -48,8 +48,8 @@ var (
 // so the pin holds whatever go.mod says. go.mod's toolchain line selects the
 // compiler; this catches the case where it was overridden or ignored.
 func TestPinnedToolchain(t *testing.T) {
-	if runtime.Version() != "go1.27.2" {
-		t.Fatalf("toolchain is %s, want go1.27.2", runtime.Version())
+	if runtime.Version() != "go1.27.3" {
+		t.Fatalf("toolchain is %s, want go1.27.3", runtime.Version())
 	}
 }
 
